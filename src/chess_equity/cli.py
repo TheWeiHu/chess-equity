@@ -369,7 +369,7 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.maia2 import Maia2NotInstalled
 
     try:
-        reports = evaluate(rows, predictors)
+        reports = evaluate(rows, predictors, bins=args.ece_bins)
     except (ValueError, Maia2NotInstalled) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -399,6 +399,7 @@ def _run_validate(args: argparse.Namespace) -> int:
             rows,
             predictors,
             baseline=baseline_name,
+            bins=args.ece_bins,
             n_resamples=args.bootstrap,
             seed=args.seed,
         )
@@ -425,7 +426,7 @@ def _run_validate(args: argparse.Namespace) -> int:
         # --bootstrap > 0 (the default) adds a bin-resampling ECE CI per band (task 0076)
         # so the band-level calibration claims carry error bars; --bootstrap 0 turns it off.
         bands = band_reliability(
-            rows, PREDICTORS[name], bootstrap=args.bootstrap, seed=args.seed
+            rows, PREDICTORS[name], bins=args.ece_bins, bootstrap=args.bootstrap, seed=args.seed
         )
         cal = format_calibration_report(
             bands, predictor_name=name, title=f"Calibration by rating band — {args.data}"
@@ -442,7 +443,7 @@ def _run_validate(args: argparse.Namespace) -> int:
         from chess_equity.validate.plots import MatplotlibNotInstalled, save_reliability_plot
 
         name = requested[0]
-        bands = band_reliability(rows, predictors[name])
+        bands = band_reliability(rows, predictors[name], bins=args.ece_bins)
         Path(args.plots).parent.mkdir(parents=True, exist_ok=True)
         try:
             save_reliability_plot(
@@ -736,6 +737,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="N",
         help="paired-bootstrap resamples for the 95%% CI on each model-vs-baseline "
         "metric delta (task 0060; 0 disables; needs `baseline` + another model)",
+    )
+    val.add_argument(
+        "--ece-bins",
+        type=int,
+        default=10,
+        metavar="N",
+        help="reliability-bin count for ECE and the calibration tables (default 10); "
+        "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
     )
     val.add_argument(
         "--calibration",

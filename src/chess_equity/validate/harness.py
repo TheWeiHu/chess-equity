@@ -240,12 +240,12 @@ class Scores:
     ece: float
 
 
-def _score(preds: Sequence[float], labels: Sequence[float]) -> Scores:
+def _score(preds: Sequence[float], labels: Sequence[float], *, bins: int = 10) -> Scores:
     return Scores(
         n=len(preds),
         log_loss=log_loss(preds, labels),
         brier=brier_score(preds, labels),
-        ece=expected_calibration_error(preds, labels),
+        ece=expected_calibration_error(preds, labels, bins=bins),
     )
 
 
@@ -263,11 +263,14 @@ def evaluate(
     predictors: Dict[str, Predictor],
     *,
     slicers: Dict[str, Callable[[PositionRow], str]] = SLICERS,
+    bins: int = 10,
 ) -> List[PredictorReport]:
     """Score each predictor over ``rows``, overall and per slice.
 
     Pure computation — no I/O. The caller loads rows (e.g. via
-    :func:`chess_equity.data.load_rows`) and renders the returned reports.
+    :func:`chess_equity.data.load_rows`) and renders the returned reports. ``bins`` is
+    the reliability-bin count for ECE (default 10, the metrics default — unchanged when
+    omitted); the validate CLI exposes it as ``--ece-bins`` for sensitivity checks.
     """
     rows = list(rows)
     labels = [r.result for r in rows]
@@ -280,10 +283,12 @@ def evaluate(
             for i, row in enumerate(rows):
                 grouped.setdefault(slicer(row), []).append(i)
             slices[slicer_name] = {
-                value: _score([preds[i] for i in idxs], [labels[i] for i in idxs])
+                value: _score([preds[i] for i in idxs], [labels[i] for i in idxs], bins=bins)
                 for value, idxs in sorted(grouped.items())
             }
-        reports.append(PredictorReport(name=name, overall=_score(preds, labels), slices=slices))
+        reports.append(
+            PredictorReport(name=name, overall=_score(preds, labels, bins=bins), slices=slices)
+        )
     return reports
 
 
