@@ -20,8 +20,10 @@ is replayed through :class:`GameTracker`.
 import os
 import re
 
+from chess_equity.adapters import EquityModel, white_to_move
 from chess_equity.broadcast import GameTracker
 from chess_equity.models import LichessBaselineModel
+from chess_equity.types import WDL, Equity
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OVERLAY_JS = os.path.join(HERE, "..", "overlay", "overlay.js")
@@ -110,6 +112,44 @@ def test_position_event_carries_cp_key():
     _, events = drive_events()
     for evt in events:
         assert "cp" in evt
+
+
+def test_cp_flows_through_and_is_white_pov():
+    """A resolvable engine yields a numeric, White-POV cp on the overlay event (task 0052).
+
+    Without this the overlay's centipawn ghost tick and the human-edge divergence
+    badge are dead on a live feed (cp was hard-coded to None).
+    """
+    move_events, events = drive_events()
+    assert any(e.cp is not None for e in move_events), "baseline engine must supply a cp"
+    for src, evt in zip(move_events, events):
+        assert evt["cp"] == src.cp, "cp must thread through to the overlay event"
+        if src.cp is not None:
+            # Independent White-POV re-derivation from the event's own (post-move) fen.
+            eq = LichessBaselineModel().evaluate(src.fen, 1500, 1500)
+            assert eq.cp is not None
+            white_pov = eq.cp if white_to_move(src.fen) else -eq.cp
+            assert src.cp == white_pov
+
+
+def test_cp_none_degrades_when_no_engine_cp():
+    """A model that exposes no objective cp leaves cp=None end to end (CI-safe)."""
+
+    class _NoCpModel(EquityModel):
+        def evaluate(self, fen, white_elo, black_elo):
+            return Equity.from_side_to_move(
+                WDL(p_win=0.4, p_draw=0.2, p_loss=0.4),
+                white_to_move=white_to_move(fen),
+                source="nocp",
+                cp=None,
+            )
+
+    tracker = GameTracker("nocp", _NoCpModel(), white_elo=1500, black_elo=1500)
+    move_events = tracker.ingest(GAME_PGN)
+    assert move_events
+    for e in move_events:
+        assert e.cp is None
+        assert e.to_overlay_event()["cp"] is None
 
 
 def test_graded_event_has_label_and_delta():
