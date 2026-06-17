@@ -94,8 +94,18 @@ def run_doctor(checks: List[Check], out: Optional[TextIO] = None) -> int:
     return 1 if failures else 0
 
 
-def doctor(out: Optional[TextIO] = None, probes: Optional[dict] = None) -> int:
-    """Probe both optional engines with the real backends (override ``probes`` in tests)."""
+def doctor(
+    out: Optional[TextIO] = None,
+    probes: Optional[dict] = None,
+    engines: Optional[List[str]] = None,
+) -> int:
+    """Probe the optional engines with the real backends (override ``probes`` in tests).
+
+    ``engines`` restricts the probes to a subset (e.g. ``["stockfish"]`` for a
+    binary-only CI runner that never installs torch/Maia-2); ``None`` checks all.
+    """
     probes = probes or {"stockfish": _probe_stockfish, "maia2": _probe_maia2}
+    if engines:
+        probes = {name: probes[name] for name in engines if name in probes}
     checks = [check(name, probe) for name, probe in probes.items()]
     return run_doctor(checks, out=out)
