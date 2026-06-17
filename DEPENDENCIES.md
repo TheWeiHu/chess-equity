@@ -30,6 +30,11 @@ Read it top-to-bottom on a fresh machine and every currently-parked task becomes
 **Resolution order for the engine:** explicit `path=` → `$STOCKFISH_PATH` → `stockfish`
 on `PATH` (see `src/chess_equity/stockfish.py`).
 
+**Verify a provisioned host:** `chess-equity doctor` resolves Stockfish and runs a real
+eval, then imports Maia-2 and runs a real inference, printing PASS/FAIL per engine (exit
+non-zero if any is missing/broken). Use it after `brew install stockfish` +
+`uv sync --extra maia2` to confirm the two non-core bars actually work.
+
 ## Why a task gets "parked" on the unattended host
 
 The nightshift loop runs in a sandbox that **cannot** provision: a system binary
