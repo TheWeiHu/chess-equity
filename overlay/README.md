@@ -43,9 +43,12 @@ background is transparent, so only the bar composites over your stream.
 | `layout` | `horizontal` | `horizontal` (names flank a wide bar) or `vertical` (classic eval-bar) |
 | `theme`  | `dark` | `dark` or `light` label text |
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
+| `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
+| `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
 
 Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
+Caster setup: `http://localhost:8777/?caster=1&cpbar=1`
 
 ## What it shows
 
@@ -54,7 +57,11 @@ Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
 - The last move's **Δequity grade** pill (task 0008) — flares green when a player
   finds better than their level expects, red on a blunder.
 - A dashed **centipawn ghost tick** showing where the classic engine bar would
-  sit — so the divergence is visible at a glance.
+  sit — so the divergence is visible at a glance (or a **full second bar** with
+  `?cpbar=1`).
+- In **caster mode** (`?caster=1`), a **drama flare** on big practical equity
+  swings, glowing gold when it's a swing the engine bar misses (e.g. a clock
+  scramble the centipawn eval calls quiet) — the caster's "look at THIS" cue.
 
 The bundled `mock-game.json` is a bullet time-scramble: around the time scramble
 the centipawn eval reads ≈0.00 (or slightly for Black) while the clock-aware
@@ -91,12 +98,17 @@ values are **seconds remaining**.
   "cp": 60,                                 // optional — classic centipawn eval (White POV)
   "wdl": { "win": 0.80, "draw": 0.16, "loss": 0.04 },  // optional, if the model exposes WDL
   "clock": { "white": 13.2, "black": 1.6 }, // optional — seconds remaining
-  "grade": { "label": "blunder", "delta": -0.22 }      // optional — Δequity grade (mover POV)
+  "grade": { "label": "blunder", "delta": -0.22 },     // optional — Δequity grade (mover POV)
+  "drama": { "kind": "scramble", "magnitude": 0.55,    // optional — caster-mode drama (task 0020)
+             "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" }
 }
 ```
 
 Only `type` and (for positions) `equity` are required; everything else degrades
-gracefully (missing clock hides the clock, missing `cp` hides the ghost tick).
+gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). The
+optional `drama` payload mirrors `chess_equity.drama.DramaEvent` — when present it
+supplies the caster-mode flare's headline; otherwise caster mode derives a flare
+from the equity swing itself, so it works on any feed.
 
 ## Tests
 
@@ -112,6 +124,7 @@ fixture contains a real time-scramble.
 
 - Wire to the real **0018** broadcast feed (Lichess broadcast WebSocket) and a
   config page that takes a round/game URL (currently config is via query params).
-- "Caster mode" **drama/clutch** indicator (0020) on big practical swings.
-- Side-by-side classic centipawn bar as a full second bar (currently a ghost tick).
+- Emit the server-side `drama` payload from the pipeline (0018 + `chess_equity.drama`)
+  so caster headlines use the full classifier (clutch / missed-win / escape / scramble)
+  rather than the client-side swing heuristic.
 - Precompute-then-live buffering for instant load (0012).

@@ -71,6 +71,41 @@ def test_equity_diverges_from_centipawns():
     )
 
 
+def test_caster_mode_has_an_engine_blind_swing():
+    """Acceptance for the caster-mode drama indicator (task 0022).
+
+    Mirrors overlay.js ``dramaSwing``: the bundled replay must contain a move where
+    the PRACTICAL equity swings hard (>=10 pts) while the centipawn bar barely moves
+    (practical swing >= 2x the engine's) — the "swing the engine bar misses" the
+    flare is built to catch. Without one, caster mode would have nothing to fire on.
+    """
+    events = load_events()
+    positions = [e for e in events if e.get("type") == "position"]
+    found = False
+    prev = None
+    for e in positions:
+        if prev is not None:
+            swing = abs(e["equity"] - prev["equity"])
+            cp_swing = abs(cp_to_white_pos(e["cp"]) - cp_to_white_pos(prev["cp"]))
+            if swing >= 0.10 and swing >= 2.0 * cp_swing:
+                found = True
+                break
+        prev = e
+    assert found, "fixture needs a big practical swing the centipawn bar misses"
+
+
+def test_optional_drama_field_schema():
+    """If an event carries a server-side `drama` payload (chess_equity.drama, once
+    0018/0020 emit it), it must match the shape overlay.js reads."""
+    for e in load_events():
+        drama = e.get("drama")
+        if drama is None:
+            continue
+        assert drama.get("headline"), "drama needs a caster-facing headline"
+        if "magnitude" in drama:
+            assert 0.0 <= drama["magnitude"] <= 1.0
+
+
 def test_time_pressure_is_present():
     """The wedge is clock-aware: a side must actually hit time trouble."""
     events = load_events()

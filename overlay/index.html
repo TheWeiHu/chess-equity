@@ -18,6 +18,8 @@
     ?layout=horizontal|vertical   bar orientation (default horizontal).
     ?theme=dark|light             label theme (default dark).
     ?cp=1|0         show the classic centipawn "ghost" tick for contrast.
+    ?cpbar=1        render the centipawn eval as a full second bar (not just a tick).
+    ?caster=1       caster mode: flare on big practical swings the engine bar misses.
     ?speed=N        replay speed multiplier for .json feeds (default 1).
 
   Event schema is documented in README.md (SCHEMA section) — this is the
@@ -31,15 +33,25 @@
       <span class="clock" data-white-clock></span>
     </div>
 
-    <div class="bar" role="img" aria-label="equity bar">
-      <div class="bar-fill-white" data-bar-white></div>
-      <div class="bar-fill-black" data-bar-black></div>
-      <div class="cp-ghost" data-cp-ghost title="classic centipawn eval"></div>
-      <div class="equity-readout">
-        <span class="pct pct-white" data-white-pct>50%</span>
-        <span class="pct pct-black" data-black-pct>50%</span>
+    <div class="bar-stack">
+      <div class="bar" role="img" aria-label="equity bar">
+        <div class="bar-fill-white" data-bar-white></div>
+        <div class="bar-fill-black" data-bar-black></div>
+        <div class="cp-ghost" data-cp-ghost title="classic centipawn eval"></div>
+        <div class="equity-readout">
+          <span class="pct pct-white" data-white-pct>50%</span>
+          <span class="pct pct-black" data-black-pct>50%</span>
+        </div>
+        <div class="grade-pill" data-grade hidden></div>
+        <div class="drama-flare" data-drama hidden></div>
       </div>
-      <div class="grade-pill" data-grade hidden></div>
+
+      <!-- Classic centipawn bar (?cpbar=1) — the engine's view, for contrast. -->
+      <div class="bar bar-cp" data-cp-bar hidden role="img" aria-label="centipawn bar">
+        <div class="bar-fill-white" data-cp-bar-white></div>
+        <div class="bar-fill-black"></div>
+        <span class="bar-cp-label">engine</span>
+      </div>
     </div>
 
     <div class="player player-black">

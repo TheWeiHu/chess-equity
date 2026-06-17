@@ -29,6 +29,34 @@
     return 1 / (1 + Math.exp(-0.00368208 * cp));
   }
 
+  // Caster mode (task 0022): a big PRACTICAL equity swing — and a flag for the
+  // swings the engine misses (practical bar moves far more than the centipawn bar).
+  // All inputs White-POV; returns null when the swing is too small to flare on.
+  // MAX_SWING (0.40) mirrors chess_equity.drama.MAX_SWING so magnitude is comparable.
+  function dramaSwing(prevEquity, equity, prevCp, cp, opts) {
+    opts = opts || {};
+    var minSwing = opts.minSwing == null ? 0.1 : opts.minSwing; // 10pts to flare
+    var blindRatio = opts.blindRatio == null ? 2.0 : opts.blindRatio;
+    if (typeof prevEquity !== "number" || typeof equity !== "number") return null;
+    if (isNaN(prevEquity) || isNaN(equity)) return null;
+    var swing = equity - prevEquity;
+    if (Math.abs(swing) < minSwing) return null;
+    var cpA = cpToWhitePos(prevCp);
+    var cpB = cpToWhitePos(cp);
+    var engineBlind;
+    if (cpA == null || cpB == null) {
+      engineBlind = true; // no engine eval to compare against
+    } else {
+      engineBlind = Math.abs(swing) >= blindRatio * Math.abs(cpB - cpA);
+    }
+    return {
+      side: swing > 0 ? "white" : "black",
+      swing: swing,
+      magnitude: Math.min(1, Math.abs(swing) / 0.4),
+      engineBlind: engineBlind,
+    };
+  }
+
   // Seconds -> M:SS (or H:MM:SS). Sub-10s shows tenths for the scramble feel.
   function formatClock(secs) {
     if (typeof secs !== "number" || isNaN(secs) || secs < 0) return "";
@@ -49,6 +77,8 @@
       layout: p.get("layout") || "horizontal",
       theme: p.get("theme") || "dark",
       cp: p.get("cp") !== "0",
+      cpbar: p.get("cpbar") === "1",
+      caster: p.get("caster") === "1",
       speed: parseFloat(p.get("speed")) || 1,
     };
   }
@@ -63,6 +93,10 @@
   }
 
   let gradeTimer = null;
+  let dramaTimer = null;
+  // Previous position, so caster mode can measure the swing into THIS move.
+  let prevEquity = null;
+  let prevCp = null;
 
   function applyGame(evt) {
     const pl = evt.players || {};
@@ -88,17 +122,37 @@
     setText("[data-white-pct]", pct(eq, "white"));
     setText("[data-black-pct]", pct(eq, "black"));
 
-    // Centipawn ghost tick (the divergence cue).
+    const cpPos = cpToWhitePos(evt.cp);
+
+    // Classic centipawn eval — either as a full second bar (?cpbar=1) or a ghost
+    // tick on the equity bar (?cp, the default). The full bar supersedes the tick.
+    const cpBar = q("[data-cp-bar]");
+    if (cpBar) cpBar.hidden = !(cfg.cpbar && cpPos != null);
+    if (cfg.cpbar && cpPos != null) {
+      const cpWhite = q("[data-cp-bar-white]");
+      if (cpWhite) {
+        const dim = cfg.layout === "vertical" ? "height" : "width";
+        cpWhite.style[dim] = (cpPos * 100).toFixed(1) + "%";
+      }
+    }
     const ghost = q("[data-cp-ghost]");
     if (ghost) {
-      const pos = cfg.cp ? cpToWhitePos(evt.cp) : null;
-      if (pos == null) {
+      const showTick = cfg.cp && !cfg.cpbar && cpPos != null;
+      if (!showTick) {
         ghost.classList.remove("show");
       } else {
         ghost.classList.add("show");
-        ghost.style.left = (pos * 100).toFixed(1) + "%";
+        ghost.style.left = (cpPos * 100).toFixed(1) + "%";
       }
     }
+
+    // Caster mode: flare on a big practical swing the engine bar misses (task 0022).
+    if (cfg.caster) {
+      const d = dramaSwing(prevEquity, eq, prevCp, evt.cp);
+      if (d) showDrama(d, evt.drama);
+    }
+    prevEquity = eq;
+    prevCp = evt.cp;
 
     // Clocks (rolling players carry over from the game event).
     const clk = evt.clock || {};
@@ -140,6 +194,35 @@
     return sign + Math.round(d * 100) + "%";
   }
 
+  // Caster-facing one-liner for a swing. Prefers a server-provided drama headline
+  // (chess_equity.drama, once 0018/0020 emit it); otherwise builds one from the swing.
+  function dramaHeadline(d, serverDrama) {
+    if (serverDrama && serverDrama.headline) return serverDrama.headline;
+    const pts = Math.round(d.swing * 100);
+    const arrow = d.swing > 0 ? "▲" : "▼";
+    const who = d.side === "white" ? "White" : "Black";
+    const tail = d.engineBlind ? " · engine bar misses it" : "";
+    return arrow + " " + who + " " + (pts > 0 ? "+" : "") + pts + " pts" + tail;
+  }
+
+  function showDrama(d, serverDrama) {
+    const el = q("[data-drama]");
+    if (!el) return;
+    el.textContent = dramaHeadline(d, serverDrama);
+    el.classList.toggle("white", d.side === "white");
+    el.classList.toggle("black", d.side === "black");
+    el.classList.toggle("engine-blind", !!d.engineBlind);
+    el.hidden = false;
+    // Restart the flare animation on each fire.
+    el.style.animation = "none";
+    void el.offsetWidth;
+    el.style.animation = "";
+    if (dramaTimer) clearTimeout(dramaTimer);
+    dramaTimer = setTimeout(function () {
+      el.hidden = true;
+    }, 4000);
+  }
+
   function dispatch(evt, cfg) {
     if (!evt || !evt.type) return;
     if (evt.type === "game") applyGame(evt);
@@ -176,6 +259,8 @@
     cpToWhitePos: cpToWhitePos,
     formatClock: formatClock,
     fmtDelta: fmtDelta,
+    dramaSwing: dramaSwing,
+    dramaHeadline: dramaHeadline,
   };
 
   if (typeof document !== "undefined") {
