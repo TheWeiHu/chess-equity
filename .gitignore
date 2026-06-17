@@ -19,3 +19,4 @@ uv.lock
 # multi-GB; keep only the small committed fixture under data/sample/.
 /data/*
 !/data/sample/
+.gstack/
