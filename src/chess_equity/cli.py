@@ -122,7 +122,11 @@ def build_model(
 
         return build_maia_search(depth=depth, k=k)
     if name == "baseline":
-        return LichessBaselineModel()
+        # The shipped centipawn bar should be a real engine eval (Stockfish at the
+        # given depth) when a binary is available, else fall back to material (0043).
+        from chess_equity.stockfish import resolve_objective_engine
+
+        return LichessBaselineModel(engine=resolve_objective_engine(depth=depth))
     raise ValueError(
         f"unknown model {name!r}; choose from: "
         "baseline, maia2, wdl-a, maia-rollout, maia-search"

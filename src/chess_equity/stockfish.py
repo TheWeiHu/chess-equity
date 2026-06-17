@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import warnings
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -134,3 +135,28 @@ class StockfishEngine(ObjectiveEngine):
     def best_move(self, fen: str) -> Optional[str]:
         """The engine's chosen move (first PV move) in UCI, or ``None``."""
         return self.analyse(fen).best_move
+
+
+def resolve_objective_engine(
+    depth: int = DEFAULT_DEPTH, *, path: Optional[str] = None, warn: bool = True
+) -> ObjectiveEngine:
+    """The objective engine the shipped *centipawn bar* should use (task 0043).
+
+    The benchmark this project claims to beat is a real engine's eval, not a material
+    count — so prefer a :class:`StockfishEngine` whenever a UCI binary is available
+    (``$STOCKFISH_PATH`` / PATH), and fall back to the trivial
+    :class:`~chess_equity.models.MaterialEngine` only when none is found, with a
+    warning (so the bar still renders). Install a binary (task 0042) for a real eval.
+    """
+    if stockfish_path(path):
+        return StockfishEngine(path=path, depth=depth)
+    if warn:
+        warnings.warn(
+            "No Stockfish binary found; the centipawn bar falls back to a material "
+            "count (set $STOCKFISH_PATH or install stockfish for a real engine eval).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    from chess_equity.models import MaterialEngine  # local import avoids an import cycle
+
+    return MaterialEngine()
