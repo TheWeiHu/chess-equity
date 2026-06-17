@@ -230,3 +230,70 @@ def test_cli_personal_requires_source(capsys):
     rc = main(["personal"])
     assert rc == 1
     assert "error" in capsys.readouterr().err
+
+
+# --- load_profile: the spec resolver behind --white-profile/--black-profile (task 0086) ---
+
+
+def test_load_profile_offline_pgn(tmp_path):
+    spec = f"Alice@{_write(tmp_path, ALICE_GAME)}"
+    profile = personal.load_profile(spec)
+    assert profile.username == "Alice"
+    assert profile.n_games == 1
+    # Alice's four opening moves include one blunder (Bb5).
+    assert profile.phases["opening"].n_moves == 4
+    assert profile.phases["opening"].n_blunders == 1
+
+
+def test_load_profile_rejects_malformed_spec():
+    # The '@<path>' half is required for the offline form.
+    import pytest
+
+    with pytest.raises(ValueError):
+        personal.load_profile("Alice@", max_games=1)
+
+
+def test_load_profile_network_spec(monkeypatch):
+    # No '@' → treated as a username and mined via the _urlopen seam (no real network).
+    class _FakeResp:
+        def read(self):
+            return ALICE_GAME.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(personal, "_urlopen", lambda req: _FakeResp())
+    profile = personal.load_profile("Alice")
+    assert profile.username == "Alice"
+    assert profile.n_games == 1
+
+
+# --- CLI wiring: profiles thread through eval / precompute offline (task 0086) ---
+
+
+def test_cli_eval_white_profile_marks_source(tmp_path, capsys):
+    spec = f"Alice@{_write(tmp_path, ALICE_GAME)}"
+    rc = main(["eval", "--white-profile", spec])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # The bar's source records that a personal profile was applied.
+    assert "personal" in out
+
+
+def test_cli_eval_profile_missing_file(tmp_path, capsys):
+    rc = main(["eval", "--white-profile", f"Alice@{tmp_path}/nope.pgn"])
+    assert rc == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_cli_precompute_with_profile(tmp_path, capsys):
+    pgn = _write(tmp_path, ALICE_GAME)
+    rc = main(["precompute", "--pgn", pgn, "--black-profile", f"Bob@{pgn}"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    payload = json.loads(out)
+    # precompute records the wrapping model — personalization is in the pipeline.
+    assert payload["source"] == "PersonalEquityModel"

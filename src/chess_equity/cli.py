@@ -140,6 +140,27 @@ def build_model(
     )
 
 
+def _apply_profiles(model: EquityModel, args: argparse.Namespace) -> EquityModel:
+    """Wrap ``model`` in a :class:`PersonalEquityModel` if profiles were requested.
+
+    Reads ``--white-profile`` / ``--black-profile`` off ``args`` (each a Lichess
+    username, or ``player@file.pgn`` for an offline profile — see
+    :func:`chess_equity.personal.load_profile`). With neither set, returns ``model``
+    unchanged, so the band-average bar is unaffected.
+    """
+    white_spec = getattr(args, "white_profile", None)
+    black_spec = getattr(args, "black_profile", None)
+    if not white_spec and not black_spec:
+        return model
+    from chess_equity.personal import PersonalEquityModel, load_profile
+
+    max_games = getattr(args, "max_games", 50)
+    token = getattr(args, "token", None)
+    white = load_profile(white_spec, max_games=max_games, token=token) if white_spec else None
+    black = load_profile(black_spec, max_games=max_games, token=token) if black_spec else None
+    return PersonalEquityModel(model, white_profile=white, black_profile=black)
+
+
 def _eval_rollout_fen(model: MaiaRolloutModel, fen: str, white_elo: int, black_elo: int) -> str:
     """Bar + 95% CI line for the Monte Carlo rollout oracle (task 0007)."""
     est = model.estimate(fen, white_elo, black_elo)
@@ -165,14 +186,14 @@ def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
         if args.pgn:
-            for line in _eval_pgn(model, args.pgn, args.white_elo, args.black_elo):
+            for line in _eval_pgn(_apply_profiles(model, args), args.pgn, args.white_elo, args.black_elo):
                 print(line)
         elif isinstance(model, MaiaRolloutModel):
             print(_eval_rollout_fen(model, args.fen, args.white_elo, args.black_elo))
         elif isinstance(model, MaiaSearchModel):
             print(_eval_search_fen(model, args.fen, args.white_elo, args.black_elo))
         else:
-            print(_eval_fen(model, args.fen, args.white_elo, args.black_elo))
+            print(_eval_fen(_apply_profiles(model, args), args.fen, args.white_elo, args.black_elo))
     except (ValueError, OSError, RuntimeError) as exc:
         # RuntimeError covers Maia2NotInstalled (a model failing to load at use time).
         print(f"error: {exc}", file=sys.stderr)
@@ -193,6 +214,7 @@ def _run_grade(args: argparse.Namespace) -> int:
 
 def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
     """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
+    model = _apply_profiles(model, args)
     if args.pgn:
         with open(args.pgn, encoding="utf-8") as fh:
             feed = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
@@ -482,7 +504,12 @@ def _run_precompute(args: argparse.Namespace) -> int:
     warning = placeholder_equity_warning(base_model)
     if warning:
         print(warning, file=sys.stderr)
-    model = CachingEquityModel(base_model, path=args.cache)
+    try:
+        personalized = _apply_profiles(base_model, args)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    model = CachingEquityModel(personalized, path=args.cache)
     try:
         result = precompute_game(
             model, pgn_text, white_elo=args.white_elo, black_elo=args.black_elo
@@ -628,6 +655,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
         )
 
+    def add_profile_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--white-profile",
+            help="personalize White: a Lichess username (mined live), or 'player@game.pgn' "
+            "to profile from a local PGN offline (task 0086)",
+        )
+        p.add_argument(
+            "--black-profile",
+            help="personalize Black: same forms as --white-profile",
+        )
+
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
     ev.add_argument("fen", nargs="?", default=START_FEN, help="FEN (default: startpos)")
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
@@ -645,6 +683,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument(
         "--k", type=int, default=4, help="top Maia moves kept per node for --model maia-search"
     )
+    add_profile_args(ev)
     add_model_arg(ev)
 
     gr = sub.add_parser("grade", help="grade every move of a PGN by Δequity vs rating peers")
@@ -677,6 +716,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
     )
+    add_profile_args(bc)
     add_model_arg(bc)
 
     hl = sub.add_parser(
@@ -776,6 +816,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     pc.add_argument(
         "--cache", help="persistent cache path for warm restarts (omit = in-memory only)"
     )
+    add_profile_args(pc)
     add_model_arg(pc)
 
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")

@@ -263,6 +263,30 @@ def build_profile_for_user(
     return build_profile(io.StringIO(pgn), username, max_games=max_games)
 
 
+def load_profile(
+    spec: str, *, max_games: int = 50, token: Optional[str] = None
+) -> PlayerProfile:
+    """Resolve a profile *spec* (as passed to ``--white-profile`` / ``--black-profile``).
+
+    Two forms, so the same flag covers both the live product path and an offline,
+    test-friendly path:
+
+    - ``"<username>"`` — fetch the player's recent annotated games from Lichess and
+      profile them (the network seam in :func:`fetch_user_games`).
+    - ``"<player>@<file.pgn>"`` — profile ``<player>`` from a local PGN file, no network.
+      The name before ``@`` is the ``White``/``Black`` header to match in the file.
+    """
+    if "@" in spec:
+        username, _, path = spec.partition("@")
+        if not username or not path:
+            raise ValueError(
+                f"profile spec {spec!r} must be 'player@file.pgn' (both parts required)"
+            )
+        with open(path, encoding="utf-8") as fh:
+            return build_profile(fh, username, max_games=max_games)
+    return build_profile_for_user(spec, max_games=max_games, token=token)
+
+
 class PersonalEquityModel(EquityModel):
     """Wrap an equity model so each side's rating is shifted by their personal profile.
 
