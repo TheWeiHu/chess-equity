@@ -421,7 +421,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         from chess_equity.validate.calibration import band_reliability, format_calibration_report
 
         name = requested[0]
-        bands = band_reliability(rows, PREDICTORS[name])
+        # --bootstrap > 0 (the default) adds a bin-resampling ECE CI per band (task 0076)
+        # so the band-level calibration claims carry error bars; --bootstrap 0 turns it off.
+        bands = band_reliability(
+            rows, PREDICTORS[name], bootstrap=args.bootstrap, seed=args.seed
+        )
         cal = format_calibration_report(
             bands, predictor_name=name, title=f"Calibration by rating band — {args.data}"
         )
