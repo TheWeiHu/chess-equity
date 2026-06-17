@@ -41,10 +41,11 @@ the rating-blind centipawn bar.
 
 ## Status
 
-Scaffold (task 0001). The package defines the contract and ships a **placeholder**
-model — the rating-blind Lichess Win% over a trivial material eval — so the CLI runs
-end-to-end. The real rating-conditioned models (regression in 0004, Maia-2's
-`win_prob` in 0005) plug in behind the same `EquityModel` interface.
+The package defines the contract and ships a **placeholder** model — the rating-blind
+Lichess Win% over a trivial material eval — so the CLI runs end-to-end with zero heavy
+deps (`--model baseline`, the default). The first **real** rating-conditioned model,
+Maia-2's `win_prob` (`--model maia2`, task 0005), plugs in behind the same `EquityModel`
+interface; the regression baseline (0004) lands the same way.
 
 ## Install
 
@@ -65,6 +66,44 @@ Example:
 ```
 [###############---------------]  50.0% (W)  W/D/L 33.4/33.2/33.4  [lichess-baseline]  cp +0
 ```
+
+## Maia-2 equity (task 0005) — the real rating-conditioned bar
+
+`--model maia2` swaps the placeholder for [Maia-2](https://github.com/CSSLab/maia2)
+(NeurIPS 2024), a single rating-conditioned model whose value head was trained on real
+Lichess outcomes. Its `win_prob` is the side-to-move's expected score in `[0, 1]` — i.e.
+**exactly our equity** `P(win) + 0.5·P(draw)` — so the bar comes straight from Maia-2,
+conditioned on *both* players' ratings. This is the first principled `EquityModel`; the
+regression/search baselines (0004/0006/0007) become comparisons against it.
+
+```bash
+chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model maia2
+chess-equity grade --pgn game.pgn --model maia2
+chess-equity broadcast --pgn game.pgn --model maia2
+```
+
+Setup (the real model is heavyweight, so it's optional and lazy-loaded):
+
+```bash
+pip install maia2          # pulls torch; the ~23M-param checkpoint downloads on first use
+```
+
+- **Deps / weights:** `maia2` + `torch`; the checkpoint is fetched on the first
+  `evaluate(...)` call and then cached by the library. Without `maia2` installed, the CLI
+  prints a clear install hint and exits non-zero (it never tries the network just to scaffold).
+- **Caching:** evaluations are memoised by `(fen, white_elo, black_elo)` to a pickle at
+  `~/.cache/chess-equity/maia2.pkl`, so repeats and restarts don't re-run the model
+  (search/rollout baselines hammer the same positions; precompute/batching is 0012).
+- **WDL split:** Maia-2 gives the scalar equity; the win/loss-vs-draw partition is modelled
+  (`wdl_from_equity`, draw mass peaking near 50%) so `P(win)+0.5·P(draw)` stays faithful to
+  `win_prob`.
+- **Latency:** one CPU forward pass per uncached position; budget for the interactive bar
+  is set in 0012. **Calibration caveat (feeds 0009):** the value head is a *secondary*
+  objective in the paper with few reported numbers — verify it in the validation harness
+  before trusting it as the shipped bar, especially at extreme ratings and in endgames.
+
+Tests inject a fake backend (the `Backend` seam: `(fen, elo_self, elo_oppo) ->
+(move_probs, win_prob)`), so the suite needs neither torch nor weights.
 
 ## Data (task 0002)
 

@@ -20,6 +20,12 @@ data = [
     "pyarrow>=14",
     "pandas>=2.0",
 ]
+# The real Maia-2 equity model (task 0005, `--model maia2`). Heavyweight (pulls torch
+# + a downloaded checkpoint), so it's opt-in; the baseline path and tests need none of
+# it — tests inject a fake inference backend.
+maia2 = [
+    "maia2",
+]
 
 [project.scripts]
 chess-equity = "chess_equity.cli:main"
