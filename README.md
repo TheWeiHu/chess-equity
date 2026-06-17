@@ -303,11 +303,14 @@ to `reports/` (the numeric reliability table already ships in `validate.metrics`
 
 Shipped predictors: `baseline` (Lichess's rating-blind Win% over the row's centipawns
 — the thing to beat), `baseline+clock`, `wdl-a` (Approach A, the rating-conditioned
-regression — task 0004, a row predictor with no harness change), and the board model
+regression — task 0004, a row predictor with no harness change), and the board models
 **`maia2`** (Maia-2's value head, scored via `harness.model_predictor` on the row's
-FEN — the thesis comparison; needs a `--with-fen` dataset). A demonstration run on the
-sample fixture lives in [`reports/validation_sample.md`](reports/validation_sample.md)
-(smoke test — meaningless at 15 rows, real evidence needs a real dataset).
+FEN — the thesis comparison; needs a `--with-fen` dataset) and **`maia-search`** (the
+Maia-weighted expectimax, task 0006 — registered as a board predictor so 0009 can ask
+whether explicit look-ahead beats the implicit value head; the comparison run needs
+Maia weights). A demonstration run on the sample fixture lives in
+[`reports/validation_sample.md`](reports/validation_sample.md) (smoke test —
+meaningless at 15 rows, real evidence needs a real dataset).
 
 ### Calibration by rating band (task 0027)
 

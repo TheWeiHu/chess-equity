@@ -135,8 +135,18 @@ def _build_maia2() -> EquityModel:
     return build_maia2_equity()
 
 
+def _build_maia_search() -> EquityModel:
+    # The Maia-weighted expectimax (task 0006), scored as a board predictor so the
+    # 0009 gate can ask: does explicit look-ahead beat Maia-2's implicit value head
+    # (``maia2``)? Defaults (depth=2, k=4); the comparison run needs Maia weights.
+    from chess_equity.search import build_maia_search
+
+    return build_maia_search()
+
+
 BOARD_MODELS: Dict[str, Callable[[], EquityModel]] = {
     "maia2": _build_maia2,
+    "maia-search": _build_maia_search,
 }
 
 
