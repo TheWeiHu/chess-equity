@@ -78,7 +78,9 @@ class MoveEvent:
     eval bar). ``delta_equity`` is the change from the *mover's* POV in percentage
     points — positive means the move improved the mover's practical chances, the
     whole point of the reframe. Clocks are remaining seconds, or ``None`` if the PGN
-    carried no ``[%clk]`` tag.
+    carried no ``[%clk]`` tag. ``cp`` is the objective engine's classic centipawn
+    eval **from White's POV** (so it lines up with ``equity``), or ``None`` when the
+    model exposes no objective cp (e.g. a pure win-prob model, or a mate).
     """
 
     game_id: str
@@ -96,6 +98,7 @@ class MoveEvent:
     last_move_grade: Optional[str]
     source: str
     compute_ms: float
+    cp: Optional[float] = None
     resync: bool = False
 
     def to_dict(self) -> Dict[str, object]:
@@ -111,17 +114,16 @@ class MoveEvent:
         bridge between the two, so producer and consumer can't silently drift; the
         contract is pinned by ``tests/test_broadcast_overlay_contract.py``.
 
-        ``cp`` (the classic centipawn ghost tick) is not yet plumbed through the
-        broadcast path, so it is emitted as ``None`` — optional in the schema, and
-        the overlay simply hides the tick. Threading the objective engine's cp
-        (already on :class:`~chess_equity.types.Equity`) is a follow-up.
+        ``cp`` is the White-POV objective centipawn eval (the overlay's classic
+        ghost tick and the human-edge divergence badge), or ``None`` when no engine
+        cp is available — the overlay then simply hides the tick.
         """
         event: Dict[str, object] = {
             "type": "position",
             "ply": self.ply,
             "move": {"san": self.san},
             "equity": self.equity / 100.0,
-            "cp": None,
+            "cp": self.cp,
             "clock": {"white": self.white_clock, "black": self.black_clock},
         }
         if self.last_move_grade is not None:
@@ -305,8 +307,16 @@ class GameTracker:
             san = node.parent.board().san(node.move)
             fen = node.board().fen()
             t0 = time.perf_counter()
-            equity_white = self._equity_white(fen, white_elo, black_elo)
+            equity = self.model.evaluate(fen, white_elo, black_elo)
             compute_ms = (time.perf_counter() - t0) * 1000.0
+            equity_white = equity.equity_white
+            # ``equity.cp`` is side-to-move POV; ``fen`` is post-move, so the side to
+            # move is the mover's opponent. Flip to White POV to match equity_white.
+            cp = (
+                None
+                if equity.cp is None
+                else (equity.cp if not mover_white else -equity.cp)
+            )
 
             # Δequity from the mover's POV: White reads equity_white directly, Black
             # reads its complement.
@@ -331,6 +341,7 @@ class GameTracker:
                     last_move_grade=grade_delta(delta),
                     source=self.model.__class__.__name__,
                     compute_ms=compute_ms,
+                    cp=cp,
                     resync=resync,
                 )
             )
