@@ -69,6 +69,8 @@ uv run chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600
 uv run chess-equity eval --pgn game.pgn                     # annotate every move
 uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
 uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move equity
+uv run chess-equity eval --white-profile magnuscarlsen      # personalize to a Lichess player
+uv run chess-equity eval --white-profile "Alice@games.pgn"  # ...or profile offline from a PGN
 ```
 
 ```
