@@ -8,6 +8,7 @@ Commands:
     chess-equity broadcast --round <id>            # live Lichess broadcast round
     chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
     chess-equity highlights --pgn game.pgn         # auto-detect drama/clutch moments
+    chess-equity personal --user <lichess-name>    # per-player phase profile + offsets
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
 
@@ -522,6 +523,86 @@ def _run_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_personal(args: argparse.Namespace) -> int:
+    """Mine a player's profile and (optionally) show how it bends the equity bar."""
+    import io
+
+    from chess_equity.personal import (
+        PHASES,
+        PersonalEquityModel,
+        build_profile,
+        fetch_user_games,
+        phase_of,
+    )
+
+    try:
+        if args.pgn:
+            target = args.name or args.user
+            if not target:
+                raise ValueError("reading a profile from --pgn needs --name <player> (or --user)")
+            with open(args.pgn, encoding="utf-8") as fh:
+                profile = build_profile(fh, target, max_games=args.max_games)
+        elif args.user:
+            pgn = fetch_user_games(args.user, max_games=args.max_games, token=args.token)
+            profile = build_profile(io.StringIO(pgn), args.user, max_games=args.max_games)
+        else:
+            raise ValueError("personal needs --user <name> (live) or --pgn FILE (--name <player>)")
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    rows = []
+    for phase in PHASES:
+        stats = profile.phases.get(phase)
+        rows.append(
+            {
+                "phase": phase,
+                "moves": stats.n_moves if stats else 0,
+                "acpl": round(stats.avg_cp_loss, 1) if stats else 0.0,
+                "blunder_rate": round(stats.blunder_rate, 3) if stats else 0.0,
+                "elo_offset": round(profile.phase_offset(phase), 1),
+            }
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "username": profile.username,
+                    "rating": profile.rating,
+                    "games": profile.n_games,
+                    "moves": profile.total_moves,
+                    "overall_acpl": round(profile.overall_acpl, 1),
+                    "phases": rows,
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    print(f"profile: {profile.username}  (rating ~{profile.rating}, {profile.n_games} games, "
+          f"{profile.total_moves} moves, overall ACPL {profile.overall_acpl:.0f})")
+    print(f"  {'phase':11s} {'moves':>6s} {'ACPL':>7s} {'blunder%':>9s} {'Elo±':>7s}")
+    for r in rows:
+        print(f"  {r['phase']:11s} {r['moves']:6d} {r['acpl']:7.1f} "
+              f"{100 * r['blunder_rate']:8.1f}% {r['elo_offset']:+7.0f}")
+
+    if args.demo:
+        base = build_model("baseline")
+        nominal = profile.rating or 1500
+        # The profiled player sits at White; the demo shows band-average vs personalized
+        # equity for the FEN, exposing the phase-wise gap the offset introduces.
+        personal = PersonalEquityModel(base, white_profile=profile)
+        phase = phase_of(chess.Board(args.fen))
+        band = base.evaluate(args.fen, nominal, nominal)
+        mine = personal.evaluate(args.fen, nominal, nominal)
+        print()
+        print(f"demo ({phase}, both nominally {nominal}):")
+        print(f"  band-average  {render_eval(band)}")
+        print(f"  personalized  {render_eval(mine)}  (Elo offset {profile.phase_offset(phase):+.0f})")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -692,6 +773,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="check the optional engines (Stockfish, Maia-2) are installed and working",
     )
 
+    pp = sub.add_parser(
+        "personal",
+        help="mine a player's per-phase quality profile and personalize the bar (task 0014)",
+    )
+    pp.add_argument("--user", help="Lichess username to mine over the network")
+    pp.add_argument("--pgn", help="local PGN file to profile from instead (offline)")
+    pp.add_argument("--name", help="which player in --pgn to profile (defaults to --user)")
+    pp.add_argument("--max-games", type=int, default=50, help="cap mined games (default 50)")
+    pp.add_argument("--token", default=None, help="Lichess API token (optional, raises rate limit)")
+    pp.add_argument("--json", action="store_true", help="emit the profile as JSON")
+    pp.add_argument(
+        "--demo",
+        action="store_true",
+        help="also show band-average vs personalized equity for --fen",
+    )
+    pp.add_argument("--fen", default=START_FEN, help="position for --demo (default: startpos)")
+
     args = parser.parse_args(argv)
 
     if args.command == "eval":
@@ -722,6 +820,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         from chess_equity.doctor import doctor
 
         return doctor()
+    if args.command == "personal":
+        return _run_personal(args)
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2
