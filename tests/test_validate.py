@@ -314,6 +314,103 @@ def test_validate_cli_bootstrap_zero_disables_section(tmp_path, capsys):
     assert "Significance vs baseline" not in out.read_text()
 
 
+# --- bin-resampling CI on ECE / calibration (task 0072) --------------------------
+
+def test_ece_bootstrap_ci_brackets_the_point_ece():
+    # The point ECE must sit inside its own CI, and the CI must be byte-reproducible
+    # under a fixed seed. A predictor off by 0.1 in every bin has point ECE 0.1.
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    args = ([0.1, 0.1, 0.9, 0.9], [0.0, 0.0, 1.0, 1.0])
+    a = ece_bootstrap_ci(*args, n_resamples=500, seed=42)
+    b = ece_bootstrap_ci(*args, n_resamples=500, seed=42)
+    assert a == b  # seed-deterministic, frozen dataclass equality
+    assert isclose(a.ece, 0.1, abs_tol=1e-9)
+    assert a.lo <= a.ece <= a.hi
+    assert a.delta is None and a.delta_lo is None  # no baseline given
+
+
+def test_ece_bootstrap_paired_delta_directions():
+    # Perfectly calibrated model (pred == label, ECE 0) vs a systematically over-confident
+    # baseline (always predicts 0.9 on a 50/50 outcome, so its bin mean is off by >=0.1 in
+    # every resample): the paired ECE delta (model - baseline) is negative and the whole
+    # CI clears zero -> beats. Note 0.5-everywhere would NOT work — ECE measures
+    # calibration, not sharpness, so a 0.5 bin on 50/50 labels is "calibrated" (ECE 0).
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    preds = [0.0, 0.0, 1.0, 1.0]
+    labels = [0.0, 0.0, 1.0, 1.0]
+    base = [0.9, 0.9, 0.9, 0.9]
+    ci = ece_bootstrap_ci(preds, labels, baseline_preds=base, n_resamples=500, seed=1)
+    assert ci.delta is not None and ci.delta < 0.0
+    assert ci.beats_baseline and not ci.worse_than_baseline
+    # swap roles: the miscalibrated predictor is significantly worse.
+    worse = ece_bootstrap_ci(base, labels, baseline_preds=preds, n_resamples=500, seed=1)
+    assert worse.worse_than_baseline and not worse.beats_baseline
+
+
+def test_ece_bootstrap_rejects_bad_input():
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([0.1, 0.2], [0.1])  # preds/labels length mismatch
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([], [])  # no rows
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([0.1, 0.2], [0.0, 1.0], baseline_preds=[0.1])  # baseline mismatch
+
+
+def test_compare_ece_pins_deterministic_cis_on_fen_sample():
+    # Acceptance (0072): seeded ECE CIs are reproducible byte-for-byte on the committed
+    # FEN sample. wdl-a is better calibrated (lower point ECE) than the rating-blind
+    # baseline, but on only 15 rows the delta CI straddles zero -> not yet significant.
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import build_predictors, compare_ece_to_baseline
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    cis = compare_ece_to_baseline(
+        rows, build_predictors(["baseline", "wdl-a"]), n_resamples=2000, seed=0
+    )
+    by_name = {c.predictor: c for c in cis}
+    assert set(by_name) == {"baseline", "wdl-a"}
+
+    base = by_name["baseline"]
+    assert isclose(base.ece, 0.218315, abs_tol=1e-6)
+    assert isclose(base.lo, 0.090494, abs_tol=1e-6)
+    assert isclose(base.hi, 0.346437, abs_tol=1e-6)
+    assert base.delta is None  # baseline has no delta vs itself
+
+    wdl = by_name["wdl-a"]
+    assert isclose(wdl.ece, 0.196070, abs_tol=1e-6)
+    assert isclose(wdl.lo, 0.124898, abs_tol=1e-6)
+    assert isclose(wdl.hi, 0.265698, abs_tol=1e-6)
+    assert wdl.delta is not None and wdl.delta_lo is not None and wdl.delta_hi is not None
+    assert isclose(wdl.delta, -0.022245, abs_tol=1e-6)
+    assert isclose(wdl.delta_lo, -0.090593, abs_tol=1e-6)
+    assert isclose(wdl.delta_hi, 0.048191, abs_tol=1e-6)
+    assert not wdl.beats_baseline  # better calibrated on average, but CI straddles zero
+
+
+def test_validate_cli_emits_ece_ci_section(tmp_path):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline,wdl-a",
+         "--bootstrap", "300", "--out", str(out)]
+    )
+    assert rc == 0
+    text = out.read_text()
+    assert "## Calibration (ECE) confidence intervals" in text
+    assert "| wdl-a |" in text and "Δ vs baseline" in text
+
+
 def test_baseline_registered():
     assert "baseline" in PREDICTORS
 
