@@ -100,7 +100,9 @@ swap in real numbers with `--model maia2`. Schema + the two headline acceptance 
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to `main`
 (GitHub Pages, no build step, no secrets). One-time setup: in **Settings → Pages**, set
 **Source** to **GitHub Actions**. Import a real game with
-`python web/import_game.py <lichess-url>` then open `…/chess-equity/?game=imported-game.json`.
+`python web/import_game.py <lichess-url>` — or grab a player's latest game with
+`python web/import_game.py --user <name>` (task 0039) — then open
+`…/chess-equity/?game=imported-game.json`.
 
 ## Maia-2 equity (task 0005) — the real rating-conditioned bar
 
