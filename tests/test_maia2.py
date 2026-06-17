@@ -162,3 +162,29 @@ def test_cli_eval_maia2_reports_missing_install(monkeypatch, capsys, tmp_path):
     rc = main(["eval", START, "--model", "maia2"])
     assert rc == 1
     assert "error" in capsys.readouterr().err.lower()
+
+
+def test_real_backend_converts_white_pov_to_side_to_move(monkeypatch):
+    """maia2's ``inference_each`` returns ``win_prob`` from WHITE's POV, but our Backend
+    contract is the side-to-move's equity. The real backend must convert, or every
+    black-to-move bar inverts. The fake backend can't catch this (it already speaks
+    side-to-move), so we inject a stand-in maia2 whose value head is fixed White-POV.
+    """
+    import types as pytypes
+
+    fake = pytypes.ModuleType("maia2")
+    fake.inference = pytypes.SimpleNamespace(
+        prepare=lambda: object(),
+        # 0.80 = White's win prob, the same value maia2 reports for either side to move.
+        inference_each=lambda model, prepared, fen, elo_self, elo_oppo: ({}, 0.80),
+    )
+    fake.model = pytypes.SimpleNamespace(from_pretrained=lambda type, device: object())
+    monkeypatch.setitem(sys.modules, "maia2", fake)
+
+    backend = RealMaia2Backend()
+    white_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    black_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"
+    # White to move: side-to-move == White, so win_prob passes through unchanged.
+    assert backend(white_fen, 1500, 1500)[1] == pytest.approx(0.80)
+    # Black to move: side-to-move == Black, so it must become 1 - 0.80.
+    assert backend(black_fen, 1500, 1500)[1] == pytest.approx(0.20)

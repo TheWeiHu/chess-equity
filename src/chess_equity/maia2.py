@@ -105,6 +105,12 @@ class RealMaia2Backend:
         move_probs, win_prob = inference.inference_each(
             self._model, self._prepared, fen, elo_self, elo_oppo
         )
+        # maia2's inference_each returns win_prob from WHITE's POV — it explicitly does
+        # `value = 1 - value` for a black-to-move FEN. Our Backend contract is the
+        # side-to-move's equity (what Maia2Equity / the fake backend assume), so undo
+        # that conversion. Without this, every black-to-move bar comes out inverted.
+        if not white_to_move(fen):
+            win_prob = 1.0 - win_prob
         return dict(move_probs), float(win_prob)
 
 
