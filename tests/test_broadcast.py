@@ -475,3 +475,88 @@ def test_sse_server_404s_non_sse_paths_when_no_static_dir():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# SSE live-wait + heartbeat (task 0099)
+# --------------------------------------------------------------------------- #
+
+
+class _ScriptedFeed(BroadcastFeed):
+    """A feed that returns a fixed sequence of snapshots ('' = idle), then nothing."""
+
+    def __init__(self, snapshots):
+        self._snaps = list(snapshots)
+        self._i = 0
+
+    def poll(self):
+        if self._i < len(self._snaps):
+            snap = self._snaps[self._i]
+            self._i += 1
+            return snap
+        return None
+
+
+def test_stream_emits_heartbeat_tick_on_idle_poll_when_enabled():
+    feed = _ScriptedFeed(["", GAME_PGN])  # poll 1 idle, poll 2 has the game
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        ingestor.stream(
+            interval=0, max_polls=2, max_idle_polls=None, heartbeat=True, sleep=lambda s: None
+        )
+    )
+    assert items[0] is None  # idle poll → heartbeat tick (doesn't end the stream)
+    assert any(isinstance(i, MoveEvent) for i in items)  # then the real moves arrive
+
+
+def test_stream_has_no_heartbeat_tick_by_default():
+    # Default heartbeat=False keeps the historical MoveEvent-only contract.
+    feed = _ScriptedFeed(["", GAME_PGN])
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        ingestor.stream(interval=0, max_polls=2, max_idle_polls=None, sleep=lambda s: None)
+    )
+    assert all(isinstance(i, MoveEvent) for i in items)
+
+
+def test_overlay_events_maps_idle_poll_to_heartbeat_sentinel():
+    from chess_equity.broadcast import HEARTBEAT, overlay_events
+
+    feed = _ScriptedFeed(["", GAME_PGN])
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        overlay_events(
+            ingestor, interval=0, max_polls=2, max_idle_polls=None, heartbeat=True, sleep=lambda s: None
+        )
+    )
+    assert items[0] is HEARTBEAT
+    assert any(isinstance(i, dict) and i.get("type") == "position" for i in items)
+
+
+def test_serve_sse_sends_keepalive_comment_during_idle():
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    def make_events():
+        feed = _ScriptedFeed(["", GAME_PGN])
+        return overlay_events(
+            BroadcastIngestor(feed, _model()),
+            interval=0,
+            max_polls=2,
+            max_idle_polls=None,
+            heartbeat=True,
+            sleep=lambda s: None,
+        )
+
+    server = make_sse_server(make_events, port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=10).read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ": keepalive" in body  # the idle-poll heartbeat comment
+    assert '"type": "position"' in body  # and the real move frames

@@ -88,6 +88,12 @@ real rating-conditioned bar once its weights are installed (see `DEPENDENCIES.md
 > you). No capture-to-file step. Works with `--pgn <file>` (a finished game replayed as
 > "live") and `--url <pgn>` too. Each connection gets a fresh replay/stream.
 >
+> **Tune in early (task 0099).** For a live `--round`/`--url`, you can start the overlay
+> *before the round begins*: the bridge keeps polling instead of giving up on the first
+> quiet poll, and sends a periodic SSE keep-alive comment so the connection survives the
+> wait — the bar populates as soon as the first move lands. A local `--pgn` replay is
+> finite and still ends when the game does.
+>
 > The events are `MoveEvent.to_overlay_event()` / `GameEvent.to_overlay()` — the same
 > serialization the JSON-Lines path uses (pinned by
 > `tests/test_broadcast_overlay_contract.py`). Without `--serve-sse`, `broadcast` still
