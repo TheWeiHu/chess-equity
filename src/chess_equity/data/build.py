@@ -123,6 +123,9 @@ def _coerce_row(record: dict) -> PositionRow:
     # ``fen`` is optional: datasets built before it existed (or without it) have no
     # such key, so a missing/empty value loads back as ``None``.
     fen = record.get("fen")
+    # ``game_id`` (task 0030) is keyed, not positional, so datasets predating it load
+    # back as ``None`` rather than shifting columns.
+    game_id = record.get("game_id")
     return PositionRow(
         cp_eval=float(record["cp_eval"]),
         white_elo=int(record["white_elo"]),
@@ -134,6 +137,7 @@ def _coerce_row(record: dict) -> PositionRow:
         clock_remaining=(float(clk) if clk not in (None, "") else None),
         side_to_move=str(record["side_to_move"]),
         result=float(record["result"]),
+        game_id=(str(game_id) if game_id not in (None, "") else None),
         fen=(str(fen) if fen not in (None, "") else None),
     )
 

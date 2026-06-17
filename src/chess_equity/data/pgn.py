@@ -50,6 +50,21 @@ def _non_king_pieces(board: chess.Board) -> int:
     return chess.popcount(board.occupied) - 2
 
 
+def _game_id(game: "chess.pgn.Game") -> Optional[str]:
+    """The game's identity, for the game-level validation split (task 0030).
+
+    Lichess stamps each game with ``[Site "https://lichess.org/<id>"]``; we keep just
+    the trailing ``<id>`` slug. Falls back to ``GameId``, then the raw ``Site`` value,
+    and finally ``None`` when nothing identifies the game (positions from such a game
+    then can't be guaranteed leak-free and the split surfaces that loudly).
+    """
+    site = game.headers.get("Site", "").strip()
+    if site:
+        return site.rstrip("/").rsplit("/", 1)[-1] or site
+    game_id = game.headers.get("GameId", "").strip()
+    return game_id or None
+
+
 def rows_from_game(
     game: "chess.pgn.Game", *, include_fen: bool = False
 ) -> Iterator[PositionRow]:
@@ -68,6 +83,7 @@ def rows_from_game(
 
     time_control = game.headers.get("TimeControl", "-")
     bucket = tc_bucket(time_control)
+    game_id = _game_id(game)
 
     node = game
     while node.variations:
@@ -95,6 +111,7 @@ def rows_from_game(
             clock_remaining=clock_remaining,
             side_to_move="white" if board.turn == chess.WHITE else "black",
             result=result,
+            game_id=game_id,
             fen=board.fen() if include_fen else None,
         )
 
