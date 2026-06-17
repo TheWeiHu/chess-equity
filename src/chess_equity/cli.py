@@ -5,6 +5,8 @@ Commands:
     chess-equity eval "<fen>" --white-elo 1500 --black-elo 1500
     chess-equity eval --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity grade --pgn game.pgn --white-elo 1500 --black-elo 1500
+    chess-equity broadcast --round <id>            # live Lichess broadcast round
+    chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
 
@@ -16,14 +18,22 @@ model would drop in with no other changes here.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from typing import List, Optional
+from typing import List, Optional, TextIO
 
 import chess
 import chess.pgn
 
 from chess_equity.adapters import EquityModel
 from chess_equity.bar import render_eval
+from chess_equity.broadcast import (
+    BroadcastIngestor,
+    LichessRoundFeed,
+    LocalPgnFeed,
+    MoveEvent,
+    UrlPgnFeed,
+)
 from chess_equity.grading import EquityGrader
 from chess_equity.models import LichessBaselineModel
 
@@ -68,6 +78,11 @@ def _grade_pgn(model: EquityModel, path: str, white_elo: int, black_elo: int) ->
     return lines
 
 
+def _event_line(event: MoveEvent) -> str:
+    """One JSONL record the overlay (task 0019) can tail."""
+    return json.dumps(event.to_dict())
+
+
 def build_model() -> EquityModel:
     """The model the CLI uses. Swap this single line to change models."""
     return LichessBaselineModel()
@@ -95,6 +110,45 @@ def _run_grade(args: argparse.Namespace) -> int:
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
+    """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
+    if args.pgn:
+        with open(args.pgn, encoding="utf-8") as fh:
+            feed = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
+    elif args.round:
+        feed = LichessRoundFeed(args.round, token=args.token)
+    elif args.url:
+        feed = UrlPgnFeed(args.url)
+    else:
+        raise ValueError("broadcast needs one of --pgn / --round / --url")
+
+    ingestor = BroadcastIngestor(
+        feed,
+        model,
+        white_elo=args.white_elo,
+        black_elo=args.black_elo,
+    )
+
+    def emit(event: MoveEvent) -> None:
+        out.write(_event_line(event) + "\n")
+        out.flush()
+
+    # A local replay terminates (max_idle_polls=1); a live feed runs until interrupted
+    # (--max-polls caps it). interval=0 for replays keeps tests/CI instant.
+    stats = ingestor.run(
+        emit,
+        interval=args.interval,
+        max_polls=args.max_polls,
+        max_idle_polls=1,
+    )
+    print(
+        f"# {stats.events} events over {stats.polls} polls "
+        f"({stats.errors} feed errors), max equity compute {stats.max_compute_ms:.1f} ms",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -173,6 +227,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     gr.add_argument("--white-elo", type=int, default=1500)
     gr.add_argument("--black-elo", type=int, default=1500)
 
+    bc = sub.add_parser(
+        "broadcast",
+        help="stream per-move equity events from a live (or replayed) broadcast",
+    )
+    src = bc.add_mutually_exclusive_group(required=True)
+    src.add_argument("--round", help="Lichess broadcast round id (live feed)")
+    src.add_argument("--url", help="arbitrary public PGN URL (generic feed)")
+    src.add_argument("--pgn", help="local PGN file, replayed move-by-move as 'live'")
+    bc.add_argument("--white-elo", type=int, default=None, help="override White rating")
+    bc.add_argument("--black-elo", type=int, default=None, help="override Black rating")
+    bc.add_argument("--interval", type=float, default=2.0, help="seconds between polls")
+    bc.add_argument("--max-polls", type=int, default=None, help="stop after N polls")
+    bc.add_argument(
+        "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
+    )
+    bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+
     data = sub.add_parser("data", help="build / manage the training+validation dataset")
     data_sub = data.add_subparsers(dest="data_command", required=True)
     build = data_sub.add_parser("build", help="parse a Lichess PGN dump into a dataset")
@@ -193,6 +264,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_eval(args)
     if args.command == "grade":
         return _run_grade(args)
+    if args.command == "broadcast":
+        try:
+            return _run_broadcast(args, build_model(), sys.stdout)
+        except (ValueError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "data":
         return _run_data(args)
     if args.command == "validate":

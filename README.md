@@ -132,6 +132,40 @@ uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
   `grading.py`'s tests stage that case directly. Thresholds are rating-aware (wider at
   lower ratings, where the peer mix is noisier); calibration lands with 0005/0009.
 
+## Live broadcast (streaming wedge)
+
+Stream per-move equity from a live game — the plumbing the OBS overlay (task 0019)
+consumes. It emits one JSON event per new move on stdout (tail it, or pipe to a file):
+
+```bash
+# Live Lichess broadcast round (poll its public PGN every 2s):
+uv run chess-equity broadcast --round <roundId>
+
+# Replay a finished PGN move-by-move as if it were live (no network — great for demos/CI):
+uv run chess-equity broadcast --pgn game.pgn --interval 0
+
+# Any public PGN URL (chess.com export, a static file, …), with manual ratings for OTB:
+uv run chess-equity broadcast --url <pgnUrl> --white-elo 2700 --black-elo 2650
+```
+
+Each event:
+
+```json
+{"game_id": "...", "ply": 12, "san": "Bb5", "fen": "...",
+ "white_clock": 55.0, "black_clock": 54.0, "white_elo": 2900, "black_elo": 2850,
+ "equity": 50.0, "delta_equity": 0.0, "last_move_grade": "ok", "compute_ms": 0.1}
+```
+
+`equity` is the White-POV bar (0–100%); `delta_equity` is the change from the
+*mover's* POV (positive = the move improved their practical chances — the whole
+point of the reframe). `[%clk]` tags are parsed and carried on every event so the
+clock-aware model (task 0015) can use them; this module does not yet feed the clock
+into the equity computation. The ingestor tracks every game in a round at once,
+de-dupes repeated polls, resyncs on broadcast corrections, and retries through
+transient feed errors (reconnect). Latency: with the placeholder model, equity
+compute is ~0.1 ms/move — well under the sub-second target (Maia-2 in 0005 sets the
+real number; cache/batch live in 0012).
+
 ## Architecture
 
 | Type | Role |
@@ -144,6 +178,7 @@ uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
 | `data/` | Lichess PGN dump -> `(eval, ratings, outcome)` dataset (task 0002) |
 | `validate/` | score predictors vs real outcomes — log-loss/Brier/ECE (task 0009) |
 | `grading.py` | Δequity move grading — peer-relative + classic (task 0008) |
+| `broadcast.py` | live feeds + per-move equity event stream (task 0018) |
 | `cli.py` | `chess-equity` entry point; depends only on `EquityModel` |
 
 Swap the model in `cli.build_model()` and everything else is unchanged.
