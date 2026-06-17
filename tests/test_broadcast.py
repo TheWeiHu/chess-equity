@@ -19,7 +19,9 @@ from chess_equity.broadcast import (
     grade_delta,
     split_games,
 )
+from chess_equity.adapters import EquityModel
 from chess_equity.models import LichessBaselineModel
+from chess_equity.types import Equity, WDL
 
 # A short game with clock tags and ratings — the shape a Lichess broadcast emits.
 GAME_PGN = """[Event "Test Broadcast"]
@@ -698,6 +700,58 @@ def test_clock_aware_delta_differs_from_blind_on_low_clock():
     aware = _last_delta(LOW_CLOCK_PGN, clock_aware=True)
     assert blind is not None and aware is not None
     assert abs(aware - blind) > 0.5, "seconds-left bullet move should move the graded swing"
+
+
+# --------------------------------------------------------------------------- #
+# Scramble drama reachable on a low-clock broadcast replay (task 0108)
+# --------------------------------------------------------------------------- #
+
+# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6 <
+# SLIP_DELTA=12), so to land in that band reliably we drive a stub model with a
+# controlled ~7pt swing rather than a real engine (which on these toy positions only
+# returns 0 or a large swing that escalates to clutch/escape). The point under test is
+# the wiring: clocks now ride on every MoveEvent (0097), so the clock-gated scramble
+# branch in chess_equity.drama is finally reachable on a replay.
+class _ScrambleStubModel(EquityModel):
+    """Returns 50% everywhere except the post-Nf3 position (knight on f3 -> '5N2' in the
+    FEN), which reads 57% — a +7pt White swing for that one ply."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        equity_white = 57.0 if "5N2" in fen.split(" ")[0] else 50.0
+        wdl = WDL.from_unnormalized(equity_white / 100.0, 0.0, 1.0 - equity_white / 100.0)
+        return Equity(wdl=wdl, equity_white=equity_white, source="stub")
+
+
+# White is down to 8s when it plays the +7pt Nf3; Black has comfortable time on its move.
+SCRAMBLE_PGN = """[Event "Bullet scramble"]
+[White "A"]
+[Black "B"]
+[WhiteElo "2000"]
+[BlackElo "2000"]
+[TimeControl "60+0"]
+[Result "*"]
+
+1. e4 { [%clk 0:00:10] } e5 { [%clk 0:00:30] } 2. Nf3 { [%clk 0:00:08] } *
+"""
+
+
+def test_low_clock_replay_surfaces_scramble_drama():
+    # Clock-blind delta keeps the swing positional (clock_aware warps the bar itself,
+    # which on a seconds-left game escalates every move to escape/clutch and swamps the
+    # modest scramble band — see drama.py). The clock still rides on the MoveEvent, so
+    # the clock-gated scramble branch fires.
+    from chess_equity.drama import detect
+
+    tracker = GameTracker(
+        "g", _ScrambleStubModel(), white_elo=2000, black_elo=2000, clock_aware=False
+    )
+    events = tracker.ingest(SCRAMBLE_PGN)
+    dramas = detect(events)
+    kinds = {(d.ply, d.kind) for d in dramas}
+    assert (3, "scramble") in kinds, f"expected a scramble on the low-clock Nf3, got {kinds}"
+    scramble = next(d for d in dramas if d.kind == "scramble")
+    assert scramble.mover_clock is not None and scramble.mover_clock < 20
+    assert scramble.headline  # caster-facing one-liner
 
 
 def test_clock_aware_grade_degrades_to_raw_when_blind():
