@@ -2,12 +2,18 @@
 
 Exercises the pure checking logic with crafted :class:`Analysis` objects and a fake
 engine, so the cp-agreement and only-move rules are covered without a real binary.
+
+A separate Stockfish-gated test (task 0066) runs the verifier against a *real* engine
+when one is on PATH / ``$STOCKFISH_PATH``, so the curated-vs-engine reconciliation can
+no longer rot unnoticed; it ``skip``s (not fails) on an engine-less runner.
 """
 import importlib.util
 import os
 
+import pytest
+
 from chess_equity.adapters import ObjectiveEval
-from chess_equity.stockfish import Analysis
+from chess_equity.stockfish import Analysis, stockfish_path
 
 # verify_engine.py lives in baseline/, not the package — load it by path.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -114,3 +120,34 @@ def test_committed_set_passes_against_a_matching_engine():
 def test_render_is_readable():
     out = verify_engine.render(verify_engine.verify(_POSITIONS, FakeEngine()))
     assert "PASS" in out and "agree with the engine" in out
+
+
+# --- real-engine gate (task 0066): runs only where a Stockfish binary exists ----
+
+@pytest.mark.skipif(
+    stockfish_path() is None,
+    reason="no Stockfish binary on PATH / $STOCKFISH_PATH; engine reconciliation is skipped",
+)
+def test_verify_engine_reconciles_against_real_stockfish():
+    """Reconcile the curated set against a real engine — the gate that catches rot.
+
+    A no-op on the sandbox/unattended runner (skipped), a real check on an
+    engine-equipped one: it drives :class:`StockfishEngine` over every committed
+    position at a shallow fixed depth and asserts the verifier wires up and produces a
+    well-formed result for each. It does **not** require every position to agree —
+    engines misjudge fortresses and deep underpromotions at modest depth (see the
+    verify_engine docstring), so an all-pass assertion would be flaky; the structural
+    gate still catches a broken engine wiring or a malformed failure_modes.json.
+    """
+    from chess_equity.stockfish import StockfishEngine
+
+    engine = StockfishEngine(depth=8)
+    results = verify_engine.verify(_POSITIONS, engine)
+
+    assert len(results) == len(_POSITIONS)
+    for r in results:
+        assert isinstance(r["ok"], bool)
+        assert r["checks"] and all(isinstance(c["ok"], bool) for c in r["checks"])
+    # The script's CLI entrypoint must also exit cleanly (0 = all agree, 1 = some
+    # disagree) — never crash — when a real engine is present.
+    assert verify_engine.main(["--depth", "8"]) in (0, 1)
