@@ -147,12 +147,15 @@
     render();
   }
 
-  function setupRatingSlider(id, outId, key) {
+  function setupRatingSlider(id, outId, key, defaultElo) {
     var bands = state.data.rating_bands;
     var el = $(id);
     el.min = 0;
     el.max = bands.length - 1;
-    el.value = bands.indexOf(1500) >= 0 ? bands.indexOf(1500) : 0;
+    // Default to the game's real rating (nearest band) so imports auto-fill; fall
+    // back to 1500, then the lowest band.
+    var want = nearestBand(bands, defaultElo || 1500);
+    el.value = bands.indexOf(want) >= 0 ? bands.indexOf(want) : 0;
     function apply() {
       var elo = bands[parseInt(el.value, 10)];
       state[key] = elo;
@@ -166,8 +169,10 @@
   function init(data) {
     state.data = data;
     $("scrub").max = data.moves.length - 1;
-    setupRatingSlider("white-elo", "white-elo-out", "whiteElo");
-    setupRatingSlider("black-elo", "black-elo-out", "blackElo");
+    var g = data.game || {};
+    if (g.name) document.title = g.name + " — chess-equity";
+    setupRatingSlider("white-elo", "white-elo-out", "whiteElo", g.white_elo_default);
+    setupRatingSlider("black-elo", "black-elo-out", "blackElo", g.black_elo_default);
     $("prev").addEventListener("click", function () { goto(state.ply - 1); });
     $("next").addEventListener("click", function () { goto(state.ply + 1); });
     $("scrub").addEventListener("input", function (e) { goto(parseInt(e.target.value, 10)); });
@@ -178,13 +183,25 @@
     render();
   }
 
-  fetch("demo-game.json")
+  // Which game file to load: ?game=<name.json>, defaulting to the bundled demo.
+  // Restrict to a bare JSON filename in this folder (no scheme, path, or traversal)
+  // so the param can't point the page at an arbitrary URL.
+  function gameFile() {
+    var raw = new URLSearchParams(window.location.search).get("game");
+    if (raw && /^[A-Za-z0-9._-]+\.json$/.test(raw) && raw.indexOf("..") === -1) {
+      return raw;
+    }
+    return "demo-game.json";
+  }
+
+  var file = gameFile();
+  fetch(file)
     .then(function (r) { return r.json(); })
     .then(init)
     .catch(function (err) {
       document.body.insertAdjacentHTML(
         "beforeend",
-        "<p style='color:#e0585b;padding:1.5rem'>Could not load demo-game.json (" +
+        "<p style='color:#e0585b;padding:1.5rem'>Could not load " + file + " (" +
           err + "). Serve this folder over HTTP, e.g. <code>python3 -m http.server -d web</code>.</p>"
       );
     });
