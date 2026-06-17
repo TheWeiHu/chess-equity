@@ -7,6 +7,7 @@ Commands:
     chess-equity grade --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity broadcast --round <id>            # live Lichess broadcast round
     chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
+    chess-equity highlights --pgn game.pgn         # auto-detect drama/clutch moments
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
 
@@ -165,6 +166,39 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     return 0
 
 
+def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
+    """Detect drama/clutch moments in a game and print the highlight reel (task 0020)."""
+    from chess_equity.drama import DramaEvent, detect, highlights
+
+    with open(args.pgn, encoding="utf-8") as fh:
+        pgn_text = fh.read()
+    ingestor = BroadcastIngestor(
+        feed=LocalPgnFeed(pgn_text),  # the feed is unused; events come from the snapshot
+        model=model,
+        white_elo=args.white_elo,
+        black_elo=args.black_elo,
+    )
+    events = ingestor.ingest_snapshot(pgn_text)
+
+    if args.json:
+        reel = highlights(events, top=args.top)
+        print(json.dumps([d.to_dict() for d in reel], indent=2))
+        return 0
+
+    in_order = detect(events)
+    if not in_order:
+        print("# no drama detected (a quiet game, or muted swings on the baseline model)")
+        return 0
+    print(f"# {len(in_order)} drama moment(s):")
+    for d in in_order:
+        print(f"{d.ply:3d}. [{d.kind:10s} {d.magnitude:.2f}] {d.headline}")
+    reel: List[DramaEvent] = highlights(events, top=args.top)
+    print(f"\n# top {len(reel)} highlight(s) by magnitude:")
+    for d in reel:
+        print(f"  {d.magnitude:.2f}  {d.kind:10s} ply {d.ply}: {d.headline}")
+    return 0
+
+
 def _run_data(args: argparse.Namespace) -> int:
     # Imported lazily so the common ``eval`` path never pays for the data deps.
     from chess_equity.data.build import build_dataset, month_url
@@ -268,6 +302,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
     add_model_arg(bc)
 
+    hl = sub.add_parser(
+        "highlights",
+        help="detect drama/clutch moments in a game (task 0020)",
+    )
+    hl.add_argument("--pgn", required=True, help="PGN file to scan for drama")
+    hl.add_argument("--white-elo", type=int, default=None, help="override White rating")
+    hl.add_argument("--black-elo", type=int, default=None, help="override Black rating")
+    hl.add_argument("--top", type=int, default=5, help="size of the highlight reel (default 5)")
+    hl.add_argument("--json", action="store_true", help="emit the reel as JSON")
+    add_model_arg(hl)
+
     data = sub.add_parser("data", help="build / manage the training+validation dataset")
     data_sub = data.add_subparsers(dest="data_command", required=True)
     build = data_sub.add_parser("build", help="parse a Lichess PGN dump into a dataset")
@@ -291,6 +336,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "broadcast":
         try:
             return _run_broadcast(args, build_model(args.model), sys.stdout)
+        except (ValueError, OSError, RuntimeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "highlights":
+        try:
+            return _run_highlights(args, build_model(args.model))
         except (ValueError, OSError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
