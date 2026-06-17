@@ -181,7 +181,10 @@ uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sam
 ```
 
 A small committed fixture lives in `data/sample/` so tests and downstream tasks
-(0003/0004/0009) have substrate without a download. Load a built dataset with
+(0003/0004/0009) have substrate without a download: `dataset.csv` is the cp-only
+sample, and `dataset_fen.csv` is its FEN-bearing companion (same 15 rows + a `fen`
+column) so board models (Maia, 0005/0031) can be scored end-to-end on checked-in
+data with no PGN rebuild. Load a built dataset with
 `chess_equity.data.load_rows(path)` (typed rows, dependency-free) or
 `load_dataframe(path)` (pandas, needs the data extra).
 

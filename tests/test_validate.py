@@ -187,3 +187,25 @@ def test_model_predictor_runs_through_evaluate():
     rows = [_row_fen(we=2600, result=1.0), _row_fen(we=900, result=0.0)]
     reports = evaluate(rows, {"fake": model_predictor(_FakeBoardModel())})
     assert reports[0].overall.n == 2
+
+
+def test_board_predictor_scores_on_committed_fen_sample():
+    """The end-to-end proof of task 0023: a board-needing model is scored straight
+    off the committed FEN fixture, with no PGN rebuild.
+
+    ``data/sample/dataset.csv`` carries no FEN (kept small for the cp-only models), so
+    ``data/sample/dataset_fen.csv`` is the committed companion that lets the 0009
+    harness exercise the board path on real, checked-in rows. Maia-2 (0005/0031) plugs
+    into exactly this loop; ``_FakeBoardModel`` stands in so the test needs no weights.
+    """
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import model_predictor
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    assert rows and all(r.fen is not None for r in rows), "committed FEN sample must carry FENs"
+
+    reports = evaluate(rows, {"fake": model_predictor(_FakeBoardModel())})
+    assert reports[0].overall.n == len(rows) > 0
