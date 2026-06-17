@@ -252,6 +252,12 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
+        # A local --pgn replay is finite: stop after one idle poll (the file is
+        # exhausted). A live --round/--url feed must instead WAIT for a not-yet-started
+        # round and survive quiet periods, so never stop on idle and emit SSE keepalive
+        # comments so proxies/OBS don't drop the connection (task 0099).
+        is_live = args.pgn is None
+
         def make_events():
             ingestor = BroadcastIngestor(
                 _build_broadcast_feed(args),
@@ -263,7 +269,8 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 ingestor,
                 interval=args.interval,
                 max_polls=args.max_polls,
-                max_idle_polls=1,
+                max_idle_polls=None if is_live else 1,
+                heartbeat=is_live,
             )
 
         serve_sse(

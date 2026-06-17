@@ -454,6 +454,89 @@ def test_serve_sse_streams_a_replay_to_an_eventsource_client():
     assert [e["type"] for e in parsed[1:]] == ["position"] * 4
 
 
+class _LateStartFeed(BroadcastFeed):
+    """A live round that hasn't started: empty for the first ``empties`` polls, then PGN.
+
+    Models the 'tune in early' case — the SSE bridge must keep polling through the
+    empty period (not stop after one idle poll) and emit keepalives meanwhile.
+    """
+
+    def __init__(self, pgn: str, empties: int) -> None:
+        self._inner = LocalPgnFeed(pgn)
+        self._empties = empties
+        self._polls = 0
+
+    def poll(self):
+        self._polls += 1
+        if self._polls <= self._empties:
+            return None  # round not live yet
+        return self._inner.poll()
+
+
+def test_stream_heartbeats_through_idle_then_delivers_for_a_live_feed():
+    """max_idle_polls=None + heartbeat=True waits for a late-starting round.
+
+    The first polls are idle (round not live) and must yield HEARTBEAT sentinels rather
+    than ending the stream; once moves appear, real events flow.
+    """
+    from chess_equity.broadcast import HEARTBEAT
+
+    ingestor = BroadcastIngestor(_LateStartFeed(GAME_PGN, empties=3), _model())
+    out = []
+    for item in ingestor.stream(
+        interval=0, max_polls=10, max_idle_polls=None, heartbeat=True, sleep=lambda _s: None
+    ):
+        out.append(item)
+    # Three idle polls -> three heartbeats before any move event.
+    assert out[0] is HEARTBEAT and out[1] is HEARTBEAT and out[2] is HEARTBEAT
+    moves = [e for e in out if isinstance(e, MoveEvent)]
+    assert [e.san for e in moves] == ["e4", "e5", "Nf3", "Nc6"]
+
+
+def test_replay_does_not_heartbeat_and_terminates_on_idle():
+    """A finite --pgn replay (max_idle_polls=1, heartbeat off) ends, no keepalives."""
+    from chess_equity.broadcast import HEARTBEAT
+
+    ingestor = BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model())
+    out = list(
+        ingestor.stream(interval=0, max_polls=None, max_idle_polls=1, sleep=lambda _s: None)
+    )
+    assert HEARTBEAT not in out
+    assert [e.san for e in out] == ["e4", "e5", "Nf3", "Nc6"]
+
+
+def test_serve_sse_emits_keepalive_comment_for_a_late_starting_round():
+    """End-to-end: an idle live feed writes a `: keepalive` SSE comment over the wire."""
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    def make_events():
+        return overlay_events(
+            BroadcastIngestor(_LateStartFeed(GAME_PGN, empties=2), _model()),
+            interval=0,
+            max_polls=8,
+            max_idle_polls=None,
+            heartbeat=True,
+            sleep=lambda _s: None,
+        )
+
+    server = make_sse_server(make_events, port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=10).read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert ": keepalive" in body  # the heartbeat reached the client
+    # and the real game still streamed after the quiet period
+    assert '"type": "game"' in body
+    assert '"type": "position"' in body
+
+
 def test_sse_server_404s_non_sse_paths_when_no_static_dir():
     import threading
     import urllib.error

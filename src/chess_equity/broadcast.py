@@ -473,6 +473,15 @@ class FeedError(RuntimeError):
     """A transient feed failure the ingestor should retry rather than crash on."""
 
 
+#: Sentinel yielded by :meth:`BroadcastIngestor.stream` (and passed through
+#: :func:`overlay_events`) on an idle poll when ``heartbeat=True`` — it carries no move,
+#: just signals "still alive" so the SSE bridge can emit a ``: keepalive`` comment. It is
+#: a dict (so the overlay-event stream stays ``Iterator[Dict[...]]``) recognised by
+#: *identity*; the SSE bridge turns it into a comment line, so it never reaches the
+#: client as data.
+HEARTBEAT: Dict[str, object] = {"keepalive": True}
+
+
 # --------------------------------------------------------------------------- #
 # Splitting a multi-game PGN snapshot
 # --------------------------------------------------------------------------- #
@@ -583,14 +592,21 @@ class BroadcastIngestor:
         interval: float = 2.0,
         max_polls: Optional[int] = None,
         max_idle_polls: Optional[int] = 1,
+        heartbeat: bool = False,
         sleep: Callable[[float], None] = time.sleep,
-    ) -> Iterator[MoveEvent]:
+    ) -> Iterator[object]:
         """Yield events as they arrive. Generator so callers control the sink.
 
         ``interval`` seconds between polls; ``max_polls`` caps total polls (None =
         unbounded, for a true live stream); ``max_idle_polls`` stops after that many
-        consecutive polls produced no PGN (so a finished replay or a dead round ends).
-        ``sleep`` is injectable for tests.
+        consecutive polls produced no PGN (so a finished replay or a dead round ends) —
+        pass ``None`` to wait forever for a not-yet-started live round. ``sleep`` is
+        injectable for tests.
+
+        When ``heartbeat`` is set, each *idle* poll that does not end the stream yields
+        the :data:`HEARTBEAT` sentinel (rather than a :class:`MoveEvent`) so a live SSE
+        bridge can emit a keepalive and not be dropped by a proxy/OBS during quiet
+        periods. Default off, so the JSONL path and existing callers see only events.
         """
         polls = 0
         idle = 0
@@ -610,11 +626,15 @@ class BroadcastIngestor:
                     # Keep retrying live feeds; only give up if we never connected.
                     if not self._trackers:
                         break
+                if heartbeat:
+                    yield HEARTBEAT
                 continue
             if not snapshot:
                 idle += 1
                 if max_idle_polls is not None and idle >= max_idle_polls:
                     break
+                if heartbeat:
+                    yield HEARTBEAT
                 continue
             idle = 0
             for event in self.ingest_snapshot(snapshot):
@@ -629,14 +649,20 @@ class BroadcastIngestor:
         max_idle_polls: Optional[int] = 1,
         sleep: Callable[[float], None] = time.sleep,
     ) -> IngestStats:
-        """Drive :meth:`stream`, calling ``emit`` for each event. Returns stats."""
+        """Drive :meth:`stream`, calling ``emit`` for each event. Returns stats.
+
+        ``run`` does not enable heartbeats, so :meth:`stream` only yields
+        :class:`MoveEvent`; the ``isinstance`` guard makes that explicit (and keeps
+        ``emit``'s ``MoveEvent`` contract sound if heartbeats are ever turned on here).
+        """
         for event in self.stream(
             interval=interval,
             max_polls=max_polls,
             max_idle_polls=max_idle_polls,
             sleep=sleep,
         ):
-            emit(event)
+            if isinstance(event, MoveEvent):
+                emit(event)
         return self.stats
 
 
@@ -665,14 +691,19 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[D
     generator the SSE server can write frame-by-frame as moves arrive.
 
     ``stream_kwargs`` pass straight through to ``stream`` (``interval`` / ``max_polls``
-    / ``max_idle_polls`` / ``sleep``).
+    / ``max_idle_polls`` / ``heartbeat`` / ``sleep``). With ``heartbeat=True`` the
+    :data:`HEARTBEAT` sentinel is passed through verbatim so the SSE bridge can turn it
+    into a keepalive comment.
     """
     queued: List[Dict[str, object]] = []
     ingestor.on_game = lambda game: queued.append(game.to_overlay())
-    for move_event in ingestor.stream(**stream_kwargs):
+    for item in ingestor.stream(**stream_kwargs):
         while queued:  # game announcements fire during the poll, before their moves
             yield queued.pop(0)
-        yield move_event.to_overlay_event()
+        if isinstance(item, MoveEvent):
+            yield item.to_overlay_event()
+        else:
+            yield HEARTBEAT  # idle sentinel — passed through for the SSE keepalive
     while queued:
         yield queued.pop(0)
 
@@ -714,7 +745,12 @@ def _sse_handler(event_source: Callable[[], Iterator[Dict[str, object]]], direct
             self.end_headers()
             try:
                 for event in event_source():
-                    self.wfile.write(sse_frame(event).encode("utf-8"))
+                    if event is HEARTBEAT:
+                        # An SSE comment line: keeps the connection warm through
+                        # proxies/OBS during quiet periods (EventSource ignores it).
+                        self.wfile.write(b": keepalive\n\n")
+                    else:
+                        self.wfile.write(sse_frame(event).encode("utf-8"))
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the overlay / OBS closed the source — normal.
