@@ -23,8 +23,13 @@ def test_has_at_least_six_positions():
 def test_both_failure_modes_represented():
     seen = {p["category"] for p in POSITIONS}
     assert CATEGORIES <= seen, f"missing categories: {CATEGORIES - seen}"
-    for cat in CATEGORIES:
-        assert sum(1 for p in POSITIONS if p["category"] == cat) >= 2
+    # dead-draw-hard keeps several examples; absurd-refutation needs >=1 sound one.
+    # (Task 0035 reconciled the curated set against Stockfish and found the composed
+    # 'knight-promotion-fork' unsound — it is actually a draw — so it was reclassified
+    # to dead-draw-hard, leaving Saavedra as the engine-verified absurd-refutation.)
+    counts = {cat: sum(1 for p in POSITIONS if p["category"] == cat) for cat in CATEGORIES}
+    assert counts["dead-draw-hard"] >= 2
+    assert counts["absurd-refutation"] >= 1
 
 
 def test_every_position_is_well_formed():
