@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chess-equity — the rating-conditioned eval bar</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<!--
+  Web demo for task 0010. A static page (no backend): it loads a precomputed
+  demo-game.json and renders, side by side, the classic centipawn bar and the
+  rating-conditioned EQUITY bar. Drag the rating sliders and watch equity move
+  while the centipawn bar does not — the whole point.
+
+  Serve it with any static server, e.g. from the repo root:
+    python3 -m http.server -d web 8000   # then open http://localhost:8000
+-->
+<body>
+  <header>
+    <h1>chess-equity</h1>
+    <p class="tagline">A win bar that knows <em>who</em> is playing. Drag a rating
+      slider — the <strong>equity</strong> bar moves; the classic
+      <strong>centipawn</strong> bar can't.</p>
+  </header>
+
+  <main>
+    <section class="board-col">
+      <div id="board" class="board" aria-label="chess board"></div>
+      <div class="controls">
+        <button id="prev" type="button" aria-label="previous move">‹ Prev</button>
+        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="move scrubber" />
+        <button id="next" type="button" aria-label="next move">Next ›</button>
+      </div>
+      <div id="move-caption" class="move-caption"></div>
+    </section>
+
+    <section class="bars-col">
+      <div class="ratings">
+        <label>White rating <output id="white-elo-out">1500</output>
+          <input id="white-elo" type="range" step="1" value="1" aria-label="White rating" />
+        </label>
+        <label>Black rating <output id="black-elo-out">1500</output>
+          <input id="black-elo" type="range" step="1" value="1" aria-label="Black rating" />
+        </label>
+      </div>
+
+      <div class="bar-block">
+        <div class="bar-label">Equity — rating-conditioned
+          <span class="readout" id="equity-readout">50%</span></div>
+        <div class="bar equity-bar"><div class="fill" id="equity-fill"></div></div>
+      </div>
+
+      <div class="bar-block">
+        <div class="bar-label">Classic centipawn eval
+          <span class="readout" id="cp-readout">+0.0</span></div>
+        <div class="bar cp-bar"><div class="fill" id="cp-fill"></div></div>
+      </div>
+
+      <p id="divergence" class="divergence" hidden></p>
+
+      <ol id="moves" class="moves" aria-label="move list"></ol>
+    </section>
+  </main>
+
+  <footer>
+    <p>Equity in <code>demo-game.json</code> is illustrative (see the file's
+      <code>_comment</code>); regenerate with <code>python web/build_demo.py --model maia2</code>
+      for real Maia-2 numbers.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -67,6 +67,31 @@ Example:
 [###############---------------]  50.0% (W)  W/D/L 33.4/33.2/33.4  [lichess-baseline]  cp +0
 ```
 
+## Web demo (task 0010) — the idea, made tangible
+
+A static, dependency-free page that puts the **rating-conditioned equity bar** next to
+the **classic centipawn bar** and lets you drag both players' rating sliders. The pitch
+in one screen: *move a slider and the equity bar moves while the centipawn bar can't.*
+The bundled game is **Légal's Mate** — White's queen "sacrifice" tanks the material
+count (centipawn bar collapses) while it is in fact a forced mate (equity bar stays
+winning): a move that is **green on equity but red on centipawns**.
+
+```bash
+python3 -m http.server -d web 8000     # then open http://localhost:8000
+```
+
+The page reads `web/demo-game.json` (a precomputed fixed game — no backend). Regenerate it:
+
+```bash
+python web/build_demo.py                # default: illustrative rating skew (no heavy deps)
+python web/build_demo.py --model maia2  # real rating-conditioned numbers (needs Maia-2)
+```
+
+The committed equity is **illustrative** (the centipawns are real material counts);
+swap in real numbers with `--model maia2`. Schema + the two headline acceptance checks
+(slider moves the bar; the green/red flagship move exists) are gated by
+`python3 web/test_demo.py`. Not yet deployed — that's a follow-up.
+
 ## Maia-2 equity (task 0005) — the real rating-conditioned bar
 
 `--model maia2` swaps the placeholder for [Maia-2](https://github.com/CSSLab/maia2)
