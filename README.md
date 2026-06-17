@@ -274,6 +274,10 @@ uv run chess-equity validate --data data/dataset.csv --models baseline \
 # held-out, leak-free evaluation: score only a test split of whole games (task 0030)
 uv run chess-equity validate --data data/dataset.csv --models baseline \
     --holdout 0.2 --seed 0
+
+# Score Maia-2's rating-conditioned win_prob beside the baseline (task 0031).
+# Needs a --with-fen dataset and `pip install maia2` (torch) for real numbers:
+uv run chess-equity validate --data data/dataset_fen.csv --models baseline,maia2
 ```
 
 A **predictor** maps a dataset row to a predicted White expected-score
@@ -287,12 +291,15 @@ train/test and flatter every predictor. The split partitions *whole games* (keye
 the new `game_id` column) so no game spans the boundary — the honest measure of
 generalisation (task 0030). It's deterministic per `--seed`, and errors loudly on a
 dataset built before `game_id` existed. *Deferred:* reliability-curve plots committed
-to `reports/` (the numeric reliability table already ships in `validate.metrics`). Shipped today: `baseline`
-(Lichess's rating-blind Win% over the row's centipawns — the thing to beat), `baseline+clock`,
-and `wdl-a` (Approach A, the rating-conditioned regression — task 0004). A demonstration run on the
+to `reports/` (the numeric reliability table already ships in `validate.metrics`).
+
+Shipped predictors: `baseline` (Lichess's rating-blind Win% over the row's centipawns
+— the thing to beat), `baseline+clock`, `wdl-a` (Approach A, the rating-conditioned
+regression — task 0004, a row predictor with no harness change), and the board model
+**`maia2`** (Maia-2's value head, scored via `harness.model_predictor` on the row's
+FEN — the thesis comparison; needs a `--with-fen` dataset). A demonstration run on the
 sample fixture lives in [`reports/validation_sample.md`](reports/validation_sample.md)
-(smoke test — meaningless at 15 rows, real evidence needs a real dataset). Models that
-need the full board (Maia, 0005) wait on positions being added to the dataset schema.
+(smoke test — meaningless at 15 rows, real evidence needs a real dataset).
 
 ### Calibration by rating band (task 0027)
 

@@ -125,6 +125,43 @@ def band_for_avg(avg: float) -> str:
     return "2400+"
 
 
+# Board-based models that condition on the full position, keyed by the name the CLI
+# accepts in ``--models``. Each value is a zero-arg factory so construction stays lazy
+# (the Maia-2 factory does NOT load torch until a row is actually scored). These are
+# scored via :func:`model_predictor`, so they require a ``--with-fen`` dataset (0029).
+def _build_maia2() -> EquityModel:
+    from chess_equity.maia2 import build_maia2_equity
+
+    return build_maia2_equity()
+
+
+BOARD_MODELS: Dict[str, Callable[[], EquityModel]] = {
+    "maia2": _build_maia2,
+}
+
+
+def build_predictors(names: Sequence[str]) -> Dict[str, Predictor]:
+    """Resolve ``--models`` names to predictors, mixing row and board models.
+
+    A name is either a row predictor in :data:`PREDICTORS` (reads ``cp_eval`` etc.) or
+    a board model in :data:`BOARD_MODELS` (built once, wrapped with
+    :func:`model_predictor` so it reads ``row.fen``). This is the seam task 0031 wires:
+    ``--models baseline,maia2`` now scores Maia-2's rating-conditioned ``win_prob``
+    beside the centipawn baseline. Raises ``KeyError`` listing any unknown name.
+    """
+    unknown = [n for n in names if n not in PREDICTORS and n not in BOARD_MODELS]
+    if unknown:
+        available = sorted(set(PREDICTORS) | set(BOARD_MODELS))
+        raise KeyError(f"unknown model(s) {unknown}; available: {available}")
+    predictors: Dict[str, Predictor] = {}
+    for name in names:
+        if name in PREDICTORS:
+            predictors[name] = PREDICTORS[name]
+        else:
+            predictors[name] = model_predictor(BOARD_MODELS[name]())
+    return predictors
+
+
 def rating_band(row: PositionRow) -> str:
     """Coarse band on the average of the two ratings (the relevant joint skill level)."""
     return band_for_avg((row.white_elo + row.black_elo) / 2.0)

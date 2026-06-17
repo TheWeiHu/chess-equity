@@ -209,3 +209,76 @@ def test_board_predictor_scores_on_committed_fen_sample():
 
     reports = evaluate(rows, {"fake": model_predictor(_FakeBoardModel())})
     assert reports[0].overall.n == len(rows) > 0
+
+
+# --- registering maia2 as a 0009 predictor (task 0031) -------------------------
+
+def _fake_maia2():
+    """A Maia2Equity wired to a fake backend (no torch) whose win_prob rises with the
+    side-to-move's rating, so it conditions on ratings like the real value head."""
+    from chess_equity.maia2 import Maia2Equity
+
+    def backend(fen, elo_self, elo_oppo):
+        return {}, min(0.99, elo_self / 4000.0)
+
+    return Maia2Equity(backend=backend)
+
+
+def test_build_predictors_mixes_row_and_board_models(monkeypatch):
+    import chess_equity.validate.harness as h
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    preds = h.build_predictors(["baseline", "maia2"])
+    assert set(preds) == {"baseline", "maia2"}
+    # The maia2 predictor reads the board (fen) — a row without fen must raise.
+    assert isclose(preds["baseline"](_row_fen(cp=0)), 0.5)
+    with pytest.raises(ValueError):
+        preds["maia2"](_row())
+
+
+def test_build_predictors_rejects_unknown():
+    from chess_equity.validate.harness import build_predictors
+
+    with pytest.raises(KeyError):
+        build_predictors(["baseline", "nope"])
+
+
+def test_maia2_registered_as_board_model():
+    from chess_equity.validate.harness import BOARD_MODELS
+
+    assert "maia2" in BOARD_MODELS
+
+
+def test_validate_cli_scores_maia2_against_baseline(tmp_path, monkeypatch, capsys):
+    """End-to-end: `validate --models baseline,maia2` over a --with-fen dataset."""
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+    from chess_equity.data.build import build_dataset
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "sample_games.pgn"
+    data = build_dataset(str(sample), str(tmp_path), name="fen", include_fen=True)
+
+    rc = main(["validate", "--data", str(data), "--models", "baseline,maia2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "baseline" in out and "maia2" in out
+
+
+def test_validate_cli_maia2_needs_fen(tmp_path, monkeypatch, capsys):
+    """A FEN-less dataset makes the maia2 predictor fail with a clean error, not a trace."""
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+    from chess_equity.data.build import build_dataset
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "sample_games.pgn"
+    data = build_dataset(str(sample), str(tmp_path), name="nofen")  # no fen column
+
+    rc = main(["validate", "--data", str(data), "--models", "maia2"])
+    assert rc == 1
+    assert "include_fen" in capsys.readouterr().err
