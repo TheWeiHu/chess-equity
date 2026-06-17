@@ -101,6 +101,38 @@ class MoveEvent:
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
+    def to_overlay_event(self) -> Dict[str, object]:
+        """Serialize to the overlay's documented ``position`` event.
+
+        The overlay (``overlay/overlay.js``, schema in ``overlay/README.md``)
+        consumes a *nested*, White-POV event with ``equity`` in ``[0, 1]`` — not the
+        flat internal :class:`MoveEvent` (``equity`` in ``[0, 100]%``, flat
+        ``white_clock``/``black_clock``/``last_move_grade`` fields). This is the one
+        bridge between the two, so producer and consumer can't silently drift; the
+        contract is pinned by ``tests/test_broadcast_overlay_contract.py``.
+
+        ``cp`` (the classic centipawn ghost tick) is not yet plumbed through the
+        broadcast path, so it is emitted as ``None`` — optional in the schema, and
+        the overlay simply hides the tick. Threading the objective engine's cp
+        (already on :class:`~chess_equity.types.Equity`) is a follow-up.
+        """
+        event: Dict[str, object] = {
+            "type": "position",
+            "ply": self.ply,
+            "move": {"san": self.san},
+            "equity": self.equity / 100.0,
+            "cp": None,
+            "clock": {"white": self.white_clock, "black": self.black_clock},
+        }
+        if self.last_move_grade is not None:
+            event["grade"] = {
+                "label": self.last_move_grade,
+                "delta": None
+                if self.delta_equity is None
+                else self.delta_equity / 100.0,
+            }
+        return event
+
 
 # --------------------------------------------------------------------------- #
 # Clock / rating parsing from PGN
