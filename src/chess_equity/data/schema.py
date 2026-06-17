@@ -49,6 +49,18 @@ COLUMNS = (
     "result",
 )
 
+# The FEN is opt-in: it roughly triples a row's on-disk size, and the
+# (cp_eval, ratings)-only models (0003 baseline, 0004 regression) never read it.
+# Board-needing models (Maia, 0005) DO need it to be scored in 0009 — see
+# :func:`chess_equity.validate.harness.model_predictor`. Kept as a separate, appended
+# column so datasets built without it load unchanged (backward compatible).
+FEN_COLUMN = "fen"
+
+
+def columns(*, include_fen: bool = False) -> tuple:
+    """The dataset's column order, with the optional ``fen`` column appended last."""
+    return COLUMNS + (FEN_COLUMN,) if include_fen else COLUMNS
+
 
 @dataclass(frozen=True)
 class PositionRow:
@@ -70,6 +82,9 @@ class PositionRow:
     clock_remaining: Optional[float]
     side_to_move: str
     result: float
+    # The position itself, White-POV FEN. Optional: ``None`` unless the dataset was
+    # built with ``include_fen`` (it is what lets board models be scored in 0009).
+    fen: Optional[str] = None
 
     def as_dict(self) -> Dict[str, object]:
         return asdict(self)

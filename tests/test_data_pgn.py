@@ -173,3 +173,39 @@ def test_sample_cap_limits_rows(tmp_path):
 def test_unknown_format_rejected(tmp_path):
     with pytest.raises(ValueError):
         build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="xml")
+
+
+# --- optional FEN column (task 0029) -------------------------------------------
+
+def test_fen_off_by_default():
+    rows = _rows(_pgn("1-0"))
+    assert all(r.fen is None for r in rows)
+
+
+def test_include_fen_records_valid_positions():
+    import chess
+
+    rows = list(iter_rows(io.StringIO(_pgn("1-0")), include_fen=True))
+    assert rows and all(r.fen is not None for r in rows)
+    # After 1. e4 it is Black to move; the FEN must round-trip into a real board.
+    first = chess.Board(rows[0].fen)
+    assert first.turn == chess.BLACK
+    assert rows[0].side_to_move == "black"
+
+
+def test_build_with_fen_round_trips_the_column(tmp_path):
+    out = build_dataset(
+        str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="withfen", include_fen=True
+    )
+    header = out.read_text(encoding="utf-8").splitlines()[0]
+    assert header.endswith(",fen")
+    loaded = load_rows(str(out))
+    assert loaded and all(r.fen for r in loaded)
+
+
+def test_load_dataset_without_fen_column_is_backward_compatible(tmp_path):
+    # A dataset built the old way (no fen column) must still load, with fen=None.
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="nofen")
+    assert "fen" not in out.read_text(encoding="utf-8").splitlines()[0]
+    loaded = load_rows(str(out))
+    assert loaded and all(r.fen is None for r in loaded)

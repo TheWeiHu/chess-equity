@@ -50,11 +50,15 @@ def _non_king_pieces(board: chess.Board) -> int:
     return chess.popcount(board.occupied) - 2
 
 
-def rows_from_game(game: "chess.pgn.Game") -> Iterator[PositionRow]:
+def rows_from_game(
+    game: "chess.pgn.Game", *, include_fen: bool = False
+) -> Iterator[PositionRow]:
     """Yield one :class:`PositionRow` per evaluated position in ``game``.
 
     Returns nothing (the game is skipped) when ratings are missing or the result is
-    not a finished W/D/L outcome.
+    not a finished W/D/L outcome. ``include_fen`` records each position's FEN (the
+    board is already computed for the phase heuristic, so it is free to capture); it
+    is off by default because the FEN ~triples row size and only board models use it.
     """
     result = _RESULT_TO_WHITE_SCORE.get(game.headers.get("Result", "*"))
     white_elo = _int_header(game, "WhiteElo")
@@ -91,22 +95,26 @@ def rows_from_game(game: "chess.pgn.Game") -> Iterator[PositionRow]:
             clock_remaining=clock_remaining,
             side_to_move="white" if board.turn == chess.WHITE else "black",
             result=result,
+            fen=board.fen() if include_fen else None,
         )
 
 
-def iter_rows(handle: IO[str], *, limit: Optional[int] = None) -> Iterator[PositionRow]:
+def iter_rows(
+    handle: IO[str], *, limit: Optional[int] = None, include_fen: bool = False
+) -> Iterator[PositionRow]:
     """Stream rows from every game on ``handle``, stopping after ``limit`` rows.
 
     ``handle`` is any text stream of concatenated PGN games (a plain file, or a
     zstd-decompressing wrapper). ``limit`` caps the emitted row count so a caller can
-    build a small sample without reading a whole multi-GB dump.
+    build a small sample without reading a whole multi-GB dump. ``include_fen``
+    records each position's FEN (see :func:`rows_from_game`).
     """
     emitted = 0
     while True:
         game = chess.pgn.read_game(handle)
         if game is None:
             return
-        for row in rows_from_game(game):
+        for row in rows_from_game(game, include_fen=include_fen):
             yield row
             emitted += 1
             if limit is not None and emitted >= limit:

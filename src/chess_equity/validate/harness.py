@@ -12,8 +12,9 @@ harness scores every registered predictor with :mod:`chess_equity.validate.metri
 overall and sliced by rating band and game phase, so a model that only wins in the
 off-2300 bands (Wei's claim) shows up even when the global number is a wash.
 
-Models that need the full board (Maia, 0005) can't be scored here yet: the 0002
-dataset stores ``cp_eval`` but not the FEN. See the follow-up to add positions.
+Models that need the full board (Maia, 0005) are scored via :func:`model_predictor`,
+which reads each row's ``fen`` — present only when the dataset was built with
+``include_fen`` (see :func:`chess_equity.data.build.build_dataset`).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Sequence
 
+from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
@@ -64,6 +66,27 @@ PREDICTORS: Dict[str, Predictor] = {
     "baseline": baseline_cp,
     "baseline+clock": baseline_cp_clock,
 }
+
+
+def model_predictor(model: EquityModel) -> Predictor:
+    """Adapt a board-based :class:`EquityModel` into a row :data:`Predictor`.
+
+    This is what task 0029 unblocks: a Maia-style model that needs the full position
+    (not just ``cp_eval``) can now be scored in 0009, because the row carries its
+    ``fen``. The model's White-POV equity (0–100) maps straight to the predicted White
+    expected-score in [0, 1]. Raises ``ValueError`` on a row with no FEN — i.e. a
+    dataset built without ``include_fen`` — so the gap surfaces loudly instead of
+    silently scoring garbage.
+    """
+
+    def predict(row: PositionRow) -> float:
+        if row.fen is None:
+            raise ValueError(
+                "model_predictor needs row.fen; rebuild the dataset with include_fen=True"
+            )
+        return model.evaluate(row.fen, row.white_elo, row.black_elo).equity_white / 100.0
+
+    return predict
 
 
 def rating_band(row: PositionRow) -> str:

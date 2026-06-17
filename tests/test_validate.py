@@ -142,3 +142,48 @@ def test_runs_on_committed_sample():
 
 def test_baseline_registered():
     assert "baseline" in PREDICTORS
+
+
+# --- board-model predictor (task 0029) -----------------------------------------
+
+class _FakeBoardModel:
+    """A board-needing EquityModel: equity rises with white_elo, so it must read the
+    FEN+ratings (a (cp, ratings) predictor signature can't express it)."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        from chess_equity.types import WDL, Equity
+
+        p = min(0.99, white_elo / 4000.0)
+        return Equity(wdl=WDL(p, 0.0, 1 - p), equity_white=100.0 * p, source="fake")
+
+
+def _row_fen(**kw):
+    base = dict(cp=0.0, we=1500, be=1500, result=0.5)
+    base.update(kw)
+    row = _row(cp=base["cp"], we=base["we"], be=base["be"], result=base["result"])
+    return PositionRow(**{**row.as_dict(), "fen": "8/8/8/8/8/8/8/K6k w - - 0 1"})
+
+
+def test_model_predictor_reads_fen_and_scores():
+    from chess_equity.validate.harness import model_predictor
+
+    predict = model_predictor(_FakeBoardModel())
+    assert isclose(predict(_row_fen(we=2000)), 0.5)
+    # Different ratings -> different prediction (the thing the baseline can't do).
+    assert predict(_row_fen(we=3000)) > predict(_row_fen(we=1000))
+
+
+def test_model_predictor_raises_without_fen():
+    from chess_equity.validate.harness import model_predictor
+
+    predict = model_predictor(_FakeBoardModel())
+    with pytest.raises(ValueError):
+        predict(_row())  # no fen on the row
+
+
+def test_model_predictor_runs_through_evaluate():
+    from chess_equity.validate.harness import model_predictor
+
+    rows = [_row_fen(we=2600, result=1.0), _row_fen(we=900, result=0.0)]
+    reports = evaluate(rows, {"fake": model_predictor(_FakeBoardModel())})
+    assert reports[0].overall.n == 2
