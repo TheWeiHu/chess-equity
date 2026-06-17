@@ -40,10 +40,7 @@ to **prove** it predicts real outcomes better than the centipawn bar.
 uv sync --extra dev      # python-chess + pytest in .venv
 ```
 
-That covers the core CLI, tests, and CI. Anything beyond it — the Stockfish binary, the
-`data`/`maia2`/`plots` pip extras, a Lichess dump, Maia-2 weights, network access — is
-opt-in per task and catalogued in **[DEPENDENCIES.md](DEPENDENCIES.md)** (the single
-source of truth for every external requirement, and which tasks need it).
+That covers the core CLI, tests, and CI.
 
 The classic centipawn bar we compare against is a real engine eval, not a material
 count. The objective engine is **Stockfish** (open source, a small local UCI binary
