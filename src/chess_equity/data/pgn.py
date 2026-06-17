@@ -86,9 +86,27 @@ def rows_from_game(
     game_id = _game_id(game)
 
     node = game
+    # Track BOTH players' clocks across the whole game (task 0026): a [%clk] is the
+    # clock of the player who just moved, so we update it on every ply — including
+    # plies with no [%eval] (which we skip emitting) — and carry the last-known value
+    # forward. ``clock_remaining`` is then the *side-to-move's* clock at each emitted
+    # position, fixing the earlier mislabelling (it used to be the mover's clock).
+    white_clock: Optional[float] = None
+    black_clock: Optional[float] = None
     while node.variations:
         node = node.variations[0]
         comment = node.comment or ""
+
+        clk_match = _CLK_RE.search(comment)
+        if clk_match is not None:
+            clk = parse_clock(clk_match.group(1))
+            if clk is not None:
+                # Odd ply = White just moved; even ply = Black just moved.
+                if node.ply() % 2 == 1:
+                    white_clock = clk
+                else:
+                    black_clock = clk
+
         eval_match = _EVAL_RE.search(comment)
         if eval_match is None:
             continue
@@ -97,8 +115,7 @@ def rows_from_game(
             continue
 
         board = node.board()  # position *after* this move
-        clk_match = _CLK_RE.search(comment)
-        clock_remaining = parse_clock(clk_match.group(1)) if clk_match else None
+        stm_white = board.turn == chess.WHITE
 
         yield PositionRow(
             cp_eval=cp_eval,
@@ -108,8 +125,10 @@ def rows_from_game(
             phase=game_phase(node.ply(), _non_king_pieces(board)),
             time_control=time_control,
             tc_bucket=bucket,
-            clock_remaining=clock_remaining,
-            side_to_move="white" if board.turn == chess.WHITE else "black",
+            clock_remaining=white_clock if stm_white else black_clock,
+            white_clock=white_clock,
+            black_clock=black_clock,
+            side_to_move="white" if stm_white else "black",
             result=result,
             game_id=game_id,
             fen=board.fen() if include_fen else None,

@@ -53,6 +53,8 @@ COLUMNS = (
     "time_control",
     "tc_bucket",
     "clock_remaining",
+    "white_clock",
+    "black_clock",
     "side_to_move",
     "result",
     "game_id",
@@ -77,8 +79,9 @@ class PositionRow:
 
     ``cp_eval`` is always from White's POV (matching Lichess's ``[%eval]`` and our
     bar). ``result`` is the game's final outcome, also White's POV, in {1.0, 0.5,
-    0.0} — the prediction label. ``clock_remaining`` is seconds for the side to
-    move, or ``None`` when the game carries no ``[%clk]`` tags.
+    0.0} — the prediction label. ``clock_remaining`` is seconds for the **side to
+    move** (derived from ``white_clock``/``black_clock``), or ``None`` when the game
+    carries no ``[%clk]`` tags (or that side has no clock recorded yet).
     """
 
     cp_eval: float
@@ -98,6 +101,18 @@ class PositionRow:
     # The position itself, White-POV FEN. Optional: ``None`` unless the dataset was
     # built with ``include_fen`` (it is what lets board models be scored in 0009).
     fen: Optional[str] = None
+    # Both players' remaining clocks in seconds (task 0026). Earlier datasets carried
+    # only the mover's clock as ``clock_remaining``; keeping both lets the time-pressure
+    # work (0015) see the *opponent's* clock too. ``None`` until that side's first
+    # ``[%clk]`` is seen (or on clock-blind games). ``clock_remaining`` is the
+    # side-to-move's of these two — see :attr:`stm_clock`.
+    white_clock: Optional[float] = None
+    black_clock: Optional[float] = None
+
+    @property
+    def stm_clock(self) -> Optional[float]:
+        """The side-to-move's remaining clock (``clock_remaining`` is built from this)."""
+        return self.white_clock if self.side_to_move == "white" else self.black_clock
 
     def as_dict(self) -> Dict[str, object]:
         return asdict(self)

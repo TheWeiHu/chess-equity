@@ -217,9 +217,11 @@ chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model maia-search 
 
 The training + validation substrate. `chess-equity data build` turns a Lichess
 monthly PGN dump into a tabular `(cp_eval, white_elo, black_elo, ply, phase,
-time_control, tc_bucket, clock_remaining, side_to_move, result)` dataset — one row
-per `[%eval]`-annotated position, streamed so a multi-GB `.zst` is never unpacked to
-disk.
+time_control, tc_bucket, clock_remaining, white_clock, black_clock, side_to_move,
+result)` dataset — one row per `[%eval]`-annotated position, streamed so a multi-GB
+`.zst` is never unpacked to disk. `clock_remaining` is the **side-to-move's** clock;
+`white_clock`/`black_clock` carry both players' clocks (task 0026) so the
+time-pressure work (0015) can see the opponent's clock too.
 
 ```bash
 # Build from a downloaded dump (plain .pgn or .zst). Needs the data extra for .zst:
