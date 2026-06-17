@@ -284,7 +284,12 @@ def _run_data(args: argparse.Namespace) -> int:
         pgn = str(dump)
     try:
         out = build_dataset(
-            pgn, args.out, sample=args.sample, fmt=args.format, include_fen=args.with_fen
+            pgn,
+            args.out,
+            sample=args.sample,
+            fmt=args.format,
+            include_fen=args.with_fen,
+            partition=args.partition,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -506,6 +511,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--with-fen",
         action="store_true",
         help="record each position's FEN (needed to validate board models like Maia; ~3x size)",
+    )
+    build.add_argument(
+        "--partition",
+        action="store_true",
+        help="write a hive-partitioned dir (tc_bucket=…/rating_bucket=…) for efficient slicing",
     )
     build.add_argument(
         "--dump-dir",
