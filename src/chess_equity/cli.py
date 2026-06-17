@@ -38,6 +38,8 @@ from chess_equity.broadcast import (
 from chess_equity.grading import EquityGrader
 from chess_equity.models import LichessBaselineModel
 from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
+from chess_equity.search import MaiaSearchModel
+from chess_equity.search import estimate_to_equity as search_estimate_to_equity
 
 START_FEN = chess.STARTING_FEN
 
@@ -85,13 +87,21 @@ def _event_line(event: MoveEvent) -> str:
     return json.dumps(event.to_dict())
 
 
-def build_model(name: str = "baseline", *, n: int = 500, seed: Optional[int] = None) -> EquityModel:
+def build_model(
+    name: str = "baseline",
+    *,
+    n: int = 500,
+    seed: Optional[int] = None,
+    depth: int = 2,
+    k: int = 4,
+) -> EquityModel:
     """Construct the requested equity model by name.
 
     ``baseline`` is the rating-blind placeholder (no extra deps); ``maia2`` is the
     real rating-conditioned bar and lazily loads Maia-2 on first evaluation (so the
     error, if it's not installed, surfaces only when actually used). ``maia-rollout``
-    is the slow Monte Carlo self-play oracle (``n`` rollouts; non-interactive).
+    is the slow Monte Carlo self-play oracle (``n`` rollouts; non-interactive);
+    ``maia-search`` is the Maia-weighted expectimax (``depth``/``k``; non-interactive).
     """
     if name == "maia2":
         # Lazy import so the common baseline path never pays for the maia2 module.
@@ -107,9 +117,16 @@ def build_model(name: str = "baseline", *, n: int = 500, seed: Optional[int] = N
         from chess_equity.rollout import build_maia_rollout
 
         return build_maia_rollout(n=n, seed=seed)
+    if name == "maia-search":
+        from chess_equity.search import build_maia_search
+
+        return build_maia_search(depth=depth, k=k)
     if name == "baseline":
         return LichessBaselineModel()
-    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2, wdl-a, maia-rollout")
+    raise ValueError(
+        f"unknown model {name!r}; choose from: "
+        "baseline, maia2, wdl-a, maia-rollout, maia-search"
+    )
 
 
 def _eval_rollout_fen(model: MaiaRolloutModel, fen: str, white_elo: int, black_elo: int) -> str:
@@ -122,14 +139,27 @@ def _eval_rollout_fen(model: MaiaRolloutModel, fen: str, white_elo: int, black_e
     )
 
 
+def _eval_search_fen(model: MaiaSearchModel, fen: str, white_elo: int, black_elo: int) -> str:
+    """Bar + search-shape line for the Maia-weighted expectimax (task 0006)."""
+    est = model.estimate(fen, white_elo, black_elo)
+    equity = search_estimate_to_equity(est, fen, model.SOURCE)
+    return (
+        f"{render_eval(equity)}  depth={est.depth} k={est.k}  "
+        f"({est.n_leaves} leaves, {est.n_terminal} terminal, "
+        f"trunc={est.truncated_mass:.2f})"
+    )
+
+
 def _run_eval(args: argparse.Namespace) -> int:
-    model = build_model(args.model, n=args.n, seed=args.seed)
+    model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
         if args.pgn:
             for line in _eval_pgn(model, args.pgn, args.white_elo, args.black_elo):
                 print(line)
         elif isinstance(model, MaiaRolloutModel):
             print(_eval_rollout_fen(model, args.fen, args.white_elo, args.black_elo))
+        elif isinstance(model, MaiaSearchModel):
+            print(_eval_search_fen(model, args.fen, args.white_elo, args.black_elo))
         else:
             print(_eval_fen(model, args.fen, args.white_elo, args.black_elo))
     except (ValueError, OSError, RuntimeError) as exc:
@@ -367,12 +397,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     def add_model_arg(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--model",
-            choices=("baseline", "maia2", "wdl-a", "maia-rollout"),
+            choices=("baseline", "maia2", "wdl-a", "maia-rollout", "maia-search"),
             default="baseline",
             help=(
                 "equity model: rating-blind baseline (default), rating-conditioned "
-                "maia2, the wdl-a regression, or the maia-rollout Monte Carlo oracle "
-                "(slow, non-interactive)"
+                "maia2, the wdl-a regression, the maia-rollout Monte Carlo oracle, or "
+                "the maia-search expectimax (last two slow, non-interactive)"
             ),
         )
 
@@ -386,6 +416,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ev.add_argument(
         "--seed", type=int, default=None, help="RNG seed for --model maia-rollout (reproducible)"
+    )
+    ev.add_argument(
+        "--depth", type=int, default=2, help="ply budget for --model maia-search"
+    )
+    ev.add_argument(
+        "--k", type=int, default=4, help="top Maia moves kept per node for --model maia-search"
     )
     add_model_arg(ev)
 

@@ -176,6 +176,33 @@ chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model maia-rollout
   `EquityModel` (cutoff scorer) by injection, so the suite drives it with the uniform
   policy + material baseline — no torch/weights. `--seed` makes a run reproducible.
 
+## Maia-weighted expectimax (task 0006) — the deterministic middle
+
+`--model maia-search` computes equity by an explicit **expectimax** tree instead of
+sampling: every node averages its children weighted by how likely Maia thinks each
+move is at the *mover's* rating,
+`equity(node) = Σ_move P_maia(move | side_to_move_elo) · equity(child)`, to a fixed
+ply `--depth`, then scores leaves with Maia-2's value head. Both sides are expectation
+nodes (not min/max), so an "absurd refutation" Maia gives ~0% probability barely moves
+the bar, while a position that bleeds to likely human errors loses equity.
+
+```bash
+chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model maia-search --depth 2 --k 4
+# [#####---] 41.2% (B)  depth=2 k=4  (16 leaves, 0 terminal, trunc=0.31)
+```
+
+- **Comparison, not the bar (re-scoped).** Maia-2's value head already bakes in the
+  rating-conditioned "only bad if they find it" intuition in one forward pass, so this
+  exists to *test* whether explicit look-ahead beats the implicit version on the 0009
+  metrics — not as a faster estimator. Non-interactive at real depth.
+- **Truncation, not silent capping:** each node keeps the top-`k` Maia moves and
+  **renormalizes** their mass; the dropped mass is reported (`trunc=`) rather than
+  hidden. Cost is `O(k**depth)` leaf scorings — `--depth`/`--k` are the knobs feeding
+  the 0012 perf work.
+- **Decoupled + testable:** like the rollout oracle it takes a `HumanPolicy` + a leaf
+  `EquityModel` by injection, so the suite drives it with a scripted policy + a stub
+  leaf — no torch/weights. Deterministic given `depth`/`k`.
+
 ## Data (task 0002)
 
 The training + validation substrate. `chess-equity data build` turns a Lichess
