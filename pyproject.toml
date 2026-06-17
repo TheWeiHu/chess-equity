@@ -12,6 +12,14 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
+# Needed only for building/loading full-scale datasets: decompressing Lichess .zst
+# dumps and reading/writing Parquet (+ pandas frames). The CSV path and the parser
+# itself need none of these, so the test suite stays light.
+data = [
+    "zstandard>=0.21",
+    "pyarrow>=14",
+    "pandas>=2.0",
+]
 
 [project.scripts]
 chess-equity = "chess_equity.cli:main"

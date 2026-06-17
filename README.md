@@ -59,6 +59,33 @@ Example:
 [###############---------------]  50.0% (W)  W/D/L 33.4/33.2/33.4  [lichess-baseline]  cp +0
 ```
 
+## Data (task 0002)
+
+The training + validation substrate. `chess-equity data build` turns a Lichess
+monthly PGN dump into a tabular `(cp_eval, white_elo, black_elo, ply, phase,
+time_control, tc_bucket, clock_remaining, side_to_move, result)` dataset — one row
+per `[%eval]`-annotated position, streamed so a multi-GB `.zst` is never unpacked to
+disk.
+
+```bash
+# Build from a downloaded dump (plain .pgn or .zst). Needs the data extra for .zst:
+uv sync --extra data
+uv run chess-equity data build --pgn lichess_db_standard_rated_2026-05.pgn.zst \
+    --sample 50000 --out data/ --format parquet
+
+# CSV is the default and needs no extra:
+uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sample
+```
+
+A small committed fixture lives in `data/sample/` so tests and downstream tasks
+(0003/0004/0009) have substrate without a download. Load a built dataset with
+`chess_equity.data.load_rows(path)` (typed rows, dependency-free) or
+`load_dataframe(path)` (pandas, needs the data extra).
+
+`cp_eval` and `result` are both White-POV; mate scores are clamped to ±10000 cp.
+`--month YYYY-MM` prints the canonical Lichess dump URL to fetch (auto-download is a
+follow-up). See `data/schema.py` for the column contract.
+
 ## Architecture
 
 | Type | Role |
@@ -68,6 +95,7 @@ Example:
 | `ObjectiveEngine` | `fen -> cp/mate` — Stockfish/Lc0 plug in here (placeholder: material only) |
 | `HumanPolicy` | `fen, elo -> P(move)` — Maia plugs in here (task 0005) |
 | `bar.py` | ASCII rendering of the bar |
+| `data/` | Lichess PGN dump -> `(eval, ratings, outcome)` dataset (task 0002) |
 | `cli.py` | `chess-equity` entry point; depends only on `EquityModel` |
 
 Swap the model in `cli.build_model()` and everything else is unchanged.

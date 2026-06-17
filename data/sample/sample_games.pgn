@@ -1,0 +1,35 @@
+[Event "Rated Blitz game"]
+[Site "https://lichess.org/sample01"]
+[White "alice"]
+[Black "bob"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1480"]
+[TimeControl "180+2"]
+[Termination "Normal"]
+
+1. e4 { [%eval 0.2] [%clk 0:03:00] } e5 { [%eval 0.15] [%clk 0:03:00] } 2. Bc4 { [%eval 0.25] [%clk 0:02:58] } Nc6 { [%eval 0.2] [%clk 0:02:59] } 3. Qh5 { [%eval 0.1] [%clk 0:02:55] } Nf6 { [%eval #1] [%clk 0:02:57] } 4. Qxf7# { [%clk 0:02:54] } 1-0
+
+[Event "Rated Rapid game"]
+[Site "https://lichess.org/sample02"]
+[White "carol"]
+[Black "dave"]
+[Result "1/2-1/2"]
+[WhiteElo "2010"]
+[BlackElo "2025"]
+[TimeControl "600+0"]
+[Termination "Normal"]
+
+1. d4 { [%eval 0.1] [%clk 0:10:00] } d5 { [%eval 0.0] [%clk 0:10:00] } 2. c4 { [%eval 0.2] [%clk 0:09:55] } e6 { [%eval 0.1] [%clk 0:09:58] } 3. Nc3 { [%eval 0.15] } Nf6 { [%eval 0.1] [%clk 0:09:50] } 1/2-1/2
+
+[Event "Rated Bullet game"]
+[Site "https://lichess.org/sample03"]
+[White "erin"]
+[Black "frank"]
+[Result "0-1"]
+[WhiteElo "1320"]
+[BlackElo "1350"]
+[TimeControl "60+0"]
+[Termination "Time forfeit"]
+
+1. f3 { [%eval -0.4] [%clk 0:01:00] } e5 { [%eval -0.5] [%clk 0:01:00] } 2. g4 { [%eval #-1] [%clk 0:00:58] } Qh4# { [%clk 0:00:59] } 0-1

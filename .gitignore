@@ -14,3 +14,8 @@ uv.lock
 # Local agent / editor config
 .claude/
 .DS_Store
+
+# Built datasets — default `chess-equity data build --out data/` lands here and is
+# multi-GB; keep only the small committed fixture under data/sample/.
+/data/*
+!/data/sample/
