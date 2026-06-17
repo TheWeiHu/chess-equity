@@ -18,6 +18,7 @@ from chess_equity.validate.harness import (
     baseline_cp,
     evaluate,
     format_report,
+    gate_verdicts,
     rating_band,
 )
 from chess_equity.validate.metrics import (
@@ -127,6 +128,56 @@ def test_format_report_is_markdown():
     assert md.startswith("# ")
     assert "log-loss" in md and "Brier" in md and "ECE" in md
     assert "## By rating" in md and "## By phase" in md
+
+
+# --- gate verdict (task 0058) --------------------------------------------------
+
+def test_gate_verdict_reflects_computed_deltas():
+    # An "oracle" predictor that nails every outcome strictly beats the baseline on
+    # both log-loss and Brier -> PASS, with deltas equal to oracle - baseline scores.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731 — perfect predictor for the fixture
+    reports = evaluate(rows, {"baseline": baseline_cp, "oracle": oracle})
+    by_name = {r.name: r for r in reports}
+    verdicts = gate_verdicts(reports)
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.name == "oracle"
+    # Deltas are exactly model - baseline on the overall scores.
+    assert isclose(
+        v.log_loss_delta, by_name["oracle"].overall.log_loss - by_name["baseline"].overall.log_loss
+    )
+    assert isclose(
+        v.brier_delta, by_name["oracle"].overall.brier - by_name["baseline"].overall.brier
+    )
+    # Strictly better on both -> PASS.
+    assert v.log_loss_delta < 0 and v.brier_delta < 0
+    assert v.passed is True
+
+
+def test_gate_verdict_fails_when_worse_on_either_metric():
+    # A predictor that is worse than the baseline must FAIL.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0)]
+    worse = lambda r: 1.0 - baseline_cp(r)  # noqa: E731 — inverts the baseline
+    verdicts = gate_verdicts(evaluate(rows, {"baseline": baseline_cp, "worse": worse}))
+    assert len(verdicts) == 1
+    assert verdicts[0].passed is False
+
+
+def test_gate_verdict_empty_without_baseline():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    oracle = lambda r: r.result  # noqa: E731
+    assert gate_verdicts(evaluate(rows, {"oracle": oracle})) == []
+
+
+def test_report_opens_with_gate_verdict():
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "oracle": oracle}))
+    # The verdict is the report's first section, ahead of the metrics tables.
+    assert md.index("## Gate verdict") < md.index("## Overall")
+    assert "oracle" in md and "PASS" in md
+    assert "-> **PASS**" in md
 
 
 def test_runs_on_committed_sample():

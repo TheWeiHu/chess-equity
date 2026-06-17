@@ -20,8 +20,11 @@ from chess_equity.validate.harness import (
     SLICERS,
     PredictorReport,
     Scores,
+    Verdict,
     evaluate,
     format_report,
+    format_verdict,
+    gate_verdicts,
 )
 from chess_equity.validate.split import game_level_split
 
@@ -30,7 +33,10 @@ __all__ = [
     "SLICERS",
     "Scores",
     "PredictorReport",
+    "Verdict",
     "evaluate",
     "format_report",
+    "format_verdict",
+    "gate_verdicts",
     "game_level_split",
 ]

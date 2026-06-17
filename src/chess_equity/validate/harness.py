@@ -308,16 +308,88 @@ def high_rating_calibration(
     return evaluate(high, predictors, slicers={"high_rating": high_rating_band})
 
 
+# The rating-blind centipawn predictor every rating-conditioned model must beat (0009).
+BASELINE_NAME = "baseline"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """One rating-conditioned predictor's gate result vs the baseline (task 0058).
+
+    ``log_loss_delta`` / ``brier_delta`` are ``model - baseline`` on the held-out
+    overall scores, so a *negative* delta is an improvement (lower is better).
+    """
+
+    name: str
+    log_loss_delta: float
+    brier_delta: float
+    passed: bool
+
+
+def gate_verdicts(
+    reports: Sequence[PredictorReport], *, baseline_name: str = BASELINE_NAME
+) -> List[Verdict]:
+    """The thesis gate (0009): does each non-baseline predictor beat the centipawn baseline?
+
+    For every predictor that is not ``baseline_name``, compute the overall log-loss and
+    Brier deltas against the baseline. PASS iff the predictor is strictly lower on
+    **both** (a model that only wins on one metric is not an unambiguous win). Returns
+    an empty list if the run has no baseline predictor — there is nothing to gate against.
+    """
+    by_name = {r.name: r for r in reports}
+    baseline = by_name.get(baseline_name)
+    if baseline is None:
+        return []
+    verdicts: List[Verdict] = []
+    for r in reports:
+        if r.name == baseline_name:
+            continue
+        ll = r.overall.log_loss - baseline.overall.log_loss
+        br = r.overall.brier - baseline.overall.brier
+        verdicts.append(Verdict(r.name, ll, br, passed=ll < 0 and br < 0))
+    return verdicts
+
+
+def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
+    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058)."""
+    out: List[str] = ["## Gate verdict", ""]
+    if not verdicts:
+        out.append(
+            f"_No `{baseline_name}` predictor in this run — cannot compute a gate verdict._"
+        )
+        out.append("")
+        return out
+    out.append(
+        f"Does each rating-conditioned predictor beat the rating-blind `{baseline_name}` "
+        "on held-out outcomes? **PASS** = strictly lower log-loss *and* Brier (deltas are "
+        "model − baseline; negative is better)."
+    )
+    out.append("")
+    for v in verdicts:
+        status = "PASS" if v.passed else "FAIL"
+        out.append(
+            f"- **{v.name}** beats {baseline_name}: "
+            f"logloss {v.log_loss_delta:+.4f}, brier {v.brier_delta:+.4f} -> **{status}**"
+        )
+    out.append("")
+    return out
+
+
 def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
 
 
 def format_report(reports: Sequence[PredictorReport], *, title: str = "Validation report") -> str:
-    """Render reports as a Markdown document (lower log-loss / Brier / ECE is better)."""
+    """Render reports as a Markdown document (lower log-loss / Brier / ECE is better).
+
+    The report opens with a PASS/FAIL gate verdict (task 0058) so the attended proof run
+    yields an unambiguous answer instead of a table to eyeball, then the full metrics.
+    """
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
     out.append("**Lower is better** for all three (log-loss, Brier, ECE).")
     out.append("")
+    out.extend(format_verdict(gate_verdicts(reports)))
     out.append("## Overall")
     out.append("")
     out.append("| predictor | n | log-loss | Brier | ECE |")
