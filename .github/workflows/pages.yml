@@ -1,8 +1,9 @@
 # Deploy the static web/ demo (task 0010) to GitHub Pages — task 0033.
 #
 # Publishes the web/ folder as-is (no build step: it is dependency-free static HTML/
-# JS/JSON). Uses only the repo's own GITHUB_TOKEN — no external account or secrets.
-# The live URL is deterministic: https://theweihu.github.io/chess-equity/
+# JS/JSON), then smoke-checks the live URL (HTTP 200 + title) so a broken deploy fails
+# the run (task 0041). Uses only the repo's own GITHUB_TOKEN — no external account or
+# secrets. The live URL is deterministic: https://theweihu.github.io/chess-equity/
 #
 # One-time manual step: in repo Settings → Pages, set "Build and deployment" Source
 # to "GitHub Actions" (this workflow then deploys on every push to the default branch).
@@ -46,3 +47,19 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+      # Post-deploy smoke check (task 0041): confirm the just-published URL serves the
+      # page, so a broken deploy fails the run instead of silently shipping. Pages can
+      # take a moment to propagate, so retry briefly.
+      - name: Smoke-check the deployed site (HTTP 200 + title)
+        run: |
+          url="${{ steps.deployment.outputs.page_url }}"
+          echo "checking $url"
+          ok=""
+          for i in $(seq 1 6); do
+            if curl -fsS "$url" -o page.html; then ok=1; break; fi
+            echo "attempt $i: not ready yet, retrying in 5s…"; sleep 5
+          done
+          [ -n "$ok" ] || { echo "::error::site did not return 2xx at $url"; exit 1; }
+          grep -q "chess-equity" page.html \
+            || { echo "::error::expected 'chess-equity' marker missing"; head -20 page.html; exit 1; }
+          echo "✓ $url is live (HTTP 200 + title marker present)"
