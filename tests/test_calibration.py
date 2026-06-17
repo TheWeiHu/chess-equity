@@ -151,6 +151,72 @@ def test_validate_cli_calibration_report_has_ece_cis(tmp_path):
     assert "ECE 95% CI" in text
 
 
+# --- per-band ECE delta vs a second predictor (task 0089) ------------------------
+
+def test_band_reliability_no_delta_without_baseline():
+    # Single-predictor view (no second predictor) carries no delta even with bootstrap on,
+    # and the report omits the head-to-head columns — backward compatible with task 0076.
+    rows = [_row(we=1000, be=1000, cp=0, result=1.0) for _ in range(8)]
+    bands = band_reliability(rows, baseline_cp, bootstrap=200, seed=0)
+    assert all(b.ece_ci is not None and b.ece_ci.delta is None for b in bands)
+    md = format_calibration_report(bands)
+    assert "ECE Δ" not in md
+
+
+def test_band_reliability_delta_vs_baseline_is_negative_for_better_model():
+    # A "model" that predicts the true White score beats the rating-blind baseline (cp=0 ->
+    # 0.5) in a band of decisive low-rated games: its per-band ECE delta is negative and the
+    # delta CI clears zero (a significant calibration win, not noise).
+    rows = [_row(we=1000, be=1000, cp=0, result=1.0) for _ in range(20)]
+    model = lambda r: 0.95  # noqa: E731 — near-perfect for an all-White-win band
+    bands = band_reliability(rows, model, baseline=baseline_cp, bootstrap=500, seed=0)
+    assert len(bands) == 1
+    ci = bands[0].ece_ci
+    assert ci is not None and ci.delta is not None
+    assert ci.delta < 0.0          # model better calibrated than baseline in this band
+    assert ci.delta_hi < 0.0       # whole delta CI below zero -> significant win
+    assert ci.beats_baseline
+
+    md = format_calibration_report(bands)
+    assert "ECE Δ (model−base)" in md
+    assert "ECE Δ 95% CI" in md
+
+
+def test_validate_cli_calibration_report_has_ece_delta_for_nonbaseline(tmp_path):
+    # End to end: a non-baseline model's calibration report threads the baseline in as the
+    # second predictor, so the head-to-head ECE-delta columns appear.
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    cal = tmp_path / "cal.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline+clock,baseline",
+         "--bootstrap", "300", "--calibration", str(cal)]
+    )
+    assert rc == 0
+    text = cal.read_text()
+    assert "ECE Δ (model−base)" in text
+
+
+def test_validate_cli_calibration_report_no_delta_for_baseline_first(tmp_path):
+    # When the report's predictor IS the baseline, there is no second predictor and the
+    # delta columns stay off.
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    cal = tmp_path / "cal.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline",
+         "--bootstrap", "300", "--calibration", str(cal)]
+    )
+    assert rc == 0
+    assert "ECE Δ" not in cal.read_text()
+
+
 def test_validate_cli_calibration_report_no_ci_when_bootstrap_zero(tmp_path):
     from pathlib import Path
 
