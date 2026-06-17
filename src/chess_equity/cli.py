@@ -313,6 +313,21 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"wrote {args.out}")
     else:
         print(report)
+
+    if args.calibration:
+        # Per-rating-band reliability curves for the first requested predictor (task 0027).
+        from pathlib import Path
+
+        from chess_equity.validate.calibration import band_reliability, format_calibration_report
+
+        name = requested[0]
+        bands = band_reliability(rows, PREDICTORS[name])
+        cal = format_calibration_report(
+            bands, predictor_name=name, title=f"Calibration by rating band — {args.data}"
+        )
+        Path(args.calibration).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.calibration).write_text(cal + "\n", encoding="utf-8")
+        print(f"wrote {args.calibration}")
     return 0
 
 
@@ -475,6 +490,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     val.add_argument(
         "--seed", type=int, default=0, help="RNG seed for the --holdout game split"
+    )
+    val.add_argument(
+        "--calibration",
+        help="also write a per-rating-band reliability report (task 0027) here",
     )
 
     pc = sub.add_parser(

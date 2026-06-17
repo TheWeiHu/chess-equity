@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated 'before picture' for task 0003: positions where the rating-BLIND Lichess Win% baseline mischaracterizes practical chances. `engine_cp` is White-POV centipawns; for the drawn studies it is 0 by endgame theory (an engine reports ~0.00). `hypothesized_practical_white_*` are NOT measurements — they are hypotheses the rating-sliced 0002 data must confirm/refute (see README 'Deferred'). All positions are White-to-move, so engine_cp is already White's POV.",
+  "_comment": "Curated 'before picture' for task 0003: positions where the rating-BLIND Lichess Win% baseline mischaracterizes practical chances. `engine_cp` is White-POV centipawns; for the drawn studies it is 0 by endgame theory (an engine reports ~0.00). `hypothesized_practical_white_*` are NOT measurements \u2014 they are hypotheses the rating-sliced 0002 data must confirm/refute (see README 'Deferred'). All positions are White-to-move, so engine_cp is already White's POV.",
   "positions": [
     {
       "id": "philidor-rp-vs-r",
@@ -8,9 +8,11 @@
       "name": "Philidor position (R+P vs R)",
       "engine_cp": 0,
       "engine_note": "Theoretically drawn with the third-rank defence; engine ~0.00.",
-      "why_baseline_misleads": "Baseline reads 50/50, but the defence is a known technique most sub-2000 players don't hold — real results skew to the stronger side.",
+      "why_baseline_misleads": "Baseline reads 50/50, but the defence is a known technique most sub-2000 players don't hold \u2014 real results skew to the stronger side.",
       "hypothesized_practical_white_1500": 0.66,
-      "source": "Philidor, 1777 (classic R+P vs R draw)"
+      "source": "Philidor, 1777 (classic R+P vs R draw)",
+      "measured_practical_white_1500": 0.714,
+      "measured_n": 7
     },
     {
       "id": "ocb-up-a-pawn",
@@ -18,10 +20,12 @@
       "fen": "8/8/5k2/4p3/3b4/8/5K2/5B2 w - - 0 1",
       "name": "Opposite-coloured bishops, Black up a pawn",
       "engine_cp": 0,
-      "engine_note": "Opposite-coloured bishop endgame a pawn up — a textbook fortress draw; engine ~0.00.",
+      "engine_note": "Opposite-coloured bishop endgame a pawn up \u2014 a textbook fortress draw; engine ~0.00.",
       "why_baseline_misleads": "Baseline says 50/50; in practice the side up a pawn keeps pressing and weaker defenders occasionally crack, so outcomes are not symmetric.",
       "hypothesized_practical_white_1500": 0.42,
-      "source": "Opposite-coloured bishop drawing tendency (endgame theory)"
+      "source": "Opposite-coloured bishop drawing tendency (endgame theory)",
+      "measured_practical_white_1500": 0.714,
+      "measured_n": 7
     },
     {
       "id": "kp-vs-k-opposition",
@@ -29,10 +33,12 @@
       "fen": "8/8/8/3k4/3P4/3K4/8/8 w - - 0 1",
       "name": "K+P vs K, defender holds the opposition",
       "engine_cp": 0,
-      "engine_note": "Defender has the opposition with White to move — drawn; engine 0.00.",
-      "why_baseline_misleads": "Baseline reads 50/50, which happens to match the result here — but only if the defender knows the opposition. Beginners lose this; the metric can't see who is playing.",
+      "engine_note": "Defender has the opposition with White to move \u2014 drawn; engine 0.00.",
+      "why_baseline_misleads": "Baseline reads 50/50, which happens to match the result here \u2014 but only if the defender knows the opposition. Beginners lose this; the metric can't see who is playing.",
       "hypothesized_practical_white_1100": 0.58,
-      "source": "Basic K+P vs K opposition theory"
+      "source": "Basic K+P vs K opposition theory",
+      "measured_practical_white_1100": null,
+      "measured_n": 0
     },
     {
       "id": "wrong-bishop-rook-pawn",
@@ -40,10 +46,12 @@
       "fen": "7k/8/6KP/8/8/8/8/7B w - - 0 1",
       "name": "Wrong-coloured bishop + rook pawn",
       "engine_cp": 0,
-      "engine_note": "Bishop does not control the h8 promotion square and the defending king reaches the corner — dead draw; engine 0.00 despite White being up B+P.",
-      "why_baseline_misleads": "An objective bar over material would scream 'winning'; the truth is 0.00. Baseline (over a real engine) gets this right — included to show the 'material illusion' the engine, but not a naive bar, resolves.",
+      "engine_note": "Bishop does not control the h8 promotion square and the defending king reaches the corner \u2014 dead draw; engine 0.00 despite White being up B+P.",
+      "why_baseline_misleads": "An objective bar over material would scream 'winning'; the truth is 0.00. Baseline (over a real engine) gets this right \u2014 included to show the 'material illusion' the engine, but not a naive bar, resolves.",
       "hypothesized_practical_white_1100": 0.55,
-      "source": "Wrong-bishop rook-pawn draw (endgame theory)"
+      "source": "Wrong-bishop rook-pawn draw (endgame theory)",
+      "measured_practical_white_1100": null,
+      "measured_n": 0
     },
     {
       "id": "saavedra",
@@ -52,20 +60,24 @@
       "name": "Saavedra position (win only via underpromotion)",
       "engine_cp": 1000,
       "engine_note": "White is winning, but ONLY through 6.c8=R!! (queening stalemates). Engine shows a large advantage.",
-      "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~97% for White, but the win hinges on a rook underpromotion almost no sub-master finds — practically the position is close to a draw at club level.",
+      "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~97% for White, but the win hinges on a rook underpromotion almost no sub-master finds \u2014 practically the position is close to a draw at club level.",
       "hypothesized_practical_white_1500": 0.55,
-      "source": "Saavedra position, 1895 (famous underpromotion study)"
+      "source": "Saavedra position, 1895 (famous underpromotion study)",
+      "measured_practical_white_1500": null,
+      "measured_n": 0
     },
     {
       "id": "reti-king-march",
       "category": "dead-draw-hard",
       "fen": "7K/8/k1P5/7p/8/8/8/8 w - - 0 1",
-      "name": "Réti study (draw only via the king diagonal)",
+      "name": "R\u00e9ti study (draw only via the king diagonal)",
       "engine_cp": 0,
       "engine_note": "Drawn, but ONLY via the paradoxical king march Kg7-Kf6-Ke5 that simultaneously chases the h-pawn and supports c6. Engine 0.00.",
-      "why_baseline_misleads": "Baseline reads 50/50 (correct objectively), but the draw depends on a counterintuitive line weak players miss — White usually loses in practice, so 50% overstates White's real chances at low ratings.",
+      "why_baseline_misleads": "Baseline reads 50/50 (correct objectively), but the draw depends on a counterintuitive line weak players miss \u2014 White usually loses in practice, so 50% overstates White's real chances at low ratings.",
       "hypothesized_practical_white_1500": 0.32,
-      "source": "Réti, 1921 (famous king-opposition study)"
+      "source": "R\u00e9ti, 1921 (famous king-opposition study)",
+      "measured_practical_white_1500": 0.714,
+      "measured_n": 7
     },
     {
       "id": "knight-promotion-fork",
@@ -75,9 +87,12 @@
       "engine_cp": 800,
       "only_move_uci": "e7e8n",
       "engine_note": "White wins a queen with 1.e8=N+! forking Kg7 and Qf6; 1.e8=Q is not even check and stays roughly equal. Engine shows White ~winning.",
-      "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~95% for White, but the advantage exists ONLY through an underpromotion fork many sub-1500 players miss (auto-queening throws it away) — practically far closer to equal.",
+      "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~95% for White, but the advantage exists ONLY through an underpromotion fork many sub-1500 players miss (auto-queening throws it away) \u2014 practically far closer to equal.",
       "hypothesized_practical_white_1100": 0.55,
-      "source": "Knight-underpromotion fork motif (composed, verifiable by hand)"
+      "source": "Knight-underpromotion fork motif (composed, verifiable by hand)",
+      "measured_practical_white_1100": null,
+      "measured_n": 0
     }
-  ]
+  ],
+  "_measured_comment": "measured_practical_white_<band> = mean White result over dataset rows within \u00b175.0cp of engine_cp in that rating band (source: dataset.csv). null / measured_n=0 means the (committed sample) dataset had no row in the class; a full Lichess dump (task 0024) yields real numbers. Hypotheses are retained for comparison."
 }

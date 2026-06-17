@@ -112,9 +112,8 @@ def model_predictor(model: EquityModel) -> Predictor:
     return predict
 
 
-def rating_band(row: PositionRow) -> str:
-    """Coarse band on the average of the two ratings (the relevant joint skill level)."""
-    avg = (row.white_elo + row.black_elo) / 2.0
+def band_for_avg(avg: float) -> str:
+    """Coarse rating band for an average rating — the single source of band thresholds."""
     if avg < 1200:
         return "<1200"
     if avg < 1600:
@@ -124,6 +123,11 @@ def rating_band(row: PositionRow) -> str:
     if avg < 2400:
         return "2000-2399"
     return "2400+"
+
+
+def rating_band(row: PositionRow) -> str:
+    """Coarse band on the average of the two ratings (the relevant joint skill level)."""
+    return band_for_avg((row.white_elo + row.black_elo) / 2.0)
 
 
 def high_rating_band(row: PositionRow) -> str:

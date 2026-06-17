@@ -267,6 +267,24 @@ sample fixture lives in [`reports/validation_sample.md`](reports/validation_samp
 (smoke test — meaningless at 15 rows, real evidence needs a real dataset). Models that
 need the full board (Maia, 0005) wait on positions being added to the dataset schema.
 
+### Calibration by rating band (task 0027)
+
+`--calibration <path>` additionally writes a **reliability report**: the predicted-vs-
+observed White score binned *within each rating band*, so the rating-blind baseline can
+be shown drifting away from the ~2300 band it was fit on (it can't see who is playing).
+
+```bash
+uv run chess-equity validate --data data/dataset.csv --models baseline \
+    --calibration reports/baseline_calibration.md
+```
+
+A sample run is in [`reports/baseline_calibration_sample.md`](reports/baseline_calibration_sample.md).
+Separately, `python baseline/measure_practical.py --data <dataset> --write` replaces the
+*hypothesised* practical numbers in `baseline/failure_modes.json` with the **measured**
+rating-sliced mean White result for each position's class (its engine-eval band) — `null`
+where the dataset has no row in the class (the committed fixture is tiny; a real dump from
+0024 makes both decisive).
+
 ## Move grading by Δequity (`grade`)
 
 The classic centipawn-loss grade can only ever be ≤ 0 — perfect play is the ceiling,

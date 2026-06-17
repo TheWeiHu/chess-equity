@@ -53,6 +53,14 @@ def practical_field(pos):
     return None, None
 
 
+def measured_field(pos):
+    """The measured practical White score (task 0027) and its sample size, if present."""
+    for key, val in pos.items():
+        if key.startswith("measured_practical_white_"):
+            return (float(val) if val is not None else None), int(pos.get("measured_n", 0))
+    return None, None
+
+
 def baseline_white_pct(pos) -> float:
     """Baseline White win% from the (White-POV) engine cp. All positions are W-to-move."""
     return lichess_win_percent(float(pos["engine_cp"]))
@@ -76,10 +84,19 @@ def render(positions) -> str:
             f"  practical* : White {practical_pct:5.1f}%  (hypothesis @~{band})"
             f"   -> gap {gap:4.1f} pts"
         )
+        measured, m_n = measured_field(pos)
+        if m_n and measured is not None:
+            lines.append(
+                f"  measured   : White {measured * 100:5.1f}%  (0002 data @~{band}, n={m_n})"
+            )
+        elif measured is not None or m_n == 0:
+            lines.append("  measured   : (no rows in this class on the current dataset)")
         lines.append(f"  why wrong  : {pos['why_baseline_misleads']}")
     lines.append("")
-    lines.append("* practical numbers are HYPOTHESES to be measured on 0002 data, not")
-    lines.append("  results. This report quantifies the *claim*; 0009 settles it.")
+    lines.append("* practical numbers are HYPOTHESES; `measured` is the rating-sliced mean")
+    lines.append("  White result for the position CLASS (same engine_cp band) on the 0002")
+    lines.append("  dataset (task 0027). Small-sample on the committed fixture; a full dump")
+    lines.append("  (0024) makes it decisive — 0009 then settles the thesis.")
     return "\n".join(lines)
 
 
