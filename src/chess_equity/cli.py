@@ -5,6 +5,7 @@ Commands:
     chess-equity eval "<fen>" --white-elo 1500 --black-elo 1500
     chess-equity eval --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
+    chess-equity validate --data data/dataset.csv --models baseline
 
 The CLI depends only on :class:`~chess_equity.adapters.EquityModel`; it constructs
 the placeholder :class:`~chess_equity.models.LichessBaselineModel` today, but a new
@@ -90,6 +91,42 @@ def _run_data(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_validate(args: argparse.Namespace) -> int:
+    # Lazy import: keeps the eval path free of the data loader.
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import PREDICTORS, evaluate, format_report
+
+    requested = [m.strip() for m in args.models.split(",") if m.strip()]
+    unknown = [m for m in requested if m not in PREDICTORS]
+    if unknown:
+        print(
+            f"error: unknown model(s) {unknown}; available: {sorted(PREDICTORS)}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        rows = load_rows(args.data)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not rows:
+        print(f"error: no rows in {args.data}", file=sys.stderr)
+        return 1
+
+    predictors = {name: PREDICTORS[name] for name in requested}
+    reports = evaluate(rows, predictors)
+    report = format_report(reports, title=f"Validation report — {args.data}")
+    if args.out:
+        from pathlib import Path
+
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(report + "\n", encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(report)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -109,12 +146,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     build.add_argument("--out", default="data", help="output directory (default: data/)")
     build.add_argument("--format", choices=("csv", "parquet"), default="csv")
 
+    val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
+    val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
+    val.add_argument("--models", default="baseline", help="comma-separated predictor names")
+    val.add_argument("--out", help="write the Markdown report here (default: stdout)")
+
     args = parser.parse_args(argv)
 
     if args.command == "eval":
         return _run_eval(args)
     if args.command == "data":
         return _run_data(args)
+    if args.command == "validate":
+        return _run_validate(args)
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2

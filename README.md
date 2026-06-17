@@ -86,6 +86,26 @@ A small committed fixture lives in `data/sample/` so tests and downstream tasks
 `--month YYYY-MM` prints the canonical Lichess dump URL to fetch (auto-download is a
 follow-up). See `data/schema.py` for the column contract.
 
+## Validation (task 0009)
+
+The scientific gate for the whole thesis: does a rating-conditioned predictor beat
+the rating-blind centipawn baseline at predicting **actual** game results?
+
+```bash
+uv run chess-equity validate --data data/dataset.csv --models baseline \
+    --out reports/validation.md
+```
+
+A **predictor** maps a dataset row to a predicted White expected-score
+(`P(win)+0.5·P(draw)`); the harness scores each with **log-loss, Brier, and ECE**
+(calibration) — overall and sliced by **rating band** and **game phase** — so a model
+that only wins in the off-2300 bands still shows up. Shipped today: `baseline`
+(Lichess's rating-blind Win% over the row's centipawns — the thing to beat). Approach
+A (0004) registers as a predictor with no harness change. A demonstration run on the
+sample fixture lives in [`reports/validation_sample.md`](reports/validation_sample.md)
+(smoke test — meaningless at 15 rows, real evidence needs a real dataset). Models that
+need the full board (Maia, 0005) wait on positions being added to the dataset schema.
+
 ## Architecture
 
 | Type | Role |
@@ -96,6 +116,7 @@ follow-up). See `data/schema.py` for the column contract.
 | `HumanPolicy` | `fen, elo -> P(move)` — Maia plugs in here (task 0005) |
 | `bar.py` | ASCII rendering of the bar |
 | `data/` | Lichess PGN dump -> `(eval, ratings, outcome)` dataset (task 0002) |
+| `validate/` | score predictors vs real outcomes — log-loss/Brier/ECE (task 0009) |
 | `cli.py` | `chess-equity` entry point; depends only on `EquityModel` |
 
 Swap the model in `cli.build_model()` and everything else is unchanged.
