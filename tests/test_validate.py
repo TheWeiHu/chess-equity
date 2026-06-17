@@ -140,6 +140,129 @@ def test_runs_on_committed_sample():
     assert reports[0].overall.n == len(rows) > 0
 
 
+# --- paired-bootstrap CIs on the model-vs-baseline delta (task 0060) -------------
+
+def test_bootstrap_delta_equals_score_difference():
+    # The point delta is exactly mean(model_terms) - mean(baseline_terms), i.e. the
+    # difference of the two metric scores — the bootstrap only adds the interval.
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    model = [0.10, 0.20, 0.30]
+    base = [0.40, 0.40, 0.40]
+    ci = paired_bootstrap_ci(model, base, "brier", n_resamples=200, seed=0)
+    assert isclose(ci.delta, (sum(model) - sum(base)) / 3)
+    assert ci.lo <= ci.delta <= ci.hi  # the point estimate sits inside its own CI
+
+
+def test_bootstrap_verdict_directions():
+    # All per-row deltas strictly negative -> the model is unambiguously better, so the
+    # whole CI clears zero and the verdict is "beats" (and never "worse").
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    better = paired_bootstrap_ci([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], "brier", seed=1)
+    assert better.beats_baseline and not better.worse_than_baseline
+    worse = paired_bootstrap_ci([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], "brier", seed=1)
+    assert worse.worse_than_baseline and not worse.beats_baseline
+
+
+def test_bootstrap_is_seed_deterministic():
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    args = ([0.1, 0.5, 0.2, 0.9], [0.3, 0.3, 0.3, 0.3], "log_loss")
+    a = paired_bootstrap_ci(*args, n_resamples=500, seed=42)
+    b = paired_bootstrap_ci(*args, n_resamples=500, seed=42)
+    assert (a.delta, a.lo, a.hi) == (b.delta, b.lo, b.hi)
+
+
+def test_bootstrap_rejects_bad_input():
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci([0.1, 0.2], [0.1], "brier")  # length mismatch
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci([], [], "brier")  # no rows
+
+
+def test_compare_to_baseline_pins_deterministic_cis_on_fen_sample():
+    # Acceptance (0060): seeded CIs are reproducible byte-for-byte on the committed
+    # FEN sample. wdl-a beats the rating-blind baseline on Brier (CI fully below 0);
+    # on only 15 rows the log-loss win is real but not yet significant (CI straddles 0).
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import build_predictors, compare_to_baseline
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    comps = compare_to_baseline(
+        rows, build_predictors(["baseline", "wdl-a"]), n_resamples=2000, seed=0
+    )
+    assert len(comps) == 1 and comps[0].name == "wdl-a" and comps[0].baseline == "baseline"
+    by_metric = {ci.metric: ci for ci in comps[0].cis}
+
+    brier = by_metric["brier"]
+    assert isclose(brier.delta, -0.048576, abs_tol=1e-6)
+    assert isclose(brier.lo, -0.086559, abs_tol=1e-6)
+    assert isclose(brier.hi, -0.011428, abs_tol=1e-6)
+    assert brier.beats_baseline  # whole CI below zero
+
+    ll = by_metric["log_loss"]
+    assert isclose(ll.delta, -0.082952, abs_tol=1e-6)
+    assert isclose(ll.lo, -0.176561, abs_tol=1e-6)
+    assert isclose(ll.hi, 0.016065, abs_tol=1e-6)
+    assert not ll.beats_baseline  # better on average, but CI straddles zero
+
+
+def test_compare_to_baseline_empty_without_a_second_predictor():
+    from chess_equity.validate.harness import compare_to_baseline
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    assert compare_to_baseline(rows, {"baseline": baseline_cp}) == []
+
+
+def test_validate_cli_emits_significance_section(tmp_path, capsys):
+    # End-to-end: the validate command appends the paired-bootstrap section and labels
+    # a CI-clears-zero win as "beats".
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        [
+            "validate",
+            "--data",
+            str(sample),
+            "--models",
+            "baseline,wdl-a",
+            "--bootstrap",
+            "300",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text()
+    assert "## Significance vs baseline" in text
+    assert "| wdl-a | brier |" in text and "beats" in text
+
+
+def test_validate_cli_bootstrap_zero_disables_section(tmp_path, capsys):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline,wdl-a",
+         "--bootstrap", "0", "--out", str(out)]
+    )
+    assert rc == 0
+    assert "Significance vs baseline" not in out.read_text()
+
+
 def test_baseline_registered():
     assert "baseline" in PREDICTORS
 

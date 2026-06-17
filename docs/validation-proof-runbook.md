@@ -86,6 +86,14 @@ bands** and under **time pressure**, where the rating-blind centipawn bar is mos
 The calibration report + reliability PNG show *where* the centipawn bar is miscalibrated
 (it over-states the stronger side's chances where weaker players fail to refute).
 
+A bare delta says *direction*, not *significance*. The report's final **"Significance vs
+baseline"** section ([task 0060]) puts a **95% paired-bootstrap CI** on each model's
+log-loss/Brier delta vs `baseline` (negative = the model is better). The win only counts
+as real when the verdict reads **`beats`** — i.e. the whole CI clears zero; a delta whose
+CI straddles zero is `inconclusive` (a better average that could still be noise). Control
+the resampling with `--bootstrap N` (default 2000; `--bootstrap 0` to skip) and `--seed`
+for byte-reproducible intervals.
+
 ### Expected artifacts
 - `data/dataset.parquet` — the real labelled dataset (with FENs).
 - `src/chess_equity/artifacts/wdl_a.json` — re-fit regression coefficients.
@@ -104,6 +112,7 @@ uv run chess-equity validate --data data/sample/dataset_fen.csv --models baselin
 
 ## Related tasks
 - **[task 0009]** — the validation harness + this gate (the deliverable this runbook unblocks).
+- **[task 0060]** — paired-bootstrap 95% CI on each model-vs-baseline metric delta (the significance section above).
 - **[task 0034]** — re-fit `wdl-a` on the real dataset (step 2).
 - **[task 0024]** — build the real tens-of-thousands-row dataset (step 1).
 - **[task 0031]** — register `Maia2Equity` as a 0009 predictor (step 3).
@@ -117,3 +126,4 @@ uv run chess-equity validate --data data/sample/dataset_fen.csv --models baselin
 [task 0031]: ../README.md#data--validation
 [task 0034]: ../DEPENDENCIES.md
 [task 0036]: ../README.md#data--validation
+[task 0060]: ../README.md#data--validation

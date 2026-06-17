@@ -15,12 +15,16 @@ Public surface:
 Front door: ``chess-equity validate --data <dataset> --models baseline``.
 """
 
+from chess_equity.validate.bootstrap import DeltaCI
 from chess_equity.validate.harness import (
     PREDICTORS,
     SLICERS,
+    BaselineComparison,
     PredictorReport,
     Scores,
+    compare_to_baseline,
     evaluate,
+    format_baseline_comparison,
     format_report,
 )
 from chess_equity.validate.split import game_level_split
@@ -30,7 +34,11 @@ __all__ = [
     "SLICERS",
     "Scores",
     "PredictorReport",
+    "BaselineComparison",
+    "DeltaCI",
     "evaluate",
+    "compare_to_baseline",
     "format_report",
+    "format_baseline_comparison",
     "game_level_split",
 ]
