@@ -116,11 +116,42 @@ def test_eval_is_white_pov_and_label_is_white_result():
     assert [r.side_to_move for r in rows] == ["black", "white", "black"]
 
 
-def test_missing_eval_position_is_skipped_but_clock_optional():
+def test_clock_remaining_is_side_to_move_and_carries_forward():
+    # _MOVETEXT: 1.e4 {clk 5:00} e5 {no clk} 2.Nf3 {clk 4:55}.
     rows = _rows(_pgn("1-0"))
-    # 1...e5 has an eval but no clock -> kept, clock None.
-    assert rows[1].clock_remaining is None
-    assert rows[0].clock_remaining == 300.0
+    # Row 0 is after 1.e4 -> Black to move; only White's clock is known so far, so the
+    # side-to-move's (Black's) clock is still None. White's clock IS captured though.
+    assert rows[0].white_clock == 300.0
+    assert rows[0].black_clock is None
+    assert rows[0].clock_remaining is None  # = stm (black) clock
+    # Row 1 is after 1...e5 (no [%clk]) -> White to move; White's 5:00 carries forward
+    # across the clock-less ply, so the side-to-move's clock is 300.
+    assert rows[1].white_clock == 300.0
+    assert rows[1].clock_remaining == 300.0  # = stm (white) clock
+    # Row 2 is after 2.Nf3 {clk 4:55} -> Black to move; White's clock updated to 295,
+    # Black still has none, so the stm clock is None again.
+    assert rows[2].white_clock == 295.0
+    assert rows[2].clock_remaining is None
+    # The derived stm_clock property agrees with clock_remaining.
+    assert all(r.stm_clock == r.clock_remaining for r in rows)
+
+
+def test_both_clocks_tracked_independently():
+    # A game where both sides carry [%clk]: each player's clock is recorded separately,
+    # and clock_remaining always reflects whoever is to move.
+    pgn = (
+        '[Result "1-0"]\n[WhiteElo "1500"]\n[BlackElo "1500"]\n[TimeControl "300+0"]\n\n'
+        "1. e4 { [%eval 0.3] [%clk 0:05:00] } "
+        "e5 { [%eval 0.2] [%clk 0:04:50] } "
+        "2. Nf3 { [%eval 0.25] [%clk 0:04:55] } 1-0\n"
+    )
+    rows = _rows(pgn)
+    # After 1...e5 -> White to move: white 5:00, black 4:50, stm = white.
+    assert rows[1].white_clock == 300.0 and rows[1].black_clock == 290.0
+    assert rows[1].clock_remaining == 300.0
+    # After 2.Nf3 -> Black to move: white updated to 4:55, black still 4:50, stm = black.
+    assert rows[2].white_clock == 295.0 and rows[2].black_clock == 290.0
+    assert rows[2].clock_remaining == 290.0
 
 
 def test_unfinished_game_is_dropped():

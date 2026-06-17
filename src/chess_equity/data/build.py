@@ -159,6 +159,10 @@ def build_dataset(
 
 def _coerce_row(record: dict) -> PositionRow:
     clk = record.get("clock_remaining")
+    # ``white_clock`` / ``black_clock`` (task 0026) are keyed, not positional, so
+    # datasets built before they existed load them back as ``None``.
+    wc = record.get("white_clock")
+    bc = record.get("black_clock")
     # ``fen`` is optional: datasets built before it existed (or without it) have no
     # such key, so a missing/empty value loads back as ``None``.
     fen = record.get("fen")
@@ -178,6 +182,8 @@ def _coerce_row(record: dict) -> PositionRow:
         result=float(record["result"]),
         game_id=(str(game_id) if game_id not in (None, "") else None),
         fen=(str(fen) if fen not in (None, "") else None),
+        white_clock=(float(wc) if wc not in (None, "") else None),
+        black_clock=(float(bc) if bc not in (None, "") else None),
     )
 
 
