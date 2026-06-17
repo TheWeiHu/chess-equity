@@ -458,3 +458,51 @@ def test_validate_cli_scores_maia_search_against_baseline(tmp_path, monkeypatch,
     assert rc == 0
     out = capsys.readouterr().out
     assert "baseline" in out and "maia-search" in out
+
+
+# --- runbook CLI smoke (task 0061) ---------------------------------------------
+
+def test_runbook_validate_cli_end_to_end(tmp_path, capsys):
+    """Drive the documented runbook command path end to end on the committed fixture.
+
+    Mirrors docs/validation-proof-runbook.md's smoke command — the dependency-free
+    `baseline,wdl-a` gate with a game-level holdout — plus the `--out`/`--calibration`
+    artifact flags. Guards the real CLI invocation: a broken flag, a renamed report
+    section, or a dropped metric column fails here before the attended multi-GB run.
+    """
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    data = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    report = tmp_path / "validation-report.md"
+    calibration = tmp_path / "validation-calibration.md"
+
+    rc = main(
+        [
+            "validate",
+            "--data", str(data),
+            "--models", "baseline,wdl-a",
+            "--holdout", "0.5",
+            "--seed", "0",
+            "--out", str(report),
+            "--calibration", str(calibration),
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"wrote {report}" in out and f"wrote {calibration}" in out
+
+    # The report opens with the gate verdict and carries the metric table columns.
+    report_text = report.read_text(encoding="utf-8")
+    assert report_text.startswith("# Validation report")
+    assert "held-out test:" in report_text  # the --holdout split annotation
+    for section in ("## Gate verdict", "## Overall", "## By rating", "## By phase"):
+        assert section in report_text
+    assert "| predictor | n | log-loss | Brier | ECE |" in report_text
+    assert "wdl-a" in report_text and "baseline" in report_text
+
+    # The calibration artifact carries its per-band reliability table.
+    cal_text = calibration.read_text(encoding="utf-8")
+    assert cal_text.startswith("# Calibration by rating band")
+    assert "ECE by rating band" in cal_text
