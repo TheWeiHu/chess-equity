@@ -20,7 +20,7 @@ which reads each row's ``fen`` — present only when the dataset was built with
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
@@ -333,5 +333,116 @@ def format_report(reports: Sequence[PredictorReport], *, title: str = "Validatio
         for r in reports:
             for value, s in r.slices[slicer_name].items():
                 out.append(f"| {r.name} | {value} " + _scores_row("", s)[2:])
+
+    h2h = head_to_head_deltas(reports)
+    if h2h is not None:
+        out.append("")
+        out.append(format_head_to_head(h2h))
     out.append("")
+    return "\n".join(out)
+
+
+# --- head-to-head: where does the rating-conditioned model beat the baseline? ----
+#
+# The thesis (see roadmap / product-wedge-streaming) is not "equity beats centipawns
+# everywhere" — it's that equity wins *most* exactly where the rating-blind bar is most
+# wrong: low/high rating bands and under time pressure. The per-predictor tables above
+# show each model's scores by slice, but the reader has to subtract them by eye. This
+# section does that subtraction once: for every slice, baseline log-loss minus the best
+# rating-conditioned model's log-loss, ranked so the slices where equity wins most sit
+# at the top. It reuses the already-computed per-slice scores (no re-evaluation, no new
+# deps) — the same slicings the calibration/holdout path emits.
+
+
+@dataclass(frozen=True)
+class SliceDelta:
+    """One slice's head-to-head gap: baseline log-loss minus the model's, on the same rows.
+
+    ``delta > 0`` means the rating-conditioned model has the *lower* log-loss there — i.e.
+    equity wins in that slice. ``delta < 0`` means the rating-blind baseline is better.
+    """
+
+    slicer: str
+    value: str
+    n: int
+    baseline_log_loss: float
+    model_log_loss: float
+    delta: float
+
+
+@dataclass(frozen=True)
+class HeadToHead:
+    """Baseline-vs-best-model log-loss deltas, overall and per slice (sorted best-first)."""
+
+    baseline: str
+    model: str
+    overall_delta: float
+    slices: List[SliceDelta]  # every (slicer, value) pair, sorted by delta descending
+
+
+def head_to_head_deltas(
+    reports: Sequence[PredictorReport], *, baseline_name: str = "baseline"
+) -> Optional[HeadToHead]:
+    """Rank slices by how much the best rating-conditioned model beats the baseline.
+
+    Picks ``baseline_name`` as the rating-blind reference and the non-baseline predictor
+    with the lowest *overall* log-loss as its challenger ("the best rating-conditioned
+    model"), then for every slice computes ``baseline_log_loss - model_log_loss`` on the
+    same rows. Positive = equity wins. Returns the deltas sorted descending, so the
+    report directly answers "where does the thesis hold". ``None`` when there is no
+    baseline or no challenger to compare against (e.g. a single-predictor run).
+    """
+    by_name = {r.name: r for r in reports}
+    base = by_name.get(baseline_name)
+    if base is None:
+        return None
+    challengers = [r for r in reports if r.name != baseline_name]
+    if not challengers:
+        return None
+    best = min(challengers, key=lambda r: r.overall.log_loss)
+
+    deltas: List[SliceDelta] = []
+    for slicer_name, base_slices in base.slices.items():
+        model_slices = best.slices.get(slicer_name, {})
+        for value, base_scores in base_slices.items():
+            model_scores = model_slices.get(value)
+            if model_scores is None:
+                continue
+            deltas.append(
+                SliceDelta(
+                    slicer=slicer_name,
+                    value=value,
+                    n=base_scores.n,
+                    baseline_log_loss=base_scores.log_loss,
+                    model_log_loss=model_scores.log_loss,
+                    delta=base_scores.log_loss - model_scores.log_loss,
+                )
+            )
+    deltas.sort(key=lambda d: d.delta, reverse=True)
+    return HeadToHead(
+        baseline=baseline_name,
+        model=best.name,
+        overall_delta=base.overall.log_loss - best.overall.log_loss,
+        slices=deltas,
+    )
+
+
+def format_head_to_head(h2h: HeadToHead) -> str:
+    """Render the head-to-head deltas as a compact Markdown table (equity-wins first)."""
+    out: List[str] = []
+    out.append(f"## Head-to-head: where equity wins ({h2h.baseline} vs {h2h.model})")
+    out.append("")
+    out.append(
+        f"Δ log-loss = `{h2h.baseline}` − `{h2h.model}` on the same rows; "
+        "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
+    )
+    out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
+    out.append("")
+    out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
+    out.append("|---|---|--:|--:|--:|--:|")
+    for d in h2h.slices:
+        out.append(
+            f"| {d.slicer} | {d.value} | {d.n} | "
+            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
+        )
     return "\n".join(out)

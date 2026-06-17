@@ -144,6 +144,81 @@ def test_baseline_registered():
     assert "baseline" in PREDICTORS
 
 
+# --- head-to-head: where equity wins (task 0059) -------------------------------
+
+def test_head_to_head_sign_convention_and_ranking():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    # Baseline is rating-blind; the "model" predicts the actual result perfectly, so it
+    # must win (Δ > 0) in every slice and overall.
+    rows = [
+        _row(cp=0, we=1000, be=1000, phase="opening", result=1.0),
+        _row(cp=0, we=2500, be=2500, phase="endgame", result=0.0),
+    ]
+    reports = evaluate(
+        rows,
+        {"baseline": baseline_cp, "model": lambda r: r.result},
+    )
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None
+    assert h2h.baseline == "baseline" and h2h.model == "model"
+    # The oracle beats the rating-blind baseline everywhere.
+    assert h2h.overall_delta > 0
+    assert all(d.delta > 0 for d in h2h.slices), "oracle must win every slice (Δ > 0)"
+    # Both rating bands and both phases appear as slices.
+    assert {(d.slicer, d.value) for d in h2h.slices} >= {
+        ("rating", "<1200"),
+        ("rating", "2400+"),
+        ("phase", "opening"),
+        ("phase", "endgame"),
+    }
+    # Δ is the baseline-minus-model log-loss for that slice.
+    d0 = h2h.slices[0]
+    assert isclose(d0.delta, d0.baseline_log_loss - d0.model_log_loss)
+    # Sorted biggest-win-first.
+    assert [d.delta for d in h2h.slices] == sorted((d.delta for d in h2h.slices), reverse=True)
+
+
+def test_head_to_head_needs_a_challenger():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    # Baseline only -> nothing to compare against.
+    assert head_to_head_deltas(evaluate(rows, {"baseline": baseline_cp})) is None
+    # No predictor named "baseline" -> no reference.
+    assert head_to_head_deltas(evaluate(rows, {"model": lambda r: r.result})) is None
+
+
+def test_format_report_includes_head_to_head_section():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
+    assert "## Head-to-head: where equity wins" in md
+    assert "Δ > 0 means equity wins" in md
+    # Single-predictor reports omit the section.
+    solo = format_report(evaluate(rows, {"baseline": baseline_cp}))
+    assert "Head-to-head" not in solo
+
+
+def test_head_to_head_on_committed_sample():
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    rows = load_rows(str(sample))
+    # wdl-a is a rating-conditioned model; compare it head-to-head against the baseline.
+    reports = evaluate(rows, {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]})
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None and h2h.slices, "sample must yield at least one slice"
+    # Every slice's Δ is exactly baseline-minus-model log-loss on that slice (sign convention).
+    for d in h2h.slices:
+        assert isclose(d.delta, d.baseline_log_loss - d.model_log_loss)
+        assert d.n > 0
+    # The rating slicer is among the reported slices (the thesis's headline axis).
+    assert any(d.slicer == "rating" for d in h2h.slices)
+
+
 # --- board-model predictor (task 0029) -----------------------------------------
 
 class _FakeBoardModel:
