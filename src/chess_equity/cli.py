@@ -425,8 +425,16 @@ def _run_validate(args: argparse.Namespace) -> int:
         name = requested[0]
         # --bootstrap > 0 (the default) adds a bin-resampling ECE CI per band (task 0076)
         # so the band-level calibration claims carry error bars; --bootstrap 0 turns it off.
+        # When the report's predictor isn't the baseline itself, thread the baseline in as a
+        # second predictor (task 0089) so each band also shows the paired ECE delta vs baseline.
+        cal_baseline = PREDICTORS[baseline_name] if name != baseline_name else None
         bands = band_reliability(
-            rows, PREDICTORS[name], bins=args.ece_bins, bootstrap=args.bootstrap, seed=args.seed
+            rows,
+            PREDICTORS[name],
+            baseline=cal_baseline,
+            bins=args.ece_bins,
+            bootstrap=args.bootstrap,
+            seed=args.seed,
         )
         cal = format_calibration_report(
             bands, predictor_name=name, title=f"Calibration by rating band — {args.data}"
