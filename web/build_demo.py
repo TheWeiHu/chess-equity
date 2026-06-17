@@ -96,6 +96,22 @@ GAMES = {
         "moves": ["f3", "e5", "g4", "Qh4#"],
         "ref_equity": [50, 47, 47, 30, 0],
     },
+    # Danish Gambit Accepted: the POSITIONAL counterpart (task 0096, 0082 option b).
+    # White hands over two pawns (3.c3 / 4.Bc4) for a roaring development lead and the
+    # b2/c4 bishop battery aimed at Black's king. A *deep* engine does NOT pre-solve
+    # this — Stockfish reads it as a quiet ~0.8–1.2 edge for **Black** (the extra pawns
+    # tell), there's no forced mate to find — yet practically, especially at club level,
+    # White's initiative is worth at least the material. So with `--cp-engine stockfish`
+    # the dashed cp bar tilts toward Black while the rating-conditioned equity bar keeps
+    # White comfortable: a subtler practical-vs-objective gap than Légal's mate-vs-material
+    # flash, which is exactly why 0082 deferred it to a second game.
+    "danish": {
+        "name": "Danish Gambit", "white": "Gambiteer", "black": "Materialist",
+        "file": "danish-game.json",
+        "moves": ["e4", "e5", "d4", "exd4", "c3", "dxc3", "Bc4", "cxb2",
+                  "Bxb2", "Bb4+", "Nc3", "Nf6", "Nge2", "O-O"],
+        "ref_equity": [52, 52, 51, 53, 52, 54, 53, 56, 54, 58, 56, 57, 56, 58, 58],
+    },
 }
 DEFAULT_GAME = "legals"
 
