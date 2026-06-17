@@ -59,6 +59,32 @@ Example:
 [###############---------------]  50.0% (W)  W/D/L 33.4/33.2/33.4  [lichess-baseline]  cp +0
 ```
 
+## Move grading by Δequity (`grade`)
+
+The classic centipawn-loss grade can only ever be ≤ 0 — perfect play is the ceiling,
+so every human move is "less bad." Equity grading flips that: a move is scored by the
+change in the **mover's** equity, benchmarked against what a player of their rating
+was expected to do, so a move stronger than the rating-typical mix reads **positive**.
+
+```bash
+uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
+```
+
+```
+  7. Qxf7#   brilliant   Δpeer +48.2  Δbest  +0.0
+```
+
+- **`Δpeer` = equity_after − expected_equity** (the headline) where
+  `expected_equity = Σ_move P(move | rating) · equity(after move)`. Positive ⇒ you
+  beat your peers. `P(move | rating)` comes from a `HumanPolicy` — Maia-2 (task 0005);
+  a uniform placeholder until then, so quiet moves read ~0 under the material model.
+- **`Δbest`** = equity_after − best-legal-move equity (≤ 0) — the classic "left on the
+  table," on the equity scale.
+- **`cp_loss`** is shown alongside so the flagship case is visible: a move can *lose
+  centipawns yet gain equity* (a sound trap a rating-peer opponent likely walks into).
+  `grading.py`'s tests stage that case directly. Thresholds are rating-aware (wider at
+  lower ratings, where the peer mix is noisier); calibration lands with 0005/0009.
+
 ## Architecture
 
 | Type | Role |
@@ -68,6 +94,7 @@ Example:
 | `ObjectiveEngine` | `fen -> cp/mate` — Stockfish/Lc0 plug in here (placeholder: material only) |
 | `HumanPolicy` | `fen, elo -> P(move)` — Maia plugs in here (task 0005) |
 | `bar.py` | ASCII rendering of the bar |
+| `grading.py` | Δequity move grading — peer-relative + classic (task 0008) |
 | `cli.py` | `chess-equity` entry point; depends only on `EquityModel` |
 
 Swap the model in `cli.build_model()` and everything else is unchanged.
