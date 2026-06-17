@@ -115,7 +115,7 @@ Every model plugs in behind one `EquityModel` interface; pick with `--model`:
 |-----------|------------|
 | `baseline` *(default)* | Rating-blind Lichess Win% over the objective engine eval (material placeholder until Stockfish is the default). Zero heavy deps — the thing to beat. |
 | `maia2` | The real rating-conditioned bar: [Maia-2](https://github.com/CSSLab/maia2)'s value head, trained on real Lichess outcomes. `pip install maia2` (pulls torch; checkpoint downloads on first use). |
-| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. `chess-equity train` fits it. |
+| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. The shipped artifact is fit on **50k real Lichess positions** (`n_train=50000`); re-fit it with `chess-equity train`. |
 | `maia-rollout` | Slow ground-truth oracle: play the position out, both sides erring like their rating, average `--n` rollouts (with a 95% CI). |
 | `maia-search` | Maia-weighted expectimax to a fixed `--depth`/`--k`. |
 

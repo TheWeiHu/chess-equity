@@ -252,15 +252,15 @@ def test_compare_to_baseline_pins_deterministic_cis_on_fen_sample():
     by_metric = {ci.metric: ci for ci in comps[0].cis}
 
     brier = by_metric["brier"]
-    assert isclose(brier.delta, -0.048576, abs_tol=1e-6)
-    assert isclose(brier.lo, -0.086559, abs_tol=1e-6)
-    assert isclose(brier.hi, -0.011428, abs_tol=1e-6)
+    assert isclose(brier.delta, -0.026506, abs_tol=1e-6)
+    assert isclose(brier.lo, -0.046396, abs_tol=1e-6)
+    assert isclose(brier.hi, -0.005976, abs_tol=1e-6)
     assert brier.beats_baseline  # whole CI below zero
 
     ll = by_metric["log_loss"]
-    assert isclose(ll.delta, -0.082952, abs_tol=1e-6)
-    assert isclose(ll.lo, -0.176561, abs_tol=1e-6)
-    assert isclose(ll.hi, 0.016065, abs_tol=1e-6)
+    assert isclose(ll.delta, -0.038490, abs_tol=1e-6)
+    assert isclose(ll.lo, -0.088755, abs_tol=1e-6)
+    assert isclose(ll.hi, 0.020267, abs_tol=1e-6)
     assert not ll.beats_baseline  # better on average, but CI straddles zero
 
 
@@ -362,8 +362,10 @@ def test_ece_bootstrap_rejects_bad_input():
 
 def test_compare_ece_pins_deterministic_cis_on_fen_sample():
     # Acceptance (0072): seeded ECE CIs are reproducible byte-for-byte on the committed
-    # FEN sample. wdl-a is better calibrated (lower point ECE) than the rating-blind
-    # baseline, but on only 15 rows the delta CI straddles zero -> not yet significant.
+    # FEN sample. This is a reproducibility pin, not a calibration claim: on this 15-row
+    # smoke fixture wdl-a's point ECE sits just above the rating-blind baseline and the
+    # delta CI straddles zero -> not significant either way. (On the real 50k dataset
+    # wdl-a is the better-calibrated model; the tiny fixture is not evidence.)
     from pathlib import Path
 
     from chess_equity.data.build import load_rows
@@ -384,14 +386,14 @@ def test_compare_ece_pins_deterministic_cis_on_fen_sample():
     assert base.delta is None  # baseline has no delta vs itself
 
     wdl = by_name["wdl-a"]
-    assert isclose(wdl.ece, 0.196070, abs_tol=1e-6)
-    assert isclose(wdl.lo, 0.124898, abs_tol=1e-6)
-    assert isclose(wdl.hi, 0.265698, abs_tol=1e-6)
+    assert isclose(wdl.ece, 0.236108, abs_tol=1e-6)
+    assert isclose(wdl.lo, 0.157331, abs_tol=1e-6)
+    assert isclose(wdl.hi, 0.317493, abs_tol=1e-6)
     assert wdl.delta is not None and wdl.delta_lo is not None and wdl.delta_hi is not None
-    assert isclose(wdl.delta, -0.022245, abs_tol=1e-6)
-    assert isclose(wdl.delta_lo, -0.090593, abs_tol=1e-6)
-    assert isclose(wdl.delta_hi, 0.048191, abs_tol=1e-6)
-    assert not wdl.beats_baseline  # better calibrated on average, but CI straddles zero
+    assert isclose(wdl.delta, 0.017793, abs_tol=1e-6)
+    assert isclose(wdl.delta_lo, -0.028163, abs_tol=1e-6)
+    assert isclose(wdl.delta_hi, 0.065198, abs_tol=1e-6)
+    assert not wdl.beats_baseline  # delta CI straddles zero -> not significant
 
 
 def test_validate_cli_emits_ece_ci_section(tmp_path):
