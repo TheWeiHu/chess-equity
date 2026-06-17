@@ -80,6 +80,28 @@ def rating_band(row: PositionRow) -> str:
     return "2400+"
 
 
+def high_rating_band(row: PositionRow) -> str:
+    """Fine bands at the *top* of the rating range (task 0016).
+
+    Maia-2's highest skill embedding is a single coarse ``">2000"`` bin — it cannot
+    tell 2200 from 2800, and :func:`rating_band` likewise lumps everyone above 2400
+    together. This slicer keeps low play as one ``"<2000"`` bucket and instead spends
+    its resolution where the streaming wedge needs it (titled / super-GM play), so
+    the 0009 calibration report quantifies how mis-calibrated the equity is per
+    high-rating band *before* anyone trains a finer model.
+    """
+    avg = (row.white_elo + row.black_elo) / 2.0
+    if avg < 2000:
+        return "<2000"
+    if avg < 2200:
+        return "2000-2199"
+    if avg < 2400:
+        return "2200-2399"
+    if avg < 2600:
+        return "2400-2599"
+    return "2600+"
+
+
 def clock_band(row: PositionRow) -> str:
     """Coarse band on the side-to-move's remaining clock — where the clock model bites.
 
@@ -99,6 +121,7 @@ def clock_band(row: PositionRow) -> str:
 # The slicings reported alongside the overall number.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
+    "high_rating": high_rating_band,
     "phase": lambda row: row.phase,
     "clock": clock_band,
 }
@@ -159,6 +182,33 @@ def evaluate(
             }
         reports.append(PredictorReport(name=name, overall=_score(preds, labels), slices=slices))
     return reports
+
+
+# The threshold above which we care about per-band resolution (Maia-2's coarse bin).
+HIGH_RATING_MIN = 2000.0
+
+
+def high_rating_calibration(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor] = PREDICTORS,
+    *,
+    min_avg_rating: float = HIGH_RATING_MIN,
+) -> List[PredictorReport]:
+    """Calibration of each predictor on high-rated play only, sliced by fine top bands.
+
+    The acceptance artifact for task 0016's "first, measure the gap" step: keep only
+    rows whose average rating is at least ``min_avg_rating`` and score them sliced by
+    :func:`high_rating_band`, so the report reads as "how (mis)calibrated is the
+    equity at 2200 / 2400 / 2600+?" — model-agnostic, so a finer-tuned model registered
+    later shows up beside today's stock predictor as the before/after comparison.
+
+    Returns an empty list when no row clears the bar (the committed sample barely
+    reaches 2000), which the caller should surface rather than treat as "all good".
+    """
+    high = [r for r in rows if (r.white_elo + r.black_elo) / 2.0 >= min_avg_rating]
+    if not high:
+        return []
+    return evaluate(high, predictors, slicers={"high_rating": high_rating_band})
 
 
 def _scores_row(label: str, s: Scores) -> str:
