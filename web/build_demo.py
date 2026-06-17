@@ -57,7 +57,7 @@ from chess_equity.types import lichess_win_percent  # noqa: E402
 
 # Single source of truth for the cp/grade formulas the web demo shares with the
 # import path (web/game_json.py) — keep them here and the two can't drift.
-from game_json import _material_cp_white, grade_label  # noqa: E402
+from game_json import _material_cp_white, grade_move  # noqa: E402
 
 REFERENCE_BAND = 1500
 RATING_BANDS = [1100, 1500, 1900, 2300]
@@ -172,10 +172,7 @@ def build(
         ref_white = equity[f"{REFERENCE_BAND}-{REFERENCE_BAND}"]
         grade = None
         if i > 0 and prev_white_eq is not None:
-            mover_white = chess.Board(plies[i - 1]["fen"]).turn == chess.WHITE
-            # Δ from the mover's POV (White-POV delta flips for Black).
-            delta = (ref_white - prev_white_eq) if mover_white else (prev_white_eq - ref_white)
-            grade = {"label": grade_label(delta), "delta": round(delta, 1)}
+            grade = grade_move(prev_white_eq, ref_white, plies[i - 1]["fen"])
         prev_white_eq = ref_white
 
         moves.append(
