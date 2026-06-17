@@ -73,6 +73,7 @@
       "fen": "8/4P1k1/5q2/8/8/8/8/6K1 w - - 0 1",
       "name": "Knight-promotion fork (win only via e8=N+)",
       "engine_cp": 800,
+      "only_move_uci": "e7e8n",
       "engine_note": "White wins a queen with 1.e8=N+! forking Kg7 and Qf6; 1.e8=Q is not even check and stays roughly equal. Engine shows White ~winning.",
       "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~95% for White, but the advantage exists ONLY through an underpromotion fork many sub-1500 players miss (auto-queening throws it away) — practically far closer to equal.",
       "hypothesized_practical_white_1100": 0.55,
