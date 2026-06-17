@@ -81,7 +81,8 @@ uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move eq
 `grade` scores a move by the change in the **mover's** equity against what their
 rating-peers were expected to play, so a strong move can read **positive** (the classic
 centipawn-loss grade is capped at 0). `broadcast` emits one JSON event per move for live
-feeds and the OBS overlay (`overlay/`).
+feeds and the OBS overlay (`overlay/`) — point it at a live Lichess broadcast round and
+into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs).
 
 ## Web demo
 

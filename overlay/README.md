@@ -52,6 +52,45 @@ background is transparent, so only the bar composites over your stream.
 Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
 Caster setup: `http://localhost:8777/?caster=1&cpbar=1`
 
+### Streamer quickstart — a live Lichess broadcast round → OBS
+
+The quick start above drives the overlay from the bundled replay. To follow a **real
+game**, run the [`broadcast`](../src/chess_equity/broadcast.py) ingestor against a
+Lichess **broadcast round id** — it polls the round and emits one per-move equity
+event per line. All commands are copy-paste; the offline check needs no network.
+
+```bash
+# 0. (offline sanity) prove the per-move feed works with no round/network —
+#    replays a bundled PGN move-by-move, one JSON event per line:
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --interval 0 | head
+
+# 1. live: poll a real Lichess broadcast round (Ctrl-C to stop). The round id is
+#    the trailing path of a lichess.org/broadcast/…/<ROUND_ID> URL.
+uv run chess-equity broadcast --round <ROUND_ID> --white-elo 2700 --black-elo 2700
+
+# 2. serve the overlay (static files + a /sse push endpoint), in another shell:
+python3 overlay/serve.py                 # http://localhost:8777/
+
+# 3. in OBS: Sources → + → Browser, and set the URL to:
+#    http://localhost:8777/?src=/sse&caster=1
+#    (size it to your scene, e.g. 1920×120; transparent background composites over the stream)
+```
+
+`--white-elo/--black-elo` pin the ratings the bar conditions on (a broadcast round's
+headers are often blank or `?`); `--model maia2` swaps the placeholder baseline for the
+real rating-conditioned bar once its weights are installed (see `DEPENDENCIES.md`).
+
+> **Today's seam (read me).** Step 1 (`broadcast --round`) prints the feed as **JSON
+> Lines** — the internal event shape. Step 2's `/sse` replays an **overlay-shaped**
+> event *file* (`mock-game.json` by default). The one-command live bridge — a round
+> streamed straight into the overlay as SSE (a planned `broadcast … --serve-sse`) — is
+> **not wired yet**. Until it lands, either drive the overlay from the bundled `/sse`
+> replay (steps 2–3, demonstrable now), or capture a round to a `.json` event file and
+> serve it with `python3 overlay/serve.py --game <file>`. The serialization the bridge
+> needs already exists — `MoveEvent.to_overlay_event()` in
+> [`broadcast.py`](../src/chess_equity/broadcast.py) emits exactly the `position`
+> events `overlay.js` consumes (pinned by `tests/test_broadcast_overlay_contract.py`).
+
 ### Setup page — no hand-editing query params (task 0021)
 
 Don't want to assemble that URL by hand? Open **`/config.html`** (served by
