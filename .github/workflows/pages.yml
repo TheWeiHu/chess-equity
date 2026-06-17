@@ -5,8 +5,10 @@
 # the run (task 0041). Uses only the repo's own GITHUB_TOKEN — no external account or
 # secrets. The live URL is deterministic: https://theweihu.github.io/chess-equity/
 #
-# One-time manual step: in repo Settings → Pages, set "Build and deployment" Source
-# to "GitHub Actions" (this workflow then deploys on every push to the default branch).
+# No manual setup needed: the configure-pages step below runs with enablement: true,
+# so it turns Pages on (Source: GitHub Actions) itself on the first run. (Only if the
+# org/repo forbids Actions from enabling Pages does a human have to flip it once in
+# Settings → Pages.) This workflow then deploys on every push to the default branch.
 name: Deploy web demo to Pages
 
 on:
@@ -36,7 +38,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # enablement: true lets the action turn on Pages (Source: GitHub Actions)
+      # itself on first run, so a fresh repo doesn't 404 with "Pages not enabled"
+      # at this step. (If org/repo policy forbids Actions enabling Pages, a human
+      # must still flip it once in Settings → Pages.)
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Stage static assets (no Python sources / caches)
         run: |
           mkdir -p _site

@@ -105,6 +105,12 @@ class RealMaia2Backend:
         move_probs, win_prob = inference.inference_each(
             self._model, self._prepared, fen, elo_self, elo_oppo
         )
+        # maia2's inference_each returns win_prob from WHITE's POV — it explicitly does
+        # `value = 1 - value` for a black-to-move FEN. Our Backend contract is the
+        # side-to-move's equity (what Maia2Equity / the fake backend assume), so undo
+        # that conversion. Without this, every black-to-move bar comes out inverted.
+        if not white_to_move(fen):
+            win_prob = 1.0 - win_prob
         return dict(move_probs), float(win_prob)
 
 
@@ -205,8 +211,15 @@ class Maia2Equity(EquityModel):
         )
 
 
-def build_maia2_equity(cache_path: Optional[str] = DEFAULT_CACHE_PATH) -> Maia2Equity:
-    """Construct a production :class:`Maia2Equity` (real backend + on-disk cache)."""
+def build_maia2_equity(cache_path: Optional[str] = None) -> Maia2Equity:
+    """Construct a production :class:`Maia2Equity` (real backend + on-disk cache).
+
+    ``cache_path`` defaults to :data:`DEFAULT_CACHE_PATH`, read at call time (not bound
+    at definition time) so tests can isolate the on-disk cache by monkeypatching the
+    module attribute.
+    """
+    if cache_path is None:
+        cache_path = DEFAULT_CACHE_PATH
     backend: Backend = RealMaia2Backend()
     if cache_path:
         backend = CachedBackend(backend, path=cache_path)

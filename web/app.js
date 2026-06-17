@@ -67,9 +67,9 @@
 
   // ---- board ---------------------------------------------------------------
 
-  function renderBoard(fen) {
+  function renderBoard(fen, boardEl) {
     var rows = fen.split(" ")[0].split("/");
-    var board = $("board");
+    var board = boardEl || $("board");
     board.innerHTML = "";
     for (var r = 0; r < 8; r++) {
       var file = 0;
@@ -97,6 +97,37 @@
     board.appendChild(sq);
   }
 
+  // ---- hover board preview -------------------------------------------------
+  // A caster scanning the equity curve wants to *see* a ply's position without
+  // clicking (which would move the main board and lose their place). Hovering a
+  // chart dot renders that ply into a small floating board, reusing renderBoard.
+
+  function showPreview(ply) {
+    var preview = $("board-preview");
+    if (!preview) return;
+    var move = state.data.moves[ply];
+    renderBoard(move.fen, $("preview-board"));
+    var cap = $("preview-caption");
+    if (cap) {
+      cap.textContent = ply === 0
+        ? "Starting position"
+        : Math.ceil(ply / 2) + (ply % 2 === 1 ? ". " : "… ") + move.san;
+    }
+    preview.hidden = false;
+  }
+
+  function movePreview(ev) {
+    var preview = $("board-preview");
+    if (!preview || preview.hidden) return;
+    preview.style.left = ev.clientX + 16 + "px";
+    preview.style.top = ev.clientY + 16 + "px";
+  }
+
+  function hidePreview() {
+    var preview = $("board-preview");
+    if (preview) preview.hidden = true;
+  }
+
   // ---- bars ----------------------------------------------------------------
 
   function renderBars() {
@@ -115,9 +146,13 @@
     if (Math.abs(gap) >= 15) {
       div.hidden = false;
       var side = gap > 0 ? "White" : "Black";
+      var barLabel =
+        state.data.cp_engine === "stockfish"
+          ? "the engine's objective eval"
+          : "the material count";
       div.textContent =
         "Equity favours " + side + " by " + Math.round(Math.abs(gap)) +
-        " pts over the centipawn bar — the material count misreads this position.";
+        " pts over the centipawn bar — " + barLabel + " misreads this position.";
     } else {
       div.hidden = true;
     }
@@ -154,7 +189,8 @@
     // The two lines: centipawn bar (rating-blind) under equity (rating-conditioned).
     svg.appendChild(svgEl("polyline", { points: g.cpPoints, class: "chart-cp" }));
     svg.appendChild(svgEl("polyline", { points: g.eqPoints, class: "chart-eq" }));
-    // One dot per ply on the equity line: native <title> tooltip on hover, click scrubs.
+    // One dot per ply on the equity line: native <title> tooltip on hover, click
+    // scrubs, and hover pops a floating board preview of that ply (no click needed).
     g.points.forEach(function (p) {
       var dot = svgEl("circle", {
         cx: p.x, cy: p.eqY, r: p.ply === state.ply ? 4 : 2.5,
@@ -164,6 +200,9 @@
       title.textContent = p.label;
       dot.appendChild(title);
       dot.addEventListener("click", function () { goto(p.ply); });
+      dot.addEventListener("mouseenter", function () { showPreview(p.ply); });
+      dot.addEventListener("mousemove", movePreview);
+      dot.addEventListener("mouseleave", hidePreview);
       svg.appendChild(dot);
     });
   }
@@ -268,7 +307,34 @@
     return "demo-game.json";
   }
 
+  // Populate the catalog selector from games.json so you can scroll through the
+  // bundled games. Switching navigates to ?game=<file>; a fresh load keeps the URL,
+  // board, sliders and chart all in sync without bespoke teardown. Best-effort: if
+  // games.json is missing (e.g. an imported single game), hide the picker.
+  function setupGamePicker(current) {
+    var sel = $("game-select");
+    if (!sel) return;
+    fetch("games.json")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (manifest) {
+        var games = manifest && manifest.games;
+        if (!games || !games.length) { sel.parentNode.hidden = true; return; }
+        games.forEach(function (g) {
+          var opt = document.createElement("option");
+          opt.value = g.file;
+          opt.textContent = g.name;
+          if (g.file === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener("change", function () {
+          window.location.search = "?game=" + encodeURIComponent(sel.value);
+        });
+      })
+      .catch(function () { sel.parentNode.hidden = true; });
+  }
+
   var file = gameFile();
+  setupGamePicker(file);
   fetch(file)
     .then(function (r) { return r.json(); })
     .then(init)

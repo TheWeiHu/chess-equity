@@ -78,7 +78,9 @@ class MoveEvent:
     eval bar). ``delta_equity`` is the change from the *mover's* POV in percentage
     points — positive means the move improved the mover's practical chances, the
     whole point of the reframe. Clocks are remaining seconds, or ``None`` if the PGN
-    carried no ``[%clk]`` tag.
+    carried no ``[%clk]`` tag. ``cp`` is the objective engine's classic centipawn
+    eval **from White's POV** (so it lines up with ``equity``), or ``None`` when the
+    model exposes no objective cp (e.g. a pure win-prob model, or a mate).
     """
 
     game_id: str
@@ -96,10 +98,85 @@ class MoveEvent:
     last_move_grade: Optional[str]
     source: str
     compute_ms: float
+    cp: Optional[float] = None
     resync: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
+
+    def to_overlay_event(self) -> Dict[str, object]:
+        """Serialize to the overlay's documented ``position`` event.
+
+        The overlay (``overlay/overlay.js``, schema in ``overlay/README.md``)
+        consumes a *nested*, White-POV event with ``equity`` in ``[0, 1]`` — not the
+        flat internal :class:`MoveEvent` (``equity`` in ``[0, 100]%``, flat
+        ``white_clock``/``black_clock``/``last_move_grade`` fields). This is the one
+        bridge between the two, so producer and consumer can't silently drift; the
+        contract is pinned by ``tests/test_broadcast_overlay_contract.py``.
+
+        ``cp`` is the White-POV objective centipawn eval (the overlay's classic
+        ghost tick and the human-edge divergence badge), or ``None`` when no engine
+        cp is available — the overlay then simply hides the tick.
+        """
+        event: Dict[str, object] = {
+            "type": "position",
+            "ply": self.ply,
+            "move": {"san": self.san},
+            "equity": self.equity / 100.0,
+            "cp": self.cp,
+            "clock": {"white": self.white_clock, "black": self.black_clock},
+        }
+        if self.last_move_grade is not None:
+            event["grade"] = {
+                "label": self.last_move_grade,
+                "delta": None
+                if self.delta_equity is None
+                else self.delta_equity / 100.0,
+            }
+        # Real drama classification (tasks 0020/0053): attach the chess_equity.drama
+        # verdict so the overlay flares on the actual classifier (clutch / missed_win /
+        # escape / scramble) instead of its client-side equity-swing heuristic. Lazy
+        # import: drama imports MoveEvent from here, so a top-level import would cycle.
+        from chess_equity.drama import score_event
+
+        drama = score_event(self)
+        if drama is not None:
+            event["drama"] = {
+                "kind": drama.kind,
+                "magnitude": drama.magnitude,
+                "headline": drama.headline,
+            }
+        return event
+
+
+@dataclass(frozen=True)
+class GameEvent:
+    """One-time game metadata in the overlay's ``"game"`` schema (task 0047).
+
+    The bridge emits this once per game, before that game's first :class:`MoveEvent`,
+    so the overlay's name-plates show *who* is playing — previously names were parsed
+    only to build :func:`_game_id`, never surfaced, so the overlay always fell back to
+    literal "White"/"Black". Ratings mirror the per-move ``white_elo``/``black_elo``.
+    """
+
+    game_id: str
+    white_name: Optional[str]
+    black_name: Optional[str]
+    white_elo: Optional[int]
+    black_elo: Optional[int]
+
+    def to_overlay(self) -> Dict[str, object]:
+        """Render as the overlay's ``{type: "game", players: {...}}`` event (see
+        overlay/README.md). ``name``/``rating`` may be ``null``; overlay.js falls back
+        to "White"/"Black" and a blank rating."""
+        return {
+            "type": "game",
+            "game_id": self.game_id,
+            "players": {
+                "white": {"name": self.white_name, "rating": self.white_elo},
+                "black": {"name": self.black_name, "rating": self.black_elo},
+            },
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -116,6 +193,33 @@ def _parse_elo(headers: chess.pgn.Headers, key: str) -> Optional[int]:
         return int(raw)
     except ValueError:
         return None
+
+
+def _player_name(headers: chess.pgn.Headers, key: str) -> Optional[str]:
+    """Read a player-name header, tolerating ``?`` / blank (anonymous / OTB)."""
+    raw = headers.get(key, "").strip()
+    return raw or None if raw != "?" else None
+
+
+def game_event(
+    headers: chess.pgn.Headers,
+    game_id: str,
+    *,
+    white_elo: Optional[int] = None,
+    black_elo: Optional[int] = None,
+) -> GameEvent:
+    """Build the one-time :class:`GameEvent` for a game from its PGN headers.
+
+    An explicit ``white_elo``/``black_elo`` (the ingestor's override) wins over the
+    header so the announced ratings match the ones the trackers actually evaluate at.
+    """
+    return GameEvent(
+        game_id=game_id,
+        white_name=_player_name(headers, "White"),
+        black_name=_player_name(headers, "Black"),
+        white_elo=white_elo if white_elo is not None else _parse_elo(headers, "WhiteElo"),
+        black_elo=black_elo if black_elo is not None else _parse_elo(headers, "BlackElo"),
+    )
 
 
 def _game_id(headers: chess.pgn.Headers, fallback: int) -> str:
@@ -216,8 +320,16 @@ class GameTracker:
             san = node.parent.board().san(node.move)
             fen = node.board().fen()
             t0 = time.perf_counter()
-            equity_white = self._equity_white(fen, white_elo, black_elo)
+            equity = self.model.evaluate(fen, white_elo, black_elo)
             compute_ms = (time.perf_counter() - t0) * 1000.0
+            equity_white = equity.equity_white
+            # ``equity.cp`` is side-to-move POV; ``fen`` is post-move, so the side to
+            # move is the mover's opponent. Flip to White POV to match equity_white.
+            cp = (
+                None
+                if equity.cp is None
+                else (equity.cp if not mover_white else -equity.cp)
+            )
 
             # Δequity from the mover's POV: White reads equity_white directly, Black
             # reads its complement.
@@ -242,6 +354,7 @@ class GameTracker:
                     last_move_grade=grade_delta(delta),
                     source=self.model.__class__.__name__,
                     compute_ms=compute_ms,
+                    cp=cp,
                     resync=resync,
                 )
             )
@@ -420,6 +533,12 @@ class BroadcastIngestor:
         self.black_elo = black_elo
         self._trackers: Dict[str, GameTracker] = {}
         self.stats = IngestStats()
+        # Fired once per game, the first time it is seen, with its :class:`GameEvent`
+        # (overlay "game" metadata). Optional so the MoveEvent stream is unchanged when
+        # a caller doesn't care (e.g. the existing tests). The CLI wires it to emit the
+        # game line before that game's moves.
+        self.on_game: Optional[Callable[["GameEvent"], None]] = None
+        self._announced: set[str] = set()
 
     def _tracker_for(self, game_id: str) -> GameTracker:
         tracker = self._trackers.get(game_id)
@@ -441,6 +560,14 @@ class BroadcastIngestor:
             if headers is None:
                 continue
             gid = _game_id(headers, index)
+            if gid not in self._announced:
+                self._announced.add(gid)
+                if self.on_game is not None:
+                    self.on_game(
+                        game_event(
+                            headers, gid, white_elo=self.white_elo, black_elo=self.black_elo
+                        )
+                    )
             new = self._tracker_for(gid).ingest(game_pgn)
             events.extend(new)
         for ev in events:

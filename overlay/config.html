@@ -122,6 +122,37 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
 
+  // Every form field, so persistence covers exactly what build() reads.
+  var FIELDS = ["feed","round","custom","welo","belo","layout","theme","cp","cpbar","caster"];
+  var CHECKS = { cp: true, cpbar: true, caster: true };
+  var STORE_KEY = "chess-equity-overlay-config";
+
+  // Persist the setup across reloads — an OBS browser-source reload otherwise loses
+  // every choice. Wrapped in try/catch because storage can be disabled (file://, OBS).
+  function save() {
+    try {
+      var state = {};
+      FIELDS.forEach(function (id) {
+        var el = $(id);
+        state[id] = CHECKS[id] ? el.checked : el.value;
+      });
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    } catch (e) { /* storage unavailable — setup just won't persist */ }
+  }
+
+  function restore() {
+    var state;
+    try { state = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); }
+    catch (e) { state = null; }
+    if (!state) return;
+    FIELDS.forEach(function (id) {
+      if (!(id in state)) return;
+      var el = $(id);
+      if (CHECKS[id]) el.checked = !!state[id];
+      else el.value = state[id];
+    });
+  }
+
   function build() {
     var feed = $("feed").value;
     var roundWrap = $("roundWrap"), customWrap = $("customWrap"), cmdWrap = $("cmdWrap");
@@ -162,12 +193,12 @@
     }
   }
 
-  ["feed","round","custom","welo","belo","layout","theme","cp","cpbar","caster"]
-    .forEach(function (id) {
-      var el = $(id);
-      el.addEventListener("input", build);
-      el.addEventListener("change", build);
-    });
+  function onChange() { save(); build(); }
+  FIELDS.forEach(function (id) {
+    var el = $(id);
+    el.addEventListener("input", onChange);
+    el.addEventListener("change", onChange);
+  });
 
   $("copy").addEventListener("click", function () {
     var txt = $("url").textContent;
@@ -176,6 +207,7 @@
     setTimeout(function () { b.textContent = old; }, 1200);
   });
 
+  restore();   // rehydrate the saved setup before the first render
   build();
 })();
 </script>

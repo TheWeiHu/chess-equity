@@ -40,6 +40,8 @@ to **prove** it predicts real outcomes better than the centipawn bar.
 uv sync --extra dev      # python-chess + pytest in .venv
 ```
 
+That covers the core CLI, tests, and CI.
+
 The classic centipawn bar we compare against is a real engine eval, not a material
 count. The objective engine is **Stockfish** (open source, a small local UCI binary
 that `python-chess` drives); install it to get real centipawns:
@@ -53,6 +55,11 @@ export STOCKFISH_PATH=/path/...  # or point at any UCI binary
 raises a clear hint rather than silently falling back to material. Tests stay
 engine-free via an injectable backend, so `uv run pytest` needs no binary. (The bar
 still defaults to the material placeholder until Stockfish is wired in as the default.)
+
+Anything beyond `uv sync --extra dev` — the Stockfish binary, the `data`/`maia2`/`plots`
+extras, a Lichess dump, Maia-2 weights, network access — is opt-in per task and
+catalogued in **[DEPENDENCIES.md](DEPENDENCIES.md)**: one row per external requirement
+with its install command, which tasks need it, and whether CI needs it (it never should).
 
 ## Use
 
@@ -71,17 +78,25 @@ uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move eq
 `grade` scores a move by the change in the **mover's** equity against what their
 rating-peers were expected to play, so a strong move can read **positive** (the classic
 centipawn-loss grade is capped at 0). `broadcast` emits one JSON event per move for live
-feeds and the OBS overlay (`overlay/`).
+feeds and the OBS overlay (`overlay/`) — point it at a live Lichess broadcast round and
+into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs).
 
 ## Web demo
 
 **Live:** https://theweihu.github.io/chess-equity/
 
-A static, dependency-free page that puts the equity bar next to the classic centipawn
-bar and lets you drag both players' rating sliders — *move a slider and the equity bar
-moves while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
+A static, dependency-free page that puts the equity bar next to a centipawn bar and
+lets you drag both players' rating sliders — *move a slider and the equity bar moves
+while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
 "sacrifice" tanks the material count while it is in fact a forced mate, so the move is
 **green on equity but red on centipawns**.
+
+The committed demo's centipawn bar is a deliberately **shallow material count**, not the
+deep engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
+contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games;
+see [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md)).
+The project's actual *"equity beats centipawns"* claim is the validation gate below,
+which compares equity against the **real, rating-blind Stockfish** eval — not this demo.
 
 ```bash
 python3 -m http.server -d web 8000     # then open http://localhost:8000
@@ -100,7 +115,7 @@ Every model plugs in behind one `EquityModel` interface; pick with `--model`:
 |-----------|------------|
 | `baseline` *(default)* | Rating-blind Lichess Win% over the objective engine eval (material placeholder until Stockfish is the default). Zero heavy deps — the thing to beat. |
 | `maia2` | The real rating-conditioned bar: [Maia-2](https://github.com/CSSLab/maia2)'s value head, trained on real Lichess outcomes. `pip install maia2` (pulls torch; checkpoint downloads on first use). |
-| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. `chess-equity train` fits it. |
+| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. The shipped artifact is fit on **50k real Lichess positions** (`n_train=50000`); re-fit it with `chess-equity train`. |
 | `maia-rollout` | Slow ground-truth oracle: play the position out, both sides erring like their rating, average `--n` rollouts (with a 95% CI). |
 | `maia-search` | Maia-weighted expectimax to a fixed `--depth`/`--k`. |
 
@@ -128,6 +143,29 @@ uv run chess-equity validate --data data/dataset.csv --models baseline,wdl-a --h
 
 A small fixture under `data/sample/` lets tests and demos run with no download — its
 numbers are a smoke test, not evidence (real evidence needs a real dump).
+
+### Does equity beat centipawns?
+
+"Beats centipawns" has a precise meaning here: a rating-conditioned predictor beats a
+**rating-blind OBJECTIVE eval** (real Stockfish) at predicting **actual human outcomes**
+— i.e. in *practical* terms. It is **not** a claim about out-tactic-ing a deep engine on
+forced lines: a deep engine is right about the board, but blind to *this* player against
+*that* one. (The web demo's material bar is a separate, shallow teaching foil — see
+[docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md).)
+
+The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
+a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
+baseline on log-loss *and* Brier?) followed by a **head-to-head "where equity wins"** table
+that ranks slices by the baseline-minus-model log-loss gap. On the sample, rating-conditioned
+equity (`wdl-a`) wins most in the lower rating band — exactly where the rating-blind bar is most
+wrong — though the 15-row numbers are illustrative only, not proof. Regenerate it with:
+
+```bash
+uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md
+```
+
+Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is captured
+step-by-step in **[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
 
 ## Architecture
 

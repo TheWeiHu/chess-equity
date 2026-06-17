@@ -11,9 +11,11 @@ from chess_equity.broadcast import (
     BroadcastFeed,
     BroadcastIngestor,
     FeedError,
+    GameEvent,
     GameTracker,
     LocalPgnFeed,
     MoveEvent,
+    game_event,
     grade_delta,
     split_games,
 )
@@ -273,6 +275,115 @@ class _OneShotFeed(BroadcastFeed):
             return None
         self._done = True
         return self._snapshot
+
+
+# --------------------------------------------------------------------------- #
+# GameEvent — player names threaded to the overlay "game" metadata (task 0047)
+# --------------------------------------------------------------------------- #
+
+
+def _headers(pgn):
+    import io
+
+    return chess.pgn.read_headers(io.StringIO(pgn))
+
+
+def test_game_event_parses_names_and_ratings():
+    ge = game_event(_headers(GAME_PGN), "g")
+    assert ge.white_name == "Carlsen" and ge.black_name == "Nakamura"
+    assert ge.white_elo == 2850 and ge.black_elo == 2780
+    players = ge.to_overlay()["players"]
+    assert ge.to_overlay()["type"] == "game"
+    assert players["white"] == {"name": "Carlsen", "rating": 2850}
+    assert players["black"] == {"name": "Nakamura", "rating": 2780}
+
+
+def test_game_event_missing_names_are_none():
+    anon = """[Event "OTB"]
+[White "?"]
+[Black ""]
+[Result "*"]
+
+1. e4 e5 *
+"""
+    ge = game_event(_headers(anon), "g")
+    assert ge.white_name is None and ge.black_name is None
+    # overlay.js falls back to "White"/"Black" on a null name.
+    assert ge.to_overlay()["players"]["white"]["name"] is None
+
+
+def test_game_event_rating_override_wins():
+    ge = game_event(_headers(GAME_PGN), "g", white_elo=1200, black_elo=2400)
+    assert ge.white_elo == 1200 and ge.black_elo == 2400
+
+
+def test_ingestor_emits_game_event_once_with_names_before_moves():
+    feed = LocalPgnFeed(GAME_PGN)
+    ingestor = BroadcastIngestor(feed, _model())
+    games, moves = [], []
+    ingestor.on_game = games.append
+    ingestor.run(moves.append, interval=0.0, sleep=lambda _: None)
+    # Exactly one game event, carrying the PGN's player names.
+    assert len(games) == 1
+    assert isinstance(games[0], GameEvent)
+    assert games[0].white_name == "Carlsen" and games[0].black_name == "Nakamura"
+    # ...and the moves still all stream (game event is additive, not a replacement).
+    assert [e.san for e in moves] == ["e4", "e5", "Nf3", "Nc6"]
+
+
+def test_ingestor_emits_one_game_event_per_game():
+    game2 = GAME_PGN.replace("Carlsen", "Ding").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    feed = _OneShotFeed(GAME_PGN + "\n" + game2)
+    ingestor = BroadcastIngestor(feed, _model())
+    games = []
+    ingestor.on_game = games.append
+    ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
+    names = {g.white_name for g in games}
+    assert names == {"Carlsen", "Ding"}
+
+
+# --------------------------------------------------------------------------- #
+# Drama classifier attached to the overlay event (task 0053)
+# --------------------------------------------------------------------------- #
+
+
+def _move_event(delta_equity, *, equity=60.0, white_clock=120.0):
+    """A MoveEvent with a tunable mover-POV swing (White to have just moved)."""
+    return MoveEvent(
+        game_id="g",
+        ply=10,
+        san="Qxf7",
+        uci="d1f7",
+        fen="8/8/8/8/8/8/8/8 b - - 0 1",
+        white_to_move=False,  # Black to move => White just moved (the mover)
+        white_clock=white_clock,
+        black_clock=120.0,
+        white_elo=1500,
+        black_elo=1500,
+        equity=equity,
+        delta_equity=delta_equity,
+        last_move_grade=grade_delta(delta_equity),
+        source="test",
+        compute_ms=0.0,
+    )
+
+
+def test_overlay_event_attaches_real_drama_on_a_sharp_swing():
+    # A +15pt mover swing is a "clutch" find for chess_equity.drama.
+    event = _move_event(15.0).to_overlay_event()
+    assert "drama" in event
+    drama = event["drama"]
+    assert drama["kind"] == "clutch"
+    assert drama["headline"]  # caster-facing one-liner
+    assert 0.0 <= drama["magnitude"] <= 1.0  # matches overlay.js / test_overlay schema
+
+
+def test_overlay_event_has_no_drama_when_quiet():
+    # A small swing isn't highlight-worthy: no drama payload (overlay won't flare).
+    event = _move_event(1.0).to_overlay_event()
+    assert "drama" not in event
 
 
 def test_move_event_is_json_serializable():

@@ -18,6 +18,7 @@ from chess_equity.validate.harness import (
     baseline_cp,
     evaluate,
     format_report,
+    gate_verdicts,
     rating_band,
 )
 from chess_equity.validate.metrics import (
@@ -129,6 +130,56 @@ def test_format_report_is_markdown():
     assert "## By rating" in md and "## By phase" in md
 
 
+# --- gate verdict (task 0058) --------------------------------------------------
+
+def test_gate_verdict_reflects_computed_deltas():
+    # An "oracle" predictor that nails every outcome strictly beats the baseline on
+    # both log-loss and Brier -> PASS, with deltas equal to oracle - baseline scores.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731 — perfect predictor for the fixture
+    reports = evaluate(rows, {"baseline": baseline_cp, "oracle": oracle})
+    by_name = {r.name: r for r in reports}
+    verdicts = gate_verdicts(reports)
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.name == "oracle"
+    # Deltas are exactly model - baseline on the overall scores.
+    assert isclose(
+        v.log_loss_delta, by_name["oracle"].overall.log_loss - by_name["baseline"].overall.log_loss
+    )
+    assert isclose(
+        v.brier_delta, by_name["oracle"].overall.brier - by_name["baseline"].overall.brier
+    )
+    # Strictly better on both -> PASS.
+    assert v.log_loss_delta < 0 and v.brier_delta < 0
+    assert v.passed is True
+
+
+def test_gate_verdict_fails_when_worse_on_either_metric():
+    # A predictor that is worse than the baseline must FAIL.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0)]
+    worse = lambda r: 1.0 - baseline_cp(r)  # noqa: E731 — inverts the baseline
+    verdicts = gate_verdicts(evaluate(rows, {"baseline": baseline_cp, "worse": worse}))
+    assert len(verdicts) == 1
+    assert verdicts[0].passed is False
+
+
+def test_gate_verdict_empty_without_baseline():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    oracle = lambda r: r.result  # noqa: E731
+    assert gate_verdicts(evaluate(rows, {"oracle": oracle})) == []
+
+
+def test_report_opens_with_gate_verdict():
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "oracle": oracle}))
+    # The verdict is the report's first section, ahead of the metrics tables.
+    assert md.index("## Gate verdict") < md.index("## Overall")
+    assert "oracle" in md and "PASS" in md
+    assert "-> **PASS**" in md
+
+
 def test_runs_on_committed_sample():
     from pathlib import Path
 
@@ -140,8 +191,332 @@ def test_runs_on_committed_sample():
     assert reports[0].overall.n == len(rows) > 0
 
 
+# --- paired-bootstrap CIs on the model-vs-baseline delta (task 0060) -------------
+
+def test_bootstrap_delta_equals_score_difference():
+    # The point delta is exactly mean(model_terms) - mean(baseline_terms), i.e. the
+    # difference of the two metric scores — the bootstrap only adds the interval.
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    model = [0.10, 0.20, 0.30]
+    base = [0.40, 0.40, 0.40]
+    ci = paired_bootstrap_ci(model, base, "brier", n_resamples=200, seed=0)
+    assert isclose(ci.delta, (sum(model) - sum(base)) / 3)
+    assert ci.lo <= ci.delta <= ci.hi  # the point estimate sits inside its own CI
+
+
+def test_bootstrap_verdict_directions():
+    # All per-row deltas strictly negative -> the model is unambiguously better, so the
+    # whole CI clears zero and the verdict is "beats" (and never "worse").
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    better = paired_bootstrap_ci([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], "brier", seed=1)
+    assert better.beats_baseline and not better.worse_than_baseline
+    worse = paired_bootstrap_ci([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], "brier", seed=1)
+    assert worse.worse_than_baseline and not worse.beats_baseline
+
+
+def test_bootstrap_is_seed_deterministic():
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    args = ([0.1, 0.5, 0.2, 0.9], [0.3, 0.3, 0.3, 0.3], "log_loss")
+    a = paired_bootstrap_ci(*args, n_resamples=500, seed=42)
+    b = paired_bootstrap_ci(*args, n_resamples=500, seed=42)
+    assert (a.delta, a.lo, a.hi) == (b.delta, b.lo, b.hi)
+
+
+def test_bootstrap_rejects_bad_input():
+    from chess_equity.validate.bootstrap import paired_bootstrap_ci
+
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci([0.1, 0.2], [0.1], "brier")  # length mismatch
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci([], [], "brier")  # no rows
+
+
+def test_compare_to_baseline_pins_deterministic_cis_on_fen_sample():
+    # Acceptance (0060): seeded CIs are reproducible byte-for-byte on the committed
+    # FEN sample. wdl-a beats the rating-blind baseline on Brier (CI fully below 0);
+    # on only 15 rows the log-loss win is real but not yet significant (CI straddles 0).
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import build_predictors, compare_to_baseline
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    comps = compare_to_baseline(
+        rows, build_predictors(["baseline", "wdl-a"]), n_resamples=2000, seed=0
+    )
+    assert len(comps) == 1 and comps[0].name == "wdl-a" and comps[0].baseline == "baseline"
+    by_metric = {ci.metric: ci for ci in comps[0].cis}
+
+    brier = by_metric["brier"]
+    assert isclose(brier.delta, -0.026506, abs_tol=1e-6)
+    assert isclose(brier.lo, -0.046396, abs_tol=1e-6)
+    assert isclose(brier.hi, -0.005976, abs_tol=1e-6)
+    assert brier.beats_baseline  # whole CI below zero
+
+    ll = by_metric["log_loss"]
+    assert isclose(ll.delta, -0.038490, abs_tol=1e-6)
+    assert isclose(ll.lo, -0.088755, abs_tol=1e-6)
+    assert isclose(ll.hi, 0.020267, abs_tol=1e-6)
+    assert not ll.beats_baseline  # better on average, but CI straddles zero
+
+
+def test_compare_to_baseline_empty_without_a_second_predictor():
+    from chess_equity.validate.harness import compare_to_baseline
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    assert compare_to_baseline(rows, {"baseline": baseline_cp}) == []
+
+
+def test_validate_cli_emits_significance_section(tmp_path, capsys):
+    # End-to-end: the validate command appends the paired-bootstrap section and labels
+    # a CI-clears-zero win as "beats".
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        [
+            "validate",
+            "--data",
+            str(sample),
+            "--models",
+            "baseline,wdl-a",
+            "--bootstrap",
+            "300",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text()
+    assert "## Significance vs baseline" in text
+    assert "| wdl-a | brier |" in text and "beats" in text
+
+
+def test_validate_cli_bootstrap_zero_disables_section(tmp_path, capsys):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline,wdl-a",
+         "--bootstrap", "0", "--out", str(out)]
+    )
+    assert rc == 0
+    assert "Significance vs baseline" not in out.read_text()
+
+
+# --- bin-resampling CI on ECE / calibration (task 0072) --------------------------
+
+def test_ece_bootstrap_ci_brackets_the_point_ece():
+    # The point ECE must sit inside its own CI, and the CI must be byte-reproducible
+    # under a fixed seed. A predictor off by 0.1 in every bin has point ECE 0.1.
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    args = ([0.1, 0.1, 0.9, 0.9], [0.0, 0.0, 1.0, 1.0])
+    a = ece_bootstrap_ci(*args, n_resamples=500, seed=42)
+    b = ece_bootstrap_ci(*args, n_resamples=500, seed=42)
+    assert a == b  # seed-deterministic, frozen dataclass equality
+    assert isclose(a.ece, 0.1, abs_tol=1e-9)
+    assert a.lo <= a.ece <= a.hi
+    assert a.delta is None and a.delta_lo is None  # no baseline given
+
+
+def test_ece_bootstrap_paired_delta_directions():
+    # Perfectly calibrated model (pred == label, ECE 0) vs a systematically over-confident
+    # baseline (always predicts 0.9 on a 50/50 outcome, so its bin mean is off by >=0.1 in
+    # every resample): the paired ECE delta (model - baseline) is negative and the whole
+    # CI clears zero -> beats. Note 0.5-everywhere would NOT work — ECE measures
+    # calibration, not sharpness, so a 0.5 bin on 50/50 labels is "calibrated" (ECE 0).
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    preds = [0.0, 0.0, 1.0, 1.0]
+    labels = [0.0, 0.0, 1.0, 1.0]
+    base = [0.9, 0.9, 0.9, 0.9]
+    ci = ece_bootstrap_ci(preds, labels, baseline_preds=base, n_resamples=500, seed=1)
+    assert ci.delta is not None and ci.delta < 0.0
+    assert ci.beats_baseline and not ci.worse_than_baseline
+    # swap roles: the miscalibrated predictor is significantly worse.
+    worse = ece_bootstrap_ci(base, labels, baseline_preds=preds, n_resamples=500, seed=1)
+    assert worse.worse_than_baseline and not worse.beats_baseline
+
+
+def test_ece_bootstrap_rejects_bad_input():
+    from chess_equity.validate.bootstrap import ece_bootstrap_ci
+
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([0.1, 0.2], [0.1])  # preds/labels length mismatch
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([], [])  # no rows
+    with pytest.raises(ValueError):
+        ece_bootstrap_ci([0.1, 0.2], [0.0, 1.0], baseline_preds=[0.1])  # baseline mismatch
+
+
+def test_compare_ece_pins_deterministic_cis_on_fen_sample():
+    # Acceptance (0072): seeded ECE CIs are reproducible byte-for-byte on the committed
+    # FEN sample. This is a reproducibility pin, not a calibration claim: on this 15-row
+    # smoke fixture wdl-a's point ECE sits just above the rating-blind baseline and the
+    # delta CI straddles zero -> not significant either way. (On the real 50k dataset
+    # wdl-a is the better-calibrated model; the tiny fixture is not evidence.)
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import build_predictors, compare_ece_to_baseline
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    cis = compare_ece_to_baseline(
+        rows, build_predictors(["baseline", "wdl-a"]), n_resamples=2000, seed=0
+    )
+    by_name = {c.predictor: c for c in cis}
+    assert set(by_name) == {"baseline", "wdl-a"}
+
+    base = by_name["baseline"]
+    assert isclose(base.ece, 0.218315, abs_tol=1e-6)
+    assert isclose(base.lo, 0.090494, abs_tol=1e-6)
+    assert isclose(base.hi, 0.346437, abs_tol=1e-6)
+    assert base.delta is None  # baseline has no delta vs itself
+
+    wdl = by_name["wdl-a"]
+    assert isclose(wdl.ece, 0.236108, abs_tol=1e-6)
+    assert isclose(wdl.lo, 0.157331, abs_tol=1e-6)
+    assert isclose(wdl.hi, 0.317493, abs_tol=1e-6)
+    assert wdl.delta is not None and wdl.delta_lo is not None and wdl.delta_hi is not None
+    assert isclose(wdl.delta, 0.017793, abs_tol=1e-6)
+    assert isclose(wdl.delta_lo, -0.028163, abs_tol=1e-6)
+    assert isclose(wdl.delta_hi, 0.065198, abs_tol=1e-6)
+    assert not wdl.beats_baseline  # delta CI straddles zero -> not significant
+
+
+def test_validate_cli_emits_ece_ci_section(tmp_path):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    out = tmp_path / "report.md"
+    rc = main(
+        ["validate", "--data", str(sample), "--models", "baseline,wdl-a",
+         "--bootstrap", "300", "--out", str(out)]
+    )
+    assert rc == 0
+    text = out.read_text()
+    assert "## Calibration (ECE) confidence intervals" in text
+    assert "| wdl-a |" in text and "Δ vs baseline" in text
+
+
 def test_baseline_registered():
     assert "baseline" in PREDICTORS
+
+
+def test_report_on_sample_has_gate_and_head_to_head_sections():
+    """Regenerating the gate report on the committed sample yields the two headline
+    sections — the thesis evidence the ``reports/`` artifact captures (task 0063).
+
+    Guards the wiring/format, not the numbers (the 15-row sample is meaningless): a
+    baseline + rating-conditioned challenger must always render a Gate verdict and a
+    Head-to-head "where equity wins" section so the committed artifact can't silently
+    lose them when the harness evolves.
+    """
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    rows = load_rows(str(sample))
+    md = format_report(evaluate(rows, {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}))
+    assert md.strip(), "report must be non-empty"
+    assert "## Gate verdict" in md
+    assert "## Head-to-head: where equity wins" in md
+
+    # The checked-in evidence artifact must carry the same two sections (so a stale
+    # commit predating these sections fails CI). Section-presence only — not a byte diff.
+    committed = Path(__file__).resolve().parents[1] / "reports" / "validation_sample.md"
+    text = committed.read_text(encoding="utf-8")
+    assert "## Gate verdict" in text and "## Head-to-head: where equity wins" in text
+
+
+# --- head-to-head: where equity wins (task 0059) -------------------------------
+
+def test_head_to_head_sign_convention_and_ranking():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    # Baseline is rating-blind; the "model" predicts the actual result perfectly, so it
+    # must win (Δ > 0) in every slice and overall.
+    rows = [
+        _row(cp=0, we=1000, be=1000, phase="opening", result=1.0),
+        _row(cp=0, we=2500, be=2500, phase="endgame", result=0.0),
+    ]
+    reports = evaluate(
+        rows,
+        {"baseline": baseline_cp, "model": lambda r: r.result},
+    )
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None
+    assert h2h.baseline == "baseline" and h2h.model == "model"
+    # The oracle beats the rating-blind baseline everywhere.
+    assert h2h.overall_delta > 0
+    assert all(d.delta > 0 for d in h2h.slices), "oracle must win every slice (Δ > 0)"
+    # Both rating bands and both phases appear as slices.
+    assert {(d.slicer, d.value) for d in h2h.slices} >= {
+        ("rating", "<1200"),
+        ("rating", "2400+"),
+        ("phase", "opening"),
+        ("phase", "endgame"),
+    }
+    # Δ is the baseline-minus-model log-loss for that slice.
+    d0 = h2h.slices[0]
+    assert isclose(d0.delta, d0.baseline_log_loss - d0.model_log_loss)
+    # Sorted biggest-win-first.
+    assert [d.delta for d in h2h.slices] == sorted((d.delta for d in h2h.slices), reverse=True)
+
+
+def test_head_to_head_needs_a_challenger():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    # Baseline only -> nothing to compare against.
+    assert head_to_head_deltas(evaluate(rows, {"baseline": baseline_cp})) is None
+    # No predictor named "baseline" -> no reference.
+    assert head_to_head_deltas(evaluate(rows, {"model": lambda r: r.result})) is None
+
+
+def test_format_report_includes_head_to_head_section():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
+    assert "## Head-to-head: where equity wins" in md
+    assert "Δ > 0 means equity wins" in md
+    # Single-predictor reports omit the section.
+    solo = format_report(evaluate(rows, {"baseline": baseline_cp}))
+    assert "Head-to-head" not in solo
+
+
+def test_head_to_head_on_committed_sample():
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    rows = load_rows(str(sample))
+    # wdl-a is a rating-conditioned model; compare it head-to-head against the baseline.
+    reports = evaluate(rows, {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]})
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None and h2h.slices, "sample must yield at least one slice"
+    # Every slice's Δ is exactly baseline-minus-model log-loss on that slice (sign convention).
+    for d in h2h.slices:
+        assert isclose(d.delta, d.baseline_log_loss - d.model_log_loss)
+        assert d.n > 0
+    # The rating slicer is among the reported slices (the thesis's headline axis).
+    assert any(d.slicer == "rating" for d in h2h.slices)
 
 
 # --- board-model predictor (task 0029) -----------------------------------------
@@ -267,6 +642,37 @@ def test_validate_cli_scores_maia2_against_baseline(tmp_path, monkeypatch, capsy
     assert "baseline" in out and "maia2" in out
 
 
+def test_validate_cli_scores_maia2_on_committed_fen_sample(monkeypatch, capsys):
+    """Runbook step-3 smoke: `validate --models maia2` end-to-end on the committed
+    ``data/sample/dataset_fen.csv`` via the injectable fake backend (no torch/weights).
+
+    The attended runbook scores ``baseline,wdl-a,maia2``, but the maia2 column only has
+    real numbers with torch+weights — so the *plumbing* (committed FEN fixture ->
+    Maia2Equity -> metrics) can rot silently in the sandbox. This drives it on the
+    checked-in fixture (not a freshly-built dataset) and asserts maia2 yields a scored
+    column, so a fixture that loses its FENs or broken maia2 wiring fails CI loudly.
+    """
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+
+    rc = main(["validate", "--data", str(sample), "--models", "maia2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The Overall table must carry a maia2 row with a real (parseable) numeric log-loss
+    # and a positive n — i.e. the column was actually scored, not just named.
+    maia2_rows = [ln for ln in out.splitlines() if ln.strip().startswith("| maia2 |")]
+    assert maia2_rows, "maia2 must appear as a scored row in the report"
+    cells = [c.strip() for c in maia2_rows[0].strip("|").split("|")]
+    # | maia2 | n | log-loss | Brier | ECE |
+    assert int(cells[1]) > 0  # n scored rows
+    assert float(cells[2]) >= 0.0  # finite, parseable log-loss
+
+
 def test_validate_cli_maia2_needs_fen(tmp_path, monkeypatch, capsys):
     """A FEN-less dataset makes the maia2 predictor fail with a clean error, not a trace."""
     from pathlib import Path
@@ -332,3 +738,92 @@ def test_validate_cli_scores_maia_search_against_baseline(tmp_path, monkeypatch,
     assert rc == 0
     out = capsys.readouterr().out
     assert "baseline" in out and "maia-search" in out
+
+
+# --- runbook CLI smoke (task 0061) ---------------------------------------------
+
+def test_runbook_validate_cli_end_to_end(tmp_path, capsys):
+    """Drive the documented runbook command path end to end on the committed fixture.
+
+    Mirrors docs/validation-proof-runbook.md's smoke command — the dependency-free
+    `baseline,wdl-a` gate with a game-level holdout — plus the `--out`/`--calibration`
+    artifact flags. Guards the real CLI invocation: a broken flag, a renamed report
+    section, or a dropped metric column fails here before the attended multi-GB run.
+    """
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    data = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    report = tmp_path / "validation-report.md"
+    calibration = tmp_path / "validation-calibration.md"
+
+    rc = main(
+        [
+            "validate",
+            "--data", str(data),
+            "--models", "baseline,wdl-a",
+            "--holdout", "0.5",
+            "--seed", "0",
+            "--out", str(report),
+            "--calibration", str(calibration),
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"wrote {report}" in out and f"wrote {calibration}" in out
+
+    # The report opens with the gate verdict and carries the metric table columns.
+    report_text = report.read_text(encoding="utf-8")
+    assert report_text.startswith("# Validation report")
+    assert "held-out test:" in report_text  # the --holdout split annotation
+    for section in ("## Gate verdict", "## Overall", "## By rating", "## By phase"):
+        assert section in report_text
+    assert "| predictor | n | log-loss | Brier | ECE |" in report_text
+    assert "wdl-a" in report_text and "baseline" in report_text
+
+    # The calibration artifact carries its per-band reliability table.
+    cal_text = calibration.read_text(encoding="utf-8")
+    assert cal_text.startswith("# Calibration by rating band")
+    assert "ECE by rating band" in cal_text
+
+
+# --- tunable ECE bin count (task 0079) -------------------------------------------
+
+def test_evaluate_threads_ece_bins():
+    # preds sit in two extreme bins (0.1, 0.9), each off the true rate by 0.1.
+    rows = [
+        _row(cp=0.1, result=0.0),
+        _row(cp=0.1, result=0.0),
+        _row(cp=0.9, result=1.0),
+        _row(cp=0.9, result=1.0),
+    ]
+    pred = {"p": lambda r: r.cp_eval}
+    # Default (10 bins): each non-empty bin is off by 0.1 -> ECE 0.1 (behaviour unchanged).
+    assert isclose(evaluate(rows, pred)[0].overall.ece, 0.1, abs_tol=1e-9)
+    # One bin collapses everything: mean_pred 0.5 == mean_label 0.5 -> ECE 0.
+    assert isclose(evaluate(rows, pred, bins=1)[0].overall.ece, 0.0, abs_tol=1e-9)
+
+
+def test_validate_cli_ece_bins_changes_binning(tmp_path):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+
+    def _ece(bins):
+        out = tmp_path / f"r{bins}.md"
+        rc = main(
+            ["validate", "--data", str(sample), "--models", "baseline",
+             "--bootstrap", "0", "--ece-bins", str(bins), "--out", str(out)]
+        )
+        assert rc == 0
+        for line in out.read_text().splitlines():
+            if line.startswith("| baseline |"):
+                return line
+        raise AssertionError("no baseline metrics row in report")
+
+    # The default (10) is exercised elsewhere; here two different bin counts must move
+    # the ECE column, proving --ece-bins threads all the way through.
+    assert _ece(2) != _ece(5)
