@@ -249,6 +249,14 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     """
     model = _apply_profiles(model, args)
 
+    # Objective engine for the centipawn fallback when the model carries no cp (e.g.
+    # maia2 win-prob): keeps the overlay's classic ghost tick + human-edge divergence
+    # badge alive on a maia2 feed (task 0103). Only consulted for cp-less models, so
+    # warn=False — the model's own bar already warns when no engine is available.
+    from chess_equity.stockfish import resolve_objective_engine
+
+    cp_engine = resolve_objective_engine(depth=args.depth, warn=False)
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -265,6 +273,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 white_elo=args.white_elo,
                 black_elo=args.black_elo,
                 clock_aware=args.clock_aware,
+                engine=cp_engine,
             )
             return overlay_events(
                 ingestor,
@@ -289,6 +298,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         white_elo=args.white_elo,
         black_elo=args.black_elo,
         clock_aware=args.clock_aware,
+        engine=cp_engine,
     )
 
     def emit(event: MoveEvent) -> None:

@@ -45,7 +45,7 @@ from typing import Callable, Dict, Iterator, List, Optional
 import chess
 import chess.pgn
 
-from chess_equity.adapters import EquityModel
+from chess_equity.adapters import EquityModel, ObjectiveEngine
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import tc_bucket
 
@@ -269,6 +269,7 @@ class GameTracker:
         white_elo: Optional[int],
         black_elo: Optional[int],
         clock_aware: bool = True,
+        engine: Optional[ObjectiveEngine] = None,
     ) -> None:
         self.game_id = game_id
         self.model = model
@@ -279,6 +280,11 @@ class GameTracker:
         # header on first ingest. None until then; missing/unknown -> "correspondence",
         # whose flag multiplier is 0, so the warp is a safe no-op.
         self.tc_bucket: Optional[str] = None
+        # Optional objective engine to fill the centipawn eval when the equity model
+        # exposes none (e.g. Maia-2's win-prob has no cp), so the overlay's classic
+        # ghost tick + human-edge divergence badge work on a maia2 feed (task 0103).
+        # Only consulted when ``equity.cp is None``; models that carry cp are untouched.
+        self.engine = engine
         self.emitted_ply = 0
 
     def _elos(self) -> tuple[int, int]:
@@ -339,13 +345,7 @@ class GameTracker:
             equity = self.model.evaluate(fen, white_elo, black_elo)
             compute_ms = (time.perf_counter() - t0) * 1000.0
             equity_white = equity.equity_white
-            # ``equity.cp`` is side-to-move POV; ``fen`` is post-move, so the side to
-            # move is the mover's opponent. Flip to White POV to match equity_white.
-            cp = (
-                None
-                if equity.cp is None
-                else (equity.cp if not mover_white else -equity.cp)
-            )
+            cp = self._white_pov_cp(equity, fen, mover_white)
 
             # Δequity from the mover's POV: White reads equity_white directly, Black
             # reads its complement. The delta is computed on the *raw* model equity (a
@@ -415,6 +415,23 @@ class GameTracker:
             equity_white / 100.0, stm_clock, self.tc_bucket, white_to_move=stm_white
         )
         return adjusted * 100.0
+
+    def _white_pov_cp(self, equity, fen: str, mover_white: bool) -> Optional[float]:
+        """The classic centipawn eval for ``fen``, from White's POV (matches equity).
+
+        Prefer the equity model's own ``cp``; when it has none (e.g. Maia-2's win-prob
+        model) fall back to the optional objective ``engine`` so the overlay's cp ghost
+        tick + divergence badge still work (task 0103). Both the model cp and the engine
+        eval are *side-to-move* POV of the post-move ``fen`` (whose side to move is the
+        mover's opponent), so the flip to White POV is the same for either source. A mate
+        (engine returns ``cp=None``) stays ``None`` — the overlay then hides the tick.
+        """
+        cp_stm = equity.cp
+        if cp_stm is None and self.engine is not None:
+            cp_stm = self.engine.eval(fen).cp
+        if cp_stm is None:
+            return None
+        return cp_stm if not mover_white else -cp_stm
 
 
 # --------------------------------------------------------------------------- #
@@ -577,12 +594,16 @@ class BroadcastIngestor:
         white_elo: Optional[int] = None,
         black_elo: Optional[int] = None,
         clock_aware: bool = True,
+        engine: Optional[ObjectiveEngine] = None,
     ) -> None:
         self.feed = feed
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
         self.clock_aware = clock_aware
+        # Objective engine for the cp fallback on cp-less models (task 0103); threaded
+        # to every per-game tracker.
+        self.engine = engine
         self._trackers: Dict[str, GameTracker] = {}
         self.stats = IngestStats()
         # Fired once per game, the first time it is seen, with its :class:`GameEvent`
@@ -601,6 +622,7 @@ class BroadcastIngestor:
                 white_elo=self.white_elo,
                 black_elo=self.black_elo,
                 clock_aware=self.clock_aware,
+                engine=self.engine,
             )
             self._trackers[game_id] = tracker
         return tracker
