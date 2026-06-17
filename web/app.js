@@ -150,6 +150,25 @@
     if (preview) preview.hidden = true;
   }
 
+  // Position the (already-shown) preview for a tap or a keyboard focus — touch/keyboard
+  // users have no moving pointer, so place it from the tap's coordinates when present,
+  // else next to the focused dot. Mouse hover keeps using movePreview, untouched.
+  function placePreview(ev, el) {
+    var preview = $("board-preview");
+    if (!preview || preview.hidden) return;
+    var x, y;
+    if (ev && ev.clientX != null) {
+      x = ev.clientX; y = ev.clientY;
+    } else if (el && el.getBoundingClientRect) {
+      var r = el.getBoundingClientRect();
+      x = r.left; y = r.bottom;
+    } else {
+      return;
+    }
+    preview.style.left = x + 16 + "px";
+    preview.style.top = y + 16 + "px";
+  }
+
   // ---- bars ----------------------------------------------------------------
 
   function renderBars() {
@@ -225,6 +244,13 @@
       dot.addEventListener("mouseenter", function () { showPreview(p.ply); });
       dot.addEventListener("mousemove", movePreview);
       dot.addEventListener("mouseleave", hidePreview);
+      // Touch + keyboard parity (task 0101): tap pops the preview at the tap point, and
+      // making the dot focusable lets tab-through reveal it; dismissal is wired globally
+      // (outside tap / Escape) plus blur here. Mouse hover above is unchanged.
+      dot.setAttribute("tabindex", "0");
+      dot.addEventListener("click", function (ev) { showPreview(p.ply); placePreview(ev, dot); });
+      dot.addEventListener("focus", function () { showPreview(p.ply); placePreview(null, dot); });
+      dot.addEventListener("blur", hidePreview);
       svg.appendChild(dot);
     });
   }
@@ -314,6 +340,15 @@
     document.addEventListener("keydown", function (e) {
       if (e.key === "ArrowLeft") goto(state.ply - 1);
       if (e.key === "ArrowRight") goto(state.ply + 1);
+      if (e.key === "Escape") hidePreview();  // dismiss the tap/focus preview (task 0101)
+    });
+    // Dismiss the preview on a tap/click outside any chart dot. A dot's own click fires
+    // first (showing the preview) and this bubbles after; ignore taps on a chart dot so
+    // they don't immediately re-hide it.
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      var onDot = t && t.classList && t.classList.contains && t.classList.contains("chart-dot");
+      if (!onDot) hidePreview();
     });
     render();
   }
