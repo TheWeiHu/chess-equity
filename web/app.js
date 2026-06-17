@@ -32,6 +32,21 @@
     return move.equity[key];
   }
 
+  // Place the floating board-preview near the cursor without spilling off-screen.
+  // Default is cursor + `off`; if that would overflow the right/bottom viewport edge,
+  // flip the box to the other side of the cursor, then clamp so it never leaves the
+  // top/left. `vw`/`vh` of 0 (no measurement available) means "don't clamp" — the
+  // plain cursor+off placement, the historical behaviour. Pure → unit-testable.
+  function clampPreviewPos(cx, cy, w, h, vw, vh, off) {
+    var left = cx + off;
+    if (vw && left + w + off > vw) left = cx - off - w;
+    if (vw && left < off) left = off;
+    var top = cy + off;
+    if (vh && top + h + off > vh) top = cy - off - h;
+    if (vh && top < off) top = off;
+    return { left: left, top: top };
+  }
+
   // Geometry for the across-the-game chart: equity (rating-conditioned) vs the classic
   // centipawn bar, both as White win% per ply. Pure (no DOM) so it is unit-testable;
   // renderChart() turns it into SVG. Y is flipped (0% at the bottom).
@@ -119,8 +134,15 @@
   function movePreview(ev) {
     var preview = $("board-preview");
     if (!preview || preview.hidden) return;
-    preview.style.left = ev.clientX + 16 + "px";
-    preview.style.top = ev.clientY + 16 + "px";
+    var rect = preview.getBoundingClientRect ? preview.getBoundingClientRect() : null;
+    var pos = clampPreviewPos(
+      ev.clientX, ev.clientY,
+      rect ? rect.width : 0, rect ? rect.height : 0,
+      window.innerWidth || 0, window.innerHeight || 0,
+      16
+    );
+    preview.style.left = pos.left + "px";
+    preview.style.top = pos.top + "px";
   }
 
   function hidePreview() {
@@ -349,6 +371,6 @@
   // Expose pure helpers for testing.
   window.ChessEquityDemo = {
     cpToWhite: cpToWhite, nearestBand: nearestBand, equityAt: equityAt,
-    chartGeometry: chartGeometry,
+    chartGeometry: chartGeometry, clampPreviewPos: clampPreviewPos,
   };
 })();

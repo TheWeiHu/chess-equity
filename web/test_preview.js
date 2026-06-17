@@ -132,6 +132,27 @@ check("mousemove repositions the floating preview", () => {
   assert.strictEqual(preview.style.top, "96px");
 });
 
+check("preview flips to the other side of the cursor near the right/bottom edge", () => {
+  // 200x200 viewport, 160x160 preview, 16px offset. At cursor (190,190) the default
+  // cursor+offset would put it at 206 — off-screen — so it must flip to the left/above:
+  // 190 - 16 - 160 = 14 (>= the 16px min? no -> clamped to 16).
+  const pos = sandbox.window.ChessEquityDemo.clampPreviewPos(190, 190, 160, 160, 200, 200, 16);
+  assert.ok(pos.left + 160 <= 200, "preview right edge must stay within the viewport");
+  assert.ok(pos.top + 160 <= 200, "preview bottom edge must stay within the viewport");
+  assert.ok(pos.left >= 16 && pos.top >= 16, "preview must not spill off the top/left");
+});
+
+check("preview keeps the plain cursor+offset placement when there is room", () => {
+  // With room (or no viewport measurement), it stays at cursor + 16 — the old behaviour.
+  // (Compare fields, not the object: it crosses the vm realm so its prototype differs.)
+  const roomy = sandbox.window.ChessEquityDemo.clampPreviewPos(100, 80, 160, 160, 1000, 800, 16);
+  assert.strictEqual(roomy.left, 116);
+  assert.strictEqual(roomy.top, 96);
+  const unmeasured = sandbox.window.ChessEquityDemo.clampPreviewPos(100, 80, 0, 0, 0, 0, 16);
+  assert.strictEqual(unmeasured.left, 116);
+  assert.strictEqual(unmeasured.top, 96);
+});
+
 check("mouseleave hides the preview again", () => {
   dots[5].dispatchEvent({ type: "mouseleave" });
   assert.strictEqual(preview.hidden, true);
