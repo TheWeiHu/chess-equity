@@ -129,3 +129,17 @@ footer code { color: var(--ink); }
 .chart-dot { fill: var(--accent); opacity: 0.45; cursor: pointer; }
 .chart-dot:hover { opacity: 1; }
 .chart-dot.current { fill: var(--white-eq); opacity: 1; }
+
+/* hover board preview (task 0078): a small floating board following the cursor */
+.board-preview {
+  position: fixed; z-index: 10; pointer-events: none;
+  background: var(--panel); border: 1px solid #2c3038; border-radius: 6px;
+  padding: 0.4rem; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+}
+.board-preview[hidden] { display: none; }
+.preview-caption {
+  font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem;
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+.board.mini { width: 160px; height: 160px; border-width: 1px; }
+.board.mini .sq { font-size: 14px; }
