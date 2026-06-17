@@ -55,6 +55,28 @@ interface; the regression baseline (0004) lands the same way.
 uv sync --extra dev      # creates .venv with python-chess + pytest
 ```
 
+## Objective engine (Stockfish) — the real centipawn bar (task 0042)
+
+The classic "centipawn bar" this project compares against is a real engine eval, not a
+material count. The objective engine is **Stockfish** (open source, GPL v3, a small
+local UCI binary that `python-chess` drives); `StockfishEngine`
+(`src/chess_equity/stockfish.py`) is its `ObjectiveEngine` adapter.
+
+```bash
+brew install stockfish          # macOS
+apt-get install stockfish       # Debian/Ubuntu
+# or point at any UCI binary:
+export STOCKFISH_PATH=/path/to/stockfish
+```
+
+`StockfishEngine` resolves the binary in this order: explicit `path=` arg →
+`$STOCKFISH_PATH` → `stockfish` on `PATH`. With no binary it raises `StockfishNotFound`
+with an install hint — it never silently falls back to a material count. **Tests/CI stay
+engine-free:** the adapter takes an injectable backend, so `uv run pytest` needs no
+binary (only real eval runs and `baseline/verify_engine.py` do). The bar/`grade`/demo
+still default to the material placeholder until task 0043 wires Stockfish in as the
+default everywhere.
+
 ## Use
 
 ```bash
@@ -438,7 +460,7 @@ baselines (0006/0007); a measured p50/p95 interactive target waits on a real mod
 |------|------|
 | `Equity` / `WDL` (`types.py`) | model-agnostic eval values — full WDL + the White-POV bar |
 | `EquityModel` (`adapters.py`) | `(fen, white_elo, black_elo) -> Equity` — the core contract |
-| `ObjectiveEngine` | `fen -> cp/mate` — Stockfish/Lc0 plug in here (placeholder: material only) |
+| `ObjectiveEngine` | `fen -> cp/mate` — `StockfishEngine` (real UCI, task 0042) or the `MaterialEngine` placeholder |
 | `HumanPolicy` | `fen, elo -> P(move)` — Maia plugs in here (task 0005) |
 | `bar.py` | ASCII rendering of the bar |
 | `data/` | Lichess PGN dump -> `(eval, ratings, outcome)` dataset (task 0002) |
