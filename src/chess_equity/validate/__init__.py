@@ -22,10 +22,13 @@ from chess_equity.validate.harness import (
     BaselineComparison,
     PredictorReport,
     Scores,
+    Verdict,
     compare_to_baseline,
     evaluate,
     format_baseline_comparison,
     format_report,
+    format_verdict,
+    gate_verdicts,
 )
 from chess_equity.validate.split import game_level_split
 
@@ -36,9 +39,12 @@ __all__ = [
     "PredictorReport",
     "BaselineComparison",
     "DeltaCI",
+    "Verdict",
     "evaluate",
     "compare_to_baseline",
     "format_report",
     "format_baseline_comparison",
+    "format_verdict",
+    "gate_verdicts",
     "game_level_split",
 ]

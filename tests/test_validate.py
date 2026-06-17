@@ -18,6 +18,7 @@ from chess_equity.validate.harness import (
     baseline_cp,
     evaluate,
     format_report,
+    gate_verdicts,
     rating_band,
 )
 from chess_equity.validate.metrics import (
@@ -127,6 +128,56 @@ def test_format_report_is_markdown():
     assert md.startswith("# ")
     assert "log-loss" in md and "Brier" in md and "ECE" in md
     assert "## By rating" in md and "## By phase" in md
+
+
+# --- gate verdict (task 0058) --------------------------------------------------
+
+def test_gate_verdict_reflects_computed_deltas():
+    # An "oracle" predictor that nails every outcome strictly beats the baseline on
+    # both log-loss and Brier -> PASS, with deltas equal to oracle - baseline scores.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731 — perfect predictor for the fixture
+    reports = evaluate(rows, {"baseline": baseline_cp, "oracle": oracle})
+    by_name = {r.name: r for r in reports}
+    verdicts = gate_verdicts(reports)
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.name == "oracle"
+    # Deltas are exactly model - baseline on the overall scores.
+    assert isclose(
+        v.log_loss_delta, by_name["oracle"].overall.log_loss - by_name["baseline"].overall.log_loss
+    )
+    assert isclose(
+        v.brier_delta, by_name["oracle"].overall.brier - by_name["baseline"].overall.brier
+    )
+    # Strictly better on both -> PASS.
+    assert v.log_loss_delta < 0 and v.brier_delta < 0
+    assert v.passed is True
+
+
+def test_gate_verdict_fails_when_worse_on_either_metric():
+    # A predictor that is worse than the baseline must FAIL.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0)]
+    worse = lambda r: 1.0 - baseline_cp(r)  # noqa: E731 — inverts the baseline
+    verdicts = gate_verdicts(evaluate(rows, {"baseline": baseline_cp, "worse": worse}))
+    assert len(verdicts) == 1
+    assert verdicts[0].passed is False
+
+
+def test_gate_verdict_empty_without_baseline():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    oracle = lambda r: r.result  # noqa: E731
+    assert gate_verdicts(evaluate(rows, {"oracle": oracle})) == []
+
+
+def test_report_opens_with_gate_verdict():
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "oracle": oracle}))
+    # The verdict is the report's first section, ahead of the metrics tables.
+    assert md.index("## Gate verdict") < md.index("## Overall")
+    assert "oracle" in md and "PASS" in md
+    assert "-> **PASS**" in md
 
 
 def test_runs_on_committed_sample():
@@ -267,6 +318,81 @@ def test_baseline_registered():
     assert "baseline" in PREDICTORS
 
 
+# --- head-to-head: where equity wins (task 0059) -------------------------------
+
+def test_head_to_head_sign_convention_and_ranking():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    # Baseline is rating-blind; the "model" predicts the actual result perfectly, so it
+    # must win (Δ > 0) in every slice and overall.
+    rows = [
+        _row(cp=0, we=1000, be=1000, phase="opening", result=1.0),
+        _row(cp=0, we=2500, be=2500, phase="endgame", result=0.0),
+    ]
+    reports = evaluate(
+        rows,
+        {"baseline": baseline_cp, "model": lambda r: r.result},
+    )
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None
+    assert h2h.baseline == "baseline" and h2h.model == "model"
+    # The oracle beats the rating-blind baseline everywhere.
+    assert h2h.overall_delta > 0
+    assert all(d.delta > 0 for d in h2h.slices), "oracle must win every slice (Δ > 0)"
+    # Both rating bands and both phases appear as slices.
+    assert {(d.slicer, d.value) for d in h2h.slices} >= {
+        ("rating", "<1200"),
+        ("rating", "2400+"),
+        ("phase", "opening"),
+        ("phase", "endgame"),
+    }
+    # Δ is the baseline-minus-model log-loss for that slice.
+    d0 = h2h.slices[0]
+    assert isclose(d0.delta, d0.baseline_log_loss - d0.model_log_loss)
+    # Sorted biggest-win-first.
+    assert [d.delta for d in h2h.slices] == sorted((d.delta for d in h2h.slices), reverse=True)
+
+
+def test_head_to_head_needs_a_challenger():
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    # Baseline only -> nothing to compare against.
+    assert head_to_head_deltas(evaluate(rows, {"baseline": baseline_cp})) is None
+    # No predictor named "baseline" -> no reference.
+    assert head_to_head_deltas(evaluate(rows, {"model": lambda r: r.result})) is None
+
+
+def test_format_report_includes_head_to_head_section():
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    md = format_report(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
+    assert "## Head-to-head: where equity wins" in md
+    assert "Δ > 0 means equity wins" in md
+    # Single-predictor reports omit the section.
+    solo = format_report(evaluate(rows, {"baseline": baseline_cp}))
+    assert "Head-to-head" not in solo
+
+
+def test_head_to_head_on_committed_sample():
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    rows = load_rows(str(sample))
+    # wdl-a is a rating-conditioned model; compare it head-to-head against the baseline.
+    reports = evaluate(rows, {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]})
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None and h2h.slices, "sample must yield at least one slice"
+    # Every slice's Δ is exactly baseline-minus-model log-loss on that slice (sign convention).
+    for d in h2h.slices:
+        assert isclose(d.delta, d.baseline_log_loss - d.model_log_loss)
+        assert d.n > 0
+    # The rating slicer is among the reported slices (the thesis's headline axis).
+    assert any(d.slicer == "rating" for d in h2h.slices)
+
+
 # --- board-model predictor (task 0029) -----------------------------------------
 
 class _FakeBoardModel:
@@ -390,6 +516,37 @@ def test_validate_cli_scores_maia2_against_baseline(tmp_path, monkeypatch, capsy
     assert "baseline" in out and "maia2" in out
 
 
+def test_validate_cli_scores_maia2_on_committed_fen_sample(monkeypatch, capsys):
+    """Runbook step-3 smoke: `validate --models maia2` end-to-end on the committed
+    ``data/sample/dataset_fen.csv`` via the injectable fake backend (no torch/weights).
+
+    The attended runbook scores ``baseline,wdl-a,maia2``, but the maia2 column only has
+    real numbers with torch+weights — so the *plumbing* (committed FEN fixture ->
+    Maia2Equity -> metrics) can rot silently in the sandbox. This drives it on the
+    checked-in fixture (not a freshly-built dataset) and asserts maia2 yields a scored
+    column, so a fixture that loses its FENs or broken maia2 wiring fails CI loudly.
+    """
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+
+    rc = main(["validate", "--data", str(sample), "--models", "maia2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The Overall table must carry a maia2 row with a real (parseable) numeric log-loss
+    # and a positive n — i.e. the column was actually scored, not just named.
+    maia2_rows = [ln for ln in out.splitlines() if ln.strip().startswith("| maia2 |")]
+    assert maia2_rows, "maia2 must appear as a scored row in the report"
+    cells = [c.strip() for c in maia2_rows[0].strip("|").split("|")]
+    # | maia2 | n | log-loss | Brier | ECE |
+    assert int(cells[1]) > 0  # n scored rows
+    assert float(cells[2]) >= 0.0  # finite, parseable log-loss
+
+
 def test_validate_cli_maia2_needs_fen(tmp_path, monkeypatch, capsys):
     """A FEN-less dataset makes the maia2 predictor fail with a clean error, not a trace."""
     from pathlib import Path
@@ -455,3 +612,51 @@ def test_validate_cli_scores_maia_search_against_baseline(tmp_path, monkeypatch,
     assert rc == 0
     out = capsys.readouterr().out
     assert "baseline" in out and "maia-search" in out
+
+
+# --- runbook CLI smoke (task 0061) ---------------------------------------------
+
+def test_runbook_validate_cli_end_to_end(tmp_path, capsys):
+    """Drive the documented runbook command path end to end on the committed fixture.
+
+    Mirrors docs/validation-proof-runbook.md's smoke command — the dependency-free
+    `baseline,wdl-a` gate with a game-level holdout — plus the `--out`/`--calibration`
+    artifact flags. Guards the real CLI invocation: a broken flag, a renamed report
+    section, or a dropped metric column fails here before the attended multi-GB run.
+    """
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    data = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    report = tmp_path / "validation-report.md"
+    calibration = tmp_path / "validation-calibration.md"
+
+    rc = main(
+        [
+            "validate",
+            "--data", str(data),
+            "--models", "baseline,wdl-a",
+            "--holdout", "0.5",
+            "--seed", "0",
+            "--out", str(report),
+            "--calibration", str(calibration),
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"wrote {report}" in out and f"wrote {calibration}" in out
+
+    # The report opens with the gate verdict and carries the metric table columns.
+    report_text = report.read_text(encoding="utf-8")
+    assert report_text.startswith("# Validation report")
+    assert "held-out test:" in report_text  # the --holdout split annotation
+    for section in ("## Gate verdict", "## Overall", "## By rating", "## By phase"):
+        assert section in report_text
+    assert "| predictor | n | log-loss | Brier | ECE |" in report_text
+    assert "wdl-a" in report_text and "baseline" in report_text
+
+    # The calibration artifact carries its per-band reliability table.
+    cal_text = calibration.read_text(encoding="utf-8")
+    assert cal_text.startswith("# Calibration by rating band")
+    assert "ECE by rating band" in cal_text
