@@ -140,6 +140,9 @@ uv run chess-equity validate --data data/dataset.csv --models baseline,wdl-a --h
 A small fixture under `data/sample/` lets tests and demos run with no download — its
 numbers are a smoke test, not evidence (real evidence needs a real dump).
 
+Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is captured
+step-by-step in **[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
+
 ## Architecture
 
 | Type | Role |
