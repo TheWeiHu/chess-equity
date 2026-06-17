@@ -263,7 +263,12 @@ sample, and `dataset_fen.csv` is its FEN-bearing companion (same 15 rows + a `fe
 column) so board models (Maia, 0005/0031) can be scored end-to-end on checked-in
 data with no PGN rebuild. Load a built dataset with
 `chess_equity.data.load_rows(path)` (typed rows, dependency-free) or
-`load_dataframe(path)` (pandas, needs the data extra).
+`load_dataframe(path)` (pandas, needs the data extra). Both take optional
+`tc_bucket=` / `rating_bucket=` selectors (a value or an iterable) — on a
+hive-partitioned directory these **prune which `part.*` files are read** (predicate
+pushdown, task 0040), so `load_rows(path, tc_bucket="blitz", rating_bucket=("1600","1800"))`
+opens only those slices; on a flat file the same selectors filter rows so the result
+is identical.
 
 `cp_eval` and `result` are both White-POV; mate scores are clamped to ±10000 cp.
 Each row also carries a `game_id` (the Lichess game slug) so validation can split
