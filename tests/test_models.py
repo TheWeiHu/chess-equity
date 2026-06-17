@@ -1,7 +1,11 @@
 import chess
 import pytest
 
-from chess_equity.models import LichessBaselineModel, MaterialEngine
+from chess_equity.models import (
+    LichessBaselineModel,
+    MaterialEngine,
+    placeholder_equity_warning,
+)
 
 
 def test_material_engine_scores_start_even():
@@ -45,3 +49,15 @@ def test_baseline_model_white_pov_stable():
     model = LichessBaselineModel()
     assert model.evaluate(white_turn, 1500, 1500).equity_white > 50.0
     assert model.evaluate(black_turn, 1500, 1500).equity_white > 50.0
+
+
+def test_placeholder_warning_flags_material_baseline():
+    # The default baseline (MaterialEngine, no Stockfish) is the rating-blind placeholder.
+    msg = placeholder_equity_warning(LichessBaselineModel())
+    assert msg is not None
+    assert "maia2" in msg and "material-only" in msg
+
+
+def test_placeholder_warning_none_for_non_placeholder():
+    # A non-baseline model (any other object) gets no warning.
+    assert placeholder_equity_warning(object()) is None
