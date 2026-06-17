@@ -374,6 +374,25 @@ def _run_validate(args: argparse.Namespace) -> int:
         Path(args.calibration).parent.mkdir(parents=True, exist_ok=True)
         Path(args.calibration).write_text(cal + "\n", encoding="utf-8")
         print(f"wrote {args.calibration}")
+
+    if args.plots:
+        # Render the same per-band reliability data as a calibration-curve PNG (task 0036).
+        from pathlib import Path
+
+        from chess_equity.validate.calibration import band_reliability
+        from chess_equity.validate.plots import MatplotlibNotInstalled, save_reliability_plot
+
+        name = requested[0]
+        bands = band_reliability(rows, predictors[name])
+        Path(args.plots).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            save_reliability_plot(
+                bands, args.plots, title=f"Reliability by rating band — {name}"
+            )
+        except (MatplotlibNotInstalled, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote {args.plots}")
     return 0
 
 
@@ -556,6 +575,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     val.add_argument(
         "--calibration",
         help="also write a per-rating-band reliability report (task 0027) here",
+    )
+    val.add_argument(
+        "--plots",
+        metavar="PATH",
+        help="also render per-rating-band reliability curves to this PNG (task 0036; "
+        "needs matplotlib: `pip install chess-equity[plots]`)",
     )
 
     pc = sub.add_parser(
