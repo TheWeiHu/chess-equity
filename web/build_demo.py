@@ -16,7 +16,11 @@ Two equity sources:
   equity is illustrative and labelled as such.
 * ``--model maia2``: the real rating-conditioned bar — calls Maia-2's value head for
   every (fen, white_elo, black_elo) grid cell. Use this to replace the illustrative
-  numbers with real ones once Maia is installed (``pip install maia2``).
+  numbers with real ones once Maia is installed (``pip install maia2``). Caveat: the
+  value head returns Maia-2's *practical* win-probability and is **not** calibrated to
+  ~50% at the start position — it reads ~41% for White at 1500/1500 startpos (not a bug).
+  Read the bar as how the game is trending for the matchup, not as an absolute scale
+  where 50% means dead even. The footer in ``index.html`` surfaces this to viewers.
 
 And two **centipawn-bar** sources (the dashed objective line the equity is contrasted
 against):
