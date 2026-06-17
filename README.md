@@ -1,5 +1,7 @@
 # chess-equity
 
+[![CI](https://github.com/TheWeiHu/chess-equity/actions/workflows/ci.yml/badge.svg)](https://github.com/TheWeiHu/chess-equity/actions/workflows/ci.yml)
+
 > ⚠️ **Experimental prototype — nukeable at any time.** This is a research spike, not
 > a product. We optimize for *speed of learning*, not stability: expect aggressive
 > prototyping, throwaway code, hard pivots, force-pushes, and whole modules deleted
