@@ -281,7 +281,29 @@ def _run_data(args: argparse.Namespace) -> int:
             return 1
         from urllib.error import URLError
 
-        from chess_equity.data.download import DEFAULT_DUMP_DIR, download_month
+        from chess_equity.data.download import (
+            APPROX_DUMP_SIZE_GB,
+            DEFAULT_DUMP_DIR,
+            data_extra_available,
+            download_month,
+        )
+
+        # Fail fast, before any network I/O: a month dump is a ~30 GB ``.zst`` that
+        # only the 'data' extra can read, so a missing extra should error in seconds,
+        # not after the download finishes (task 0071).
+        if not data_extra_available():
+            print(
+                "error: reading .zst month dumps needs the 'data' extra: "
+                "pip install 'chess-equity[data]'",
+                file=sys.stderr,
+            )
+            return 1
+        dump_dir = args.dump_dir or DEFAULT_DUMP_DIR
+        print(
+            f"note: the {args.month} dump is ~{APPROX_DUMP_SIZE_GB} GB compressed; "
+            f"streaming to {dump_dir} (resumable, cached between runs)",
+            file=sys.stderr,
+        )
 
         def _progress(done: int, total: Optional[int]) -> None:
             mb = done / 1e6
@@ -292,9 +314,7 @@ def _run_data(args: argparse.Namespace) -> int:
                 print(f"\rdownloading {month_url(args.month)}: {mb:.0f} MB", end="", file=sys.stderr)
 
         try:
-            dump = download_month(
-                args.month, dest_dir=args.dump_dir or DEFAULT_DUMP_DIR, progress=_progress
-            )
+            dump = download_month(args.month, dest_dir=dump_dir, progress=_progress)
         except (URLError, OSError, RuntimeError) as exc:
             print(f"\nerror: downloading {args.month} dump: {exc}", file=sys.stderr)
             return 1
