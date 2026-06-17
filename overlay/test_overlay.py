@@ -94,6 +94,35 @@ def test_caster_mode_has_an_engine_blind_swing():
     assert found, "fixture needs a big practical swing the centipawn bar misses"
 
 
+def human_edge(equity_white, cp, threshold=0.15):
+    """Mirror overlay.js humanEdge: a 'human edge' fires when the practical equity
+    bar and the centipawn bar disagree on the position by >= threshold points."""
+    gap = equity_white - cp_to_white_pos(cp)
+    if abs(gap) < threshold:
+        return None
+    return {"side": "white" if gap > 0 else "black", "gap": gap}
+
+
+def test_human_edge_badge_fires_and_clears(threshold=0.15):
+    """Acceptance for the human-edge divergence badge (task 0048).
+
+    The bundled replay must contain at least one position where the practical
+    equity and the classic centipawn eval disagree past the threshold (the badge
+    SHOWS) and at least one where they agree (the badge HIDES) — otherwise the
+    indicator would be either always-on or never-on and prove nothing.
+    """
+    positions = [e for e in load_events() if e.get("type") == "position"]
+    edges = [(e, human_edge(e["equity"], e["cp"], threshold)) for e in positions]
+    fires = [(e, edge) for e, edge in edges if edge is not None]
+    clears = [e for e, edge in edges if edge is None]
+    assert fires, "fixture needs a position where practical equity diverges from the engine bar"
+    assert clears, "fixture needs a position where the two agree (badge hidden)"
+    # `side` must point to whoever the practical bar favors relative to the engine.
+    for e, edge in fires:
+        favored_white = e["equity"] > cp_to_white_pos(e["cp"])
+        assert edge["side"] == ("white" if favored_white else "black")
+
+
 def test_optional_drama_field_schema():
     """If an event carries a server-side `drama` payload (chess_equity.drama, once
     0018/0020 emit it), it must match the shape overlay.js reads."""

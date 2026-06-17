@@ -57,6 +57,36 @@
     };
   }
 
+  // Practical-vs-engine DIVERGENCE — the wedge made visible (task 0048). Unlike
+  // dramaSwing (a swing INTO a move), this is a LEVEL comparison at one position:
+  // when the practical equity bar and the classic centipawn bar disagree on who is
+  // winning by more than `threshold` win-prob points, there is a "human edge" — e.g.
+  // the engine says lost only via an inhuman refutation the rated player won't find.
+  // Returns null when the two roughly agree. `side` is who the practical bar favors
+  // relative to the engine.
+  function humanEdge(equityWhite, cp, opts) {
+    opts = opts || {};
+    var threshold = opts.threshold == null ? 0.15 : opts.threshold; // 15 pts
+    if (typeof equityWhite !== "number" || isNaN(equityWhite)) return null;
+    var cpPos = cpToWhitePos(cp);
+    if (cpPos == null) return null;
+    var gap = clamp01(equityWhite) - cpPos;
+    if (Math.abs(gap) < threshold) return null;
+    return {
+      side: gap > 0 ? "white" : "black",
+      gap: gap,
+      magnitude: Math.min(1, Math.abs(gap) / 0.5),
+    };
+  }
+
+  // Caster-facing label for a human-edge divergence: which side the practical bar
+  // favors, and by how many points beyond what the engine sees.
+  function edgeLabel(e) {
+    var pts = Math.round(Math.abs(e.gap) * 100);
+    var who = e.side === "white" ? "White" : "Black";
+    return "human edge · " + who + " +" + pts + " vs engine";
+  }
+
   // Streamer rating override (task 0021): when the setup page sets ?welo=/?belo=,
   // that rating wins over whatever the feed reports. Useful because Maia-2's top
   // band is a coarse ">2000" — a caster can pin the real ratings for context.
@@ -154,6 +184,21 @@
       } else {
         ghost.classList.add("show");
         ghost.style.left = (cpPos * 100).toFixed(1) + "%";
+      }
+    }
+
+    // Human-edge badge (task 0048): persistent while the practical bar and the
+    // engine bar disagree on the position — shown/hidden per move like the ghost tick.
+    const edgeEl = q("[data-edge]");
+    if (edgeEl) {
+      const he = humanEdge(eq, evt.cp);
+      if (he) {
+        edgeEl.textContent = edgeLabel(he);
+        edgeEl.classList.toggle("white", he.side === "white");
+        edgeEl.classList.toggle("black", he.side === "black");
+        edgeEl.hidden = false;
+      } else {
+        edgeEl.hidden = true;
       }
     }
 
@@ -277,6 +322,8 @@
     fmtDelta: fmtDelta,
     dramaSwing: dramaSwing,
     dramaHeadline: dramaHeadline,
+    humanEdge: humanEdge,
+    edgeLabel: edgeLabel,
   };
 
   if (typeof document !== "undefined") {
