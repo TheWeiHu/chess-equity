@@ -1,0 +1,48 @@
+# Deploy the static web/ demo (task 0010) to GitHub Pages — task 0033.
+#
+# Publishes the web/ folder as-is (no build step: it is dependency-free static HTML/
+# JS/JSON). Uses only the repo's own GITHUB_TOKEN — no external account or secrets.
+# The live URL is deterministic: https://theweihu.github.io/chess-equity/
+#
+# One-time manual step: in repo Settings → Pages, set "Build and deployment" Source
+# to "GitHub Actions" (this workflow then deploys on every push to the default branch).
+name: Deploy web demo to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: {}
+
+# Least-privilege: only what Pages deployment needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish; queue (don't cancel) newer ones.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Stage static assets (no Python sources / caches)
+        run: |
+          mkdir -p _site
+          cp web/index.html web/app.css web/app.js web/*.json _site/
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

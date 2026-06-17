@@ -69,6 +69,8 @@ Example:
 
 ## Web demo (task 0010) — the idea, made tangible
 
+**Live:** https://theweihu.github.io/chess-equity/
+
 A static, dependency-free page that puts the **rating-conditioned equity bar** next to
 the **classic centipawn bar** and lets you drag both players' rating sliders. The pitch
 in one screen: *move a slider and the equity bar moves while the centipawn bar can't.*
@@ -90,7 +92,13 @@ python web/build_demo.py --model maia2  # real rating-conditioned numbers (needs
 The committed equity is **illustrative** (the centipawns are real material counts);
 swap in real numbers with `--model maia2`. Schema + the two headline acceptance checks
 (slider moves the bar; the green/red flagship move exists) are gated by
-`python3 web/test_demo.py`. Not yet deployed — that's a follow-up.
+`python3 web/test_demo.py`.
+
+**Deployment:** the live site is published from `web/` by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to `main`
+(GitHub Pages, no build step, no secrets). One-time setup: in **Settings → Pages**, set
+**Source** to **GitHub Actions**. Import a real game with
+`python web/import_game.py <lichess-url>` then open `…/chess-equity/?game=imported-game.json`.
 
 ## Maia-2 equity (task 0005) — the real rating-conditioned bar
 
