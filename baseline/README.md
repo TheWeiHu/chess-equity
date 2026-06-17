@@ -19,6 +19,13 @@ rating-conditioned equity bar (0004/0005) and feeds the head-to-head validation
   can't silently rot before python-chess is a dependency).
 - **`test_failure_modes.py`** — schema + FEN sanity, and asserts the baseline
   actually misleads. Run: `python3 test_failure_modes.py` (or `pytest`).
+- **`verify_engine.py`** — engine-checks the set against a **real Stockfish** (task
+  0028): wires 0001's `ObjectiveEngine` to a UCI engine (`chess_equity.StockfishEngine`),
+  recomputes each `cp` at a fixed depth, and asserts each `only_move_uci` claim is the
+  engine's choice. Run: `python3 verify_engine.py` (needs `stockfish` on PATH or
+  `$STOCKFISH_PATH`; prints a hint and no-ops when none is found). The checking logic
+  is unit-tested with a fake engine in `tests/test_verify_engine.py`, so CI needs no
+  binary.
 
 The baseline Win% itself is **already implemented** by the package scaffold (0001)
 as `LichessBaselineModel` / `lichess_win_percent`. `report.py` imports that when
@@ -55,7 +62,10 @@ data from **0002**, which isn't merged yet. Follow-ups:
 
 - Replace the hypothesised practical scores with **measured** rating-sliced
   outcomes for these positions/classes from 0002 data.
-- Wire a real **Stockfish** engine (0001's `ObjectiveEngine`) to confirm each `cp`
-  and the "only move" claims, rather than hand-entered verdicts.
+- ✅ **Done (0028):** a real **Stockfish** engine (0001's `ObjectiveEngine`) now
+  confirms each `cp` and the "only move" claims via `verify_engine.py` — see above.
+  Still deferred: walking the deep PV so Saavedra's move-6 `c8=R` underpromotion is
+  asserted (only the knight fork's root-move `e7e8n` is checked today), and recording
+  the engine's measured `cp`/depth back into the JSON as the canonical values.
 - Produce the calibration plot + Brier/log-loss by rating band (the quantified
   "before" the rest of the project improves on).
