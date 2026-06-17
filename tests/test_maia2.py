@@ -150,9 +150,15 @@ def test_build_model_selects_maia2():
         build_model("nonsense")
 
 
-def test_cli_eval_maia2_reports_missing_install(monkeypatch, capsys):
+def test_cli_eval_maia2_reports_missing_install(monkeypatch, capsys, tmp_path):
     # Without maia2 installed, `eval --model maia2` must fail cleanly (exit 1), not crash.
     monkeypatch.setitem(sys.modules, "maia2", None)
+    # Isolate the on-disk cache to a fresh, nonexistent path so a populated host cache
+    # (~/.cache/chess-equity/maia2.pkl) can't satisfy the lookup and mask the missing
+    # backend -> the real backend is invoked and raises Maia2NotInstalled (rc 1).
+    monkeypatch.setattr(
+        "chess_equity.maia2.DEFAULT_CACHE_PATH", str(tmp_path / "none.pkl")
+    )
     rc = main(["eval", START, "--model", "maia2"])
     assert rc == 1
     assert "error" in capsys.readouterr().err.lower()

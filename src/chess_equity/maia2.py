@@ -205,8 +205,15 @@ class Maia2Equity(EquityModel):
         )
 
 
-def build_maia2_equity(cache_path: Optional[str] = DEFAULT_CACHE_PATH) -> Maia2Equity:
-    """Construct a production :class:`Maia2Equity` (real backend + on-disk cache)."""
+def build_maia2_equity(cache_path: Optional[str] = None) -> Maia2Equity:
+    """Construct a production :class:`Maia2Equity` (real backend + on-disk cache).
+
+    ``cache_path`` defaults to :data:`DEFAULT_CACHE_PATH`, read at call time (not bound
+    at definition time) so tests can isolate the on-disk cache by monkeypatching the
+    module attribute.
+    """
+    if cache_path is None:
+        cache_path = DEFAULT_CACHE_PATH
     backend: Backend = RealMaia2Backend()
     if cache_path:
         backend = CachedBackend(backend, path=cache_path)
