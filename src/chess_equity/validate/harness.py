@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Sequence
 
+from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
 from chess_equity.validate.metrics import (
@@ -42,9 +43,26 @@ def baseline_cp(row: PositionRow) -> float:
     return lichess_win_percent(row.cp_eval) / 100.0
 
 
+def baseline_cp_clock(row: PositionRow) -> float:
+    """The rating-blind baseline, then warped by the side-to-move's time pressure (0015).
+
+    Same centipawn signal as :func:`baseline_cp`, but a winning position with seconds
+    left reads as less safe — the practical-result effect objective eval (and Maia-2,
+    which has no clock input) misses entirely. A no-op on clock-blind rows, so it can
+    only help where ``[%clk]`` data exists.
+    """
+    return clock_adjusted_white_equity(
+        baseline_cp(row),
+        row.clock_remaining,
+        row.tc_bucket,
+        white_to_move=row.side_to_move == "white",
+    )
+
+
 # The registry the CLI selects from. New approaches register here.
 PREDICTORS: Dict[str, Predictor] = {
     "baseline": baseline_cp,
+    "baseline+clock": baseline_cp_clock,
 }
 
 
@@ -62,10 +80,27 @@ def rating_band(row: PositionRow) -> str:
     return "2400+"
 
 
+def clock_band(row: PositionRow) -> str:
+    """Coarse band on the side-to-move's remaining clock — where the clock model bites.
+
+    Mirrors :func:`chess_equity.clock.time_pressure`'s scale: the gain from clock
+    awareness concentrates in "scramble"/"low", and is ~nil once minutes remain.
+    """
+    clk = row.clock_remaining
+    if clk is None:
+        return "no-clock"
+    if clk < 15.0:
+        return "scramble(<15s)"
+    if clk < 60.0:
+        return "low(<60s)"
+    return "comfortable(60s+)"
+
+
 # The slicings reported alongside the overall number.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
     "phase": lambda row: row.phase,
+    "clock": clock_band,
 }
 
 
