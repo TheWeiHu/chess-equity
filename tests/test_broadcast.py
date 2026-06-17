@@ -619,3 +619,18 @@ def test_clock_blind_when_no_clk_tags():
         " { [%clk 0:00:04] }", ""
     ).replace(" { [%clk 0:00:03] }", "")
     assert _last_equity(no_clk, clock_aware=True) == _last_equity(no_clk, clock_aware=False)
+
+
+def _last_delta(pgn, *, clock_aware):
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=clock_aware)
+    return tracker.ingest(pgn)[-1].delta_equity
+
+
+def test_clock_aware_shifts_move_grade_delta_on_low_clock():
+    # Task 0106: the Δequity move grade is clock-adjusted at both endpoints, so a low-clock
+    # move's delta differs from the clock-blind (raw positional) delta. The last move in
+    # LOW_CLOCK_PGN (2.Nf3, White at ~3s) warps White's pre- and post-move equity by its
+    # own seconds-left clock, so the surviving move's grade shifts.
+    blind = _last_delta(LOW_CLOCK_PGN, clock_aware=False)
+    aware = _last_delta(LOW_CLOCK_PGN, clock_aware=True)
+    assert abs(aware - blind) > 0.5, "low-clock survival should shift the grade vs clock-blind"
