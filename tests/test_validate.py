@@ -195,6 +195,33 @@ def test_baseline_registered():
     assert "baseline" in PREDICTORS
 
 
+def test_report_on_sample_has_gate_and_head_to_head_sections():
+    """Regenerating the gate report on the committed sample yields the two headline
+    sections — the thesis evidence the ``reports/`` artifact captures (task 0063).
+
+    Guards the wiring/format, not the numbers (the 15-row sample is meaningless): a
+    baseline + rating-conditioned challenger must always render a Gate verdict and a
+    Head-to-head "where equity wins" section so the committed artifact can't silently
+    lose them when the harness evolves.
+    """
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+    rows = load_rows(str(sample))
+    md = format_report(evaluate(rows, {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}))
+    assert md.strip(), "report must be non-empty"
+    assert "## Gate verdict" in md
+    assert "## Head-to-head: where equity wins" in md
+
+    # The checked-in evidence artifact must carry the same two sections (so a stale
+    # commit predating these sections fails CI). Section-presence only — not a byte diff.
+    committed = Path(__file__).resolve().parents[1] / "reports" / "validation_sample.md"
+    text = committed.read_text(encoding="utf-8")
+    assert "## Gate verdict" in text and "## Head-to-head: where equity wins" in text
+
+
 # --- head-to-head: where equity wins (task 0059) -------------------------------
 
 def test_head_to_head_sign_convention_and_ranking():
