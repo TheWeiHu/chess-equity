@@ -67,9 +67,9 @@
 
   // ---- board ---------------------------------------------------------------
 
-  function renderBoard(fen) {
+  function renderBoard(fen, boardEl) {
     var rows = fen.split(" ")[0].split("/");
-    var board = $("board");
+    var board = boardEl || $("board");
     board.innerHTML = "";
     for (var r = 0; r < 8; r++) {
       var file = 0;
@@ -95,6 +95,37 @@
       sq.appendChild(span);
     }
     board.appendChild(sq);
+  }
+
+  // ---- hover board preview -------------------------------------------------
+  // A caster scanning the equity curve wants to *see* a ply's position without
+  // clicking (which would move the main board and lose their place). Hovering a
+  // chart dot renders that ply into a small floating board, reusing renderBoard.
+
+  function showPreview(ply) {
+    var preview = $("board-preview");
+    if (!preview) return;
+    var move = state.data.moves[ply];
+    renderBoard(move.fen, $("preview-board"));
+    var cap = $("preview-caption");
+    if (cap) {
+      cap.textContent = ply === 0
+        ? "Starting position"
+        : Math.ceil(ply / 2) + (ply % 2 === 1 ? ". " : "… ") + move.san;
+    }
+    preview.hidden = false;
+  }
+
+  function movePreview(ev) {
+    var preview = $("board-preview");
+    if (!preview || preview.hidden) return;
+    preview.style.left = ev.clientX + 16 + "px";
+    preview.style.top = ev.clientY + 16 + "px";
+  }
+
+  function hidePreview() {
+    var preview = $("board-preview");
+    if (preview) preview.hidden = true;
   }
 
   // ---- bars ----------------------------------------------------------------
@@ -158,7 +189,8 @@
     // The two lines: centipawn bar (rating-blind) under equity (rating-conditioned).
     svg.appendChild(svgEl("polyline", { points: g.cpPoints, class: "chart-cp" }));
     svg.appendChild(svgEl("polyline", { points: g.eqPoints, class: "chart-eq" }));
-    // One dot per ply on the equity line: native <title> tooltip on hover, click scrubs.
+    // One dot per ply on the equity line: native <title> tooltip on hover, click
+    // scrubs, and hover pops a floating board preview of that ply (no click needed).
     g.points.forEach(function (p) {
       var dot = svgEl("circle", {
         cx: p.x, cy: p.eqY, r: p.ply === state.ply ? 4 : 2.5,
@@ -168,6 +200,9 @@
       title.textContent = p.label;
       dot.appendChild(title);
       dot.addEventListener("click", function () { goto(p.ply); });
+      dot.addEventListener("mouseenter", function () { showPreview(p.ply); });
+      dot.addEventListener("mousemove", movePreview);
+      dot.addEventListener("mouseleave", hidePreview);
       svg.appendChild(dot);
     });
   }
