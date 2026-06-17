@@ -1,5 +1,12 @@
 # chess-equity
 
+> ⚠️ **Experimental prototype — nukeable at any time.** This is a research spike, not
+> a product. We optimize for *speed of learning*, not stability: expect aggressive
+> prototyping, throwaway code, hard pivots, force-pushes, and whole modules deleted
+> without ceremony. Nothing here is a stable API or a compatibility promise. If a
+> sharper approach appears, we rewrite or scrap. Don't build anything important on
+> top of it — and don't be precious about the code that's here.
+
 A chess evaluation bar that shows your **equity** — the probability *you* win given
 your rating and your opponent's — instead of objective centipawns.
 
