@@ -678,3 +678,70 @@ def test_model_with_cp_does_not_consult_engine():
     assert events
     assert engine.calls == 0
     assert any(e.cp is not None for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end overlay stream: clock + cp + drama on one replay (task 0107)
+# --------------------------------------------------------------------------- #
+
+# A clock-tagged bullet replay whose stub model swings the equity enough to fire drama,
+# carries no cp (so the engine fallback must fill it), and runs the clock low (so the
+# clock warp visibly moves the bar). This asserts the *assembled* overlay stream — every
+# feature (0097 clock, 0103 cp, 0020/0053 drama) coherent on a single game, not in
+# isolation — so a regression in any one is caught here even if its own test still passes.
+DRAMA_CLOCK_PGN = """[Event "Assembled overlay"]
+[Site "https://lichess.org/e2e00001"]
+[White "A"]
+[Black "B"]
+[Round "1"]
+[WhiteElo "2000"]
+[BlackElo "2000"]
+[TimeControl "60+0"]
+[Result "*"]
+
+1. e4 { [%clk 0:00:09] } e5 { [%clk 0:00:08] } 2. Nf3 { [%clk 0:00:07] } Nc6 { [%clk 0:00:06] } *
+"""
+
+
+class _SwingCpLessModel(EquityModel):
+    """Cp-less (like maia2) and rising White equity, so a White move shows a big positive
+    Δequity that trips the drama 'clutch' classifier — lets one replay exercise all three
+    overlay signals at once."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        board = chess.Board(fen)
+        ply = 2 * (board.fullmove_number - 1) + (0 if board.turn == chess.WHITE else 1)
+        equity_white = min(95.0, 40.0 + 12.0 * ply)  # +12pp/ply -> White Δ ≈ +12 (>= clutch)
+        wdl = WDL.from_unnormalized(p_win=equity_white / 100.0, p_draw=0.0,
+                                    p_loss=1.0 - equity_white / 100.0)
+        return Equity(wdl=wdl, equity_white=equity_white, source="swing", cp=None)
+
+
+def _overlay_positions(pgn, *, clock_aware, engine):
+    from chess_equity.broadcast import overlay_events
+
+    ingestor = BroadcastIngestor(
+        LocalPgnFeed(pgn), _SwingCpLessModel(),
+        white_elo=2000, black_elo=2000, clock_aware=clock_aware, engine=engine,
+    )
+    evs = list(overlay_events(ingestor, interval=0, max_polls=None, max_idle_polls=1))
+    return [e for e in evs if isinstance(e, dict) and e.get("type") == "position"]
+
+
+def test_overlay_stream_carries_clock_cp_and_drama_together():
+    engine = _StubEngine(80.0)
+    aware = _overlay_positions(DRAMA_CLOCK_PGN, clock_aware=True, engine=engine)
+    blind = _overlay_positions(DRAMA_CLOCK_PGN, clock_aware=False, engine=_StubEngine(80.0))
+
+    assert len(aware) == 4 and len(blind) == 4
+
+    # (1) clock warp: at least one ply's published equity differs from the clock-blind bar.
+    assert any(
+        abs(a["equity"] - b["equity"]) > 1e-6 for a, b in zip(aware, blind)
+    ), "clock-aware bar should diverge from the clock-blind bar on a low-clock replay"
+
+    # (2) objective cp fallback: the cp-less model's events all carry an engine cp.
+    assert all(e["cp"] is not None for e in aware), "engine must fill cp for a cp-less model"
+
+    # (3) drama: the equity swing trips at least one drama event in the overlay stream.
+    assert any("drama" in e for e in aware), "a real swing should surface a drama event"
