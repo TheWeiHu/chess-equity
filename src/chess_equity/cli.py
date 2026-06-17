@@ -264,6 +264,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 model,
                 white_elo=args.white_elo,
                 black_elo=args.black_elo,
+                clock_aware=args.clock_aware,
             )
             return overlay_events(
                 ingestor,
@@ -287,6 +288,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         model,
         white_elo=args.white_elo,
         black_elo=args.black_elo,
+        clock_aware=args.clock_aware,
     )
 
     def emit(event: MoveEvent) -> None:
@@ -769,6 +771,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+    bc.add_argument(
+        "--clock-aware",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="warp the published equity by the side-to-move's time pressure when the feed "
+        "carries [%%clk] clocks (task 0097); --no-clock-aware emits the clock-blind bar",
+    )
     bc.add_argument(
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
