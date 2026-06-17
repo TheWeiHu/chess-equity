@@ -784,3 +784,44 @@ def test_runbook_validate_cli_end_to_end(tmp_path, capsys):
     cal_text = calibration.read_text(encoding="utf-8")
     assert cal_text.startswith("# Calibration by rating band")
     assert "ECE by rating band" in cal_text
+
+
+# --- tunable ECE bin count (task 0079) -------------------------------------------
+
+def test_evaluate_threads_ece_bins():
+    # preds sit in two extreme bins (0.1, 0.9), each off the true rate by 0.1.
+    rows = [
+        _row(cp=0.1, result=0.0),
+        _row(cp=0.1, result=0.0),
+        _row(cp=0.9, result=1.0),
+        _row(cp=0.9, result=1.0),
+    ]
+    pred = {"p": lambda r: r.cp_eval}
+    # Default (10 bins): each non-empty bin is off by 0.1 -> ECE 0.1 (behaviour unchanged).
+    assert isclose(evaluate(rows, pred)[0].overall.ece, 0.1, abs_tol=1e-9)
+    # One bin collapses everything: mean_pred 0.5 == mean_label 0.5 -> ECE 0.
+    assert isclose(evaluate(rows, pred, bins=1)[0].overall.ece, 0.0, abs_tol=1e-9)
+
+
+def test_validate_cli_ece_bins_changes_binning(tmp_path):
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
+
+    def _ece(bins):
+        out = tmp_path / f"r{bins}.md"
+        rc = main(
+            ["validate", "--data", str(sample), "--models", "baseline",
+             "--bootstrap", "0", "--ece-bins", str(bins), "--out", str(out)]
+        )
+        assert rc == 0
+        for line in out.read_text().splitlines():
+            if line.startswith("| baseline |"):
+                return line
+        raise AssertionError("no baseline metrics row in report")
+
+    # The default (10) is exercised elsewhere; here two different bin counts must move
+    # the ECE column, proving --ece-bins threads all the way through.
+    assert _ece(2) != _ece(5)
