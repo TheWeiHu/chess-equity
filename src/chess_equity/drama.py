@@ -17,7 +17,16 @@ clocks, which is all four drama signals need:
 - **escape** — a player who was practically losing claws back (big positive Δequity
   from a losing position) — the lucky escape / great defence.
 - **scramble** — a clock-driven turning point: a real swing while the mover is low on
-  time.
+  time. Trigger (checked last, so it only fires when nothing bigger did): the mover's
+  remaining clock is under :data:`SCRAMBLE_SECS` and the move swings the bar by at least
+  :data:`SCRAMBLE_DELTA` (a *lower* bar than :data:`SLIP_DELTA` — the clock is the story,
+  not the size). It needs ``mover_clock`` on the :class:`MoveEvent`, which only arrives
+  once a feed carries ``[%clk]`` tags (task 0097); on the clock-less static web data of
+  task 0077 this branch never fired. Note: ``GameTracker(clock_aware=True)`` warps the
+  *bar itself* by time pressure (task 0097/0106), which on a seconds-left game inflates
+  every Δequity into escape/clutch and swamps this modest band — so scramble reads
+  cleanest off the raw positional swing (``clock_aware=False``), with the clock as the
+  gate. See ``test_low_clock_replay_surfaces_scramble_drama``.
 
 The detector is deliberately *quiet*: a single best event per ply, only above
 thresholds, so it fires on the moments a human would call out and stays dark on dull
