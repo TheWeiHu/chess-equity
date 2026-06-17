@@ -79,6 +79,10 @@
     <p>Equity in <code>demo-game.json</code> is real <a href="https://github.com/CSSLab/maia2">Maia-2</a>
       output — rating-conditioned win-equity from its value head (see the file's
       <code>_comment</code>); regenerate with <code>python web/build_demo.py --all --model maia2</code>.</p>
+    <p class="caveat">Note: this is Maia-2's <em>practical</em> win-probability, not a
+      calibrated even-at-startpos eval — its value head reads ~41% for White at the
+      opening rather than 50%, so the bar starts slightly below even. Read it as
+      <em>how the game is trending for this matchup</em>, not as an absolute 50%-is-equal scale.</p>
     <p>Import a real game: <code>python web/import_game.py &lt;lichess-url&gt;</code>,
       then open <code>index.html?game=imported-game.json</code> — real ratings
       auto-fill and the classic bar reuses Lichess' own evals.</p>
