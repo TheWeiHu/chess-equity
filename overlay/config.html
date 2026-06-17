@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chess-equity overlay — setup</title>
+  <style>
+    :root { color-scheme: dark; --bg:#11141a; --card:#1b1f29; --line:#2c3140;
+            --fg:#e8ebf2; --muted:#9aa3b5; --accent:#4f8cff; --good:#36c08a; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+           background:var(--bg); color:var(--fg); padding:2rem 1rem; }
+    main { max-width:720px; margin:0 auto; }
+    h1 { font-size:1.4rem; margin:0 0 .25rem; }
+    p.sub { color:var(--muted); margin:0 0 1.5rem; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+            padding:1.1rem 1.25rem; margin-bottom:1rem; }
+    .card h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em;
+               color:var(--muted); margin:0 0 .9rem; }
+    label { display:block; font-size:.82rem; color:var(--muted); margin:.6rem 0 .2rem; }
+    input[type=text], input[type=number], select {
+      width:100%; padding:.5rem .6rem; background:#0e1117; color:var(--fg);
+      border:1px solid var(--line); border-radius:6px; font:inherit; }
+    .row { display:flex; gap:1rem; flex-wrap:wrap; }
+    .row > div { flex:1 1 140px; }
+    .checks { display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:.7rem; }
+    .checks label { display:flex; align-items:center; gap:.4rem; color:var(--fg);
+                    margin:0; font-size:.9rem; }
+    .checks input { accent-color:var(--accent); }
+    code, .out { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .out { display:block; width:100%; background:#0e1117; border:1px solid var(--line);
+           border-radius:6px; padding:.6rem .7rem; word-break:break-all; font-size:.85rem;
+           color:var(--good); }
+    .actions { display:flex; gap:.6rem; margin-top:.8rem; flex-wrap:wrap; }
+    button, a.btn { font:inherit; border:1px solid var(--line); border-radius:6px;
+            padding:.5rem .9rem; background:var(--accent); color:#fff; cursor:pointer;
+            text-decoration:none; display:inline-block; }
+    button.ghost, a.btn.ghost { background:transparent; color:var(--fg); }
+    .hint { color:var(--muted); font-size:.8rem; margin:.5rem 0 0; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Equity overlay — setup</h1>
+  <p class="sub">Build an OBS browser-source URL without hand-editing query params.
+     Fill this in, copy the URL into OBS, and (for a live game) run the broadcast
+     ingestor it shows you.</p>
+
+  <div class="card">
+    <h2>Feed</h2>
+    <label for="feed">Source</label>
+    <select id="feed">
+      <option value="replay">Bundled replay (demo, no setup)</option>
+      <option value="sse">Live broadcast (SSE at /sse)</option>
+      <option value="custom">Custom URL (SSE, ws://, or .json)</option>
+    </select>
+
+    <div id="roundWrap" class="hidden">
+      <label for="round">Lichess broadcast round / game URL</label>
+      <input id="round" type="text" placeholder="https://lichess.org/broadcast/.../round/..." />
+      <p class="hint">The overlay reads <code>/sse</code>; this URL is what the
+         <strong>ingestor</strong> watches. Start it with the command below, then
+         point OBS at the overlay URL.</p>
+    </div>
+
+    <div id="customWrap" class="hidden">
+      <label for="custom">Feed URL</label>
+      <input id="custom" type="text" placeholder="/sse  or  wss://…  or  ./mock-game.json" />
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Player ratings (optional override)</h2>
+    <p class="hint">Maia-2's top band is a coarse <code>&gt;2000</code>. Pin the real
+       ratings here so viewers see them; leave blank to use the feed's values.</p>
+    <div class="row">
+      <div><label for="welo">White rating</label>
+        <input id="welo" type="number" min="0" max="4000" placeholder="feed default" /></div>
+      <div><label for="belo">Black rating</label>
+        <input id="belo" type="number" min="0" max="4000" placeholder="feed default" /></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Appearance</h2>
+    <div class="row">
+      <div><label for="layout">Layout</label>
+        <select id="layout">
+          <option value="horizontal">Horizontal (wide strip)</option>
+          <option value="vertical">Vertical (classic eval bar)</option>
+        </select></div>
+      <div><label for="theme">Label theme</label>
+        <select id="theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select></div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="cp" checked /> Centipawn ghost tick</label>
+      <label><input type="checkbox" id="cpbar" /> Centipawn full bar</label>
+      <label><input type="checkbox" id="caster" /> Caster mode (drama flares)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>OBS browser-source URL</h2>
+    <code class="out" id="url"></code>
+    <div class="actions">
+      <button id="copy" type="button">Copy URL</button>
+      <a class="btn ghost" id="open" target="_blank" rel="noopener">Open overlay ↗</a>
+    </div>
+    <div id="cmdWrap" class="hidden">
+      <label>Then start the live feed (task 0018 ingestor):</label>
+      <code class="out" id="cmd"></code>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  function build() {
+    var feed = $("feed").value;
+    var roundWrap = $("roundWrap"), customWrap = $("customWrap"), cmdWrap = $("cmdWrap");
+    roundWrap.classList.toggle("hidden", feed !== "sse");
+    customWrap.classList.toggle("hidden", feed !== "custom");
+
+    var src;
+    if (feed === "replay") src = "./mock-game.json";
+    else if (feed === "sse") src = "/sse";
+    else src = $("custom").value.trim() || "/sse";
+
+    var params = new URLSearchParams();
+    // Only emit non-defaults so the URL stays readable.
+    if (src !== "./mock-game.json") params.set("src", src);
+    if ($("layout").value !== "horizontal") params.set("layout", $("layout").value);
+    if ($("theme").value !== "dark") params.set("theme", $("theme").value);
+    if (!$("cp").checked) params.set("cp", "0");
+    if ($("cpbar").checked) params.set("cpbar", "1");
+    if ($("caster").checked) params.set("caster", "1");
+    var welo = $("welo").value.trim(), belo = $("belo").value.trim();
+    if (welo) params.set("welo", welo);
+    if (belo) params.set("belo", belo);
+
+    var qs = params.toString();
+    var base = location.origin && location.origin !== "null"
+      ? location.origin + "/index.html" : "index.html";
+    var url = base + (qs ? "?" + qs : "");
+    $("url").textContent = url;
+    $("open").href = url;
+
+    // Live ingestor command for a Lichess round.
+    var round = $("round").value.trim();
+    var showCmd = feed === "sse" && round;
+    cmdWrap.classList.toggle("hidden", !showCmd);
+    if (showCmd) {
+      $("cmd").textContent =
+        "chess-equity broadcast --round " + round + " --serve-sse 8777";
+    }
+  }
+
+  ["feed","round","custom","welo","belo","layout","theme","cp","cpbar","caster"]
+    .forEach(function (id) {
+      var el = $(id);
+      el.addEventListener("input", build);
+      el.addEventListener("change", build);
+    });
+
+  $("copy").addEventListener("click", function () {
+    var txt = $("url").textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(txt);
+    var b = $("copy"); var old = b.textContent; b.textContent = "Copied ✓";
+    setTimeout(function () { b.textContent = old; }, 1200);
+  });
+
+  build();
+})();
+</script>
+</body>
+</html>
