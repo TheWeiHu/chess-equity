@@ -151,3 +151,54 @@ def test_main_writes_renderable_json(tmp_path):
     data = json.loads(out.read_text())
     assert data["game"]["white"] == "alice"
     assert data["moves"] and data["rating_bands"]
+
+
+# --- import by username (task 0039) -----------------------------------------
+
+def test_fetch_latest_user_game_resolves_id_and_seeds_cache(tmp_path):
+    seen = {}
+
+    def fake_opener(url, headers, timeout):
+        seen["url"] = url
+        return SAMPLE_PGN
+
+    game_id = import_game.fetch_latest_user_game(
+        "alice", cache_dir=str(tmp_path), opener=fake_opener
+    )
+    assert game_id == "abcd1234"
+    # Hits the user-games endpoint, newest first.
+    assert "api/games/user/alice" in seen["url"]
+    assert "max=1" in seen["url"]
+    # Seeded the per-id cache, so a later fetch_pgn makes no request.
+    assert (tmp_path / "abcd1234.pgn").exists()
+
+    def boom(*a):
+        raise AssertionError("should not hit the network — cache was seeded")
+
+    assert import_game.fetch_pgn("abcd1234", cache_dir=str(tmp_path), opener=boom) == SAMPLE_PGN
+
+
+def test_fetch_latest_user_game_no_games_raises(tmp_path):
+    with pytest.raises(import_game.ImportError_):
+        import_game.fetch_latest_user_game(
+            "ghost", cache_dir=str(tmp_path), opener=lambda *a: "  "
+        )
+
+
+def test_main_user_path_writes_json(tmp_path):
+    out = tmp_path / "imported-game.json"
+    rc = import_game.main(
+        ["--user", "alice", "--out", str(out), "--cache-dir", str(tmp_path / "c")],
+        opener=lambda *a: SAMPLE_PGN,
+    )
+    assert rc == 0
+    data = json.loads(out.read_text())
+    assert data["game"]["white"] == "alice"
+    assert data["moves"] and data["rating_bands"]
+
+
+@pytest.mark.parametrize("argv", [[], ["abcd1234", "--user", "alice"]])
+def test_main_requires_exactly_one_source(argv, tmp_path):
+    # Neither, or both, is a usage error (argparse exits non-zero).
+    with pytest.raises(SystemExit):
+        import_game.main(argv + ["--out", str(tmp_path / "x.json")])
