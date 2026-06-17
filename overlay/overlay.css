@@ -153,6 +153,25 @@ html, body {
   to   { transform: translateY(0)   scale(1);   opacity: 1; }
 }
 
+/* Human-edge badge (task 0048): persistent while the practical equity bar and the
+   classic centipawn bar disagree on the position — the project's wedge made visible.
+   Sits below the bar (left) so it doesn't collide with the drama flare (top-right). */
+.human-edge {
+  position: absolute;
+  bottom: -28px;
+  left: 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: #38bdf8;
+  color: #07223a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.human-edge.black { background: #cbd5e1; color: #0b1220; }
+.human-edge[hidden] { display: none; }
+
 .equity-readout {
   position: absolute;
   inset: 0;
