@@ -212,19 +212,69 @@ def _run_grade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
-    """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
-    model = _apply_profiles(model, args)
+def _build_broadcast_feed(args: argparse.Namespace):
+    """Construct the broadcast feed from --pgn / --round / --url.
+
+    A fresh feed each call so the SSE path can give every overlay connection its own
+    replay/stream (``LocalPgnFeed`` in particular is stateful — it advances per poll).
+    """
     if args.pgn:
         with open(args.pgn, encoding="utf-8") as fh:
-            feed = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
-    elif args.round:
-        feed = LichessRoundFeed(args.round, token=args.token)
-    elif args.url:
-        feed = UrlPgnFeed(args.url)
-    else:
-        raise ValueError("broadcast needs one of --pgn / --round / --url")
+            return LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
+    if args.round:
+        return LichessRoundFeed(args.round, token=args.token)
+    if args.url:
+        return UrlPgnFeed(args.url)
+    raise ValueError("broadcast needs one of --pgn / --round / --url")
 
+
+def _overlay_static_dir() -> Optional[str]:
+    """The repo's ``overlay/`` dir if present (so --serve-sse is a one-command overlay).
+
+    Resolved relative to this package's repo checkout; ``None`` when running from an
+    installed wheel without the overlay assets, in which case only ``/sse`` is served.
+    """
+    from pathlib import Path
+
+    candidate = Path(__file__).resolve().parents[2] / "overlay"
+    return str(candidate) if candidate.is_dir() else None
+
+
+def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
+    """Drive broadcast ingestion, writing one JSON event per line to ``out``.
+
+    With ``--serve-sse PORT`` the same overlay events are instead streamed over an
+    HTTP Server-Sent-Events endpoint the overlay can ``EventSource`` onto (task 0094),
+    collapsing the old capture-to-file → serve.py seam into one command.
+    """
+    model = _apply_profiles(model, args)
+
+    if args.serve_sse is not None:
+        from chess_equity.broadcast import overlay_events, serve_sse
+
+        def make_events():
+            ingestor = BroadcastIngestor(
+                _build_broadcast_feed(args),
+                model,
+                white_elo=args.white_elo,
+                black_elo=args.black_elo,
+            )
+            return overlay_events(
+                ingestor,
+                interval=args.interval,
+                max_polls=args.max_polls,
+                max_idle_polls=1,
+            )
+
+        serve_sse(
+            make_events,
+            port=args.serve_sse,
+            directory=_overlay_static_dir(),
+            log=lambda msg: print(msg, file=sys.stderr),
+        )
+        return 0
+
+    feed = _build_broadcast_feed(args)
     ingestor = BroadcastIngestor(
         feed,
         model,
@@ -715,6 +765,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     bc.add_argument(
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
+    bc.add_argument(
+        "--serve-sse",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="stream overlay events as Server-Sent-Events on this port instead of "
+        "printing JSON Lines — point an OBS browser source at "
+        "http://localhost:PORT/?src=/sse (task 0094)",
     )
     add_profile_args(bc)
     add_model_arg(bc)

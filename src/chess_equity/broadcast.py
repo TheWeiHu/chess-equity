@@ -28,7 +28,9 @@ module does not yet feed the clock *into* the equity computation.
 
 from __future__ import annotations
 
+import http.server
 import io
+import json
 import re
 import time
 import urllib.error
@@ -636,3 +638,123 @@ class BroadcastIngestor:
         ):
             emit(event)
         return self.stats
+
+
+# --------------------------------------------------------------------------- #
+# Live SSE bridge: a round straight into the overlay (task 0094)
+# --------------------------------------------------------------------------- #
+
+
+def sse_frame(event: Dict[str, object]) -> str:
+    """Format one overlay event as a Server-Sent-Events ``data:`` frame.
+
+    Matches what ``overlay/feed.js`` (``EventSource.onmessage``) parses: a single
+    ``data: <json>`` line terminated by a blank line.
+    """
+    return "data: " + json.dumps(event) + "\n\n"
+
+
+def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[Dict[str, object]]:
+    """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
+
+    Yields overlay-shaped dicts in the order ``overlay.js`` expects: a one-time
+    ``game`` event (player name-plates) before each game's first ``position`` event,
+    then a ``position`` event per move. This is :meth:`BroadcastIngestor.stream`
+    re-serialized through :meth:`MoveEvent.to_overlay_event` /
+    :meth:`GameEvent.to_overlay` — the same bridge the JSONL path uses, but as a
+    generator the SSE server can write frame-by-frame as moves arrive.
+
+    ``stream_kwargs`` pass straight through to ``stream`` (``interval`` / ``max_polls``
+    / ``max_idle_polls`` / ``sleep``).
+    """
+    queued: List[Dict[str, object]] = []
+    ingestor.on_game = lambda game: queued.append(game.to_overlay())
+    for move_event in ingestor.stream(**stream_kwargs):
+        while queued:  # game announcements fire during the poll, before their moves
+            yield queued.pop(0)
+        yield move_event.to_overlay_event()
+    while queued:
+        yield queued.pop(0)
+
+
+def _sse_handler(event_source: Callable[[], Iterator[Dict[str, object]]], directory: Optional[str]):
+    """Build a request handler that serves ``/sse`` as a live event stream.
+
+    ``event_source`` is a zero-arg factory returning a *fresh* iterator of overlay
+    events per connection (so each browser source replays/streams from the start).
+    When ``directory`` is set the handler also serves the overlay's static files, so
+    ``http://host:port/?src=/sse`` is a one-command overlay; otherwise only ``/sse``
+    is served.
+    """
+
+    class _Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            if directory is not None:
+                super().__init__(*args, directory=directory, **kwargs)
+            else:
+                super().__init__(*args, **kwargs)
+
+        def do_GET(self):  # noqa: N802 (stdlib API)
+            if self.path.split("?")[0] == "/sse":
+                return self._stream_sse()
+            if directory is None:
+                self.send_error(404, "only /sse is served")
+                return None
+            return super().do_GET()
+
+        def _stream_sse(self) -> None:
+            # One stream per connection; close the socket when it ends (a finite replay
+            # terminates, a live feed runs until the round ends) so clients see EOF.
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                for event in event_source():
+                    self.wfile.write(sse_frame(event).encode("utf-8"))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the overlay / OBS closed the source — normal.
+
+        def log_message(self, format, *args):  # quieter console
+            pass
+
+    return _Handler
+
+
+def make_sse_server(
+    event_source: Callable[[], Iterator[Dict[str, object]]],
+    *,
+    port: int = 0,
+    host: str = "127.0.0.1",
+    directory: Optional[str] = None,
+) -> "http.server.ThreadingHTTPServer":
+    """Build (but don't start) a threaded SSE server. ``port=0`` lets the OS pick one
+    (the bound port is then ``server.server_address[1]`` — handy for tests)."""
+    return http.server.ThreadingHTTPServer((host, port), _sse_handler(event_source, directory))
+
+
+def serve_sse(
+    event_source: Callable[[], Iterator[Dict[str, object]]],
+    *,
+    port: int,
+    host: str = "127.0.0.1",
+    directory: Optional[str] = None,
+    log: Callable[[str], None] = print,
+) -> None:
+    """Serve overlay events as SSE on ``host:port`` until interrupted (Ctrl-C)."""
+    httpd = make_sse_server(event_source, port=port, host=host, directory=directory)
+    bound = httpd.server_address[1]
+    log(f"chess-equity SSE bridge: http://localhost:{bound}/sse")
+    if directory is not None:
+        log(f"  one-command overlay : http://localhost:{bound}/?src=/sse")
+    log("Ctrl-C to stop.")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()

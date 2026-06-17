@@ -396,3 +396,82 @@ def test_move_event_is_json_serializable():
     blob = json.dumps(events[0].to_dict())
     assert "fen" in blob
     assert isinstance(events[0], MoveEvent)
+
+
+# --------------------------------------------------------------------------- #
+# SSE bridge: a round straight into the overlay (task 0094)
+# --------------------------------------------------------------------------- #
+
+
+def test_sse_frame_is_a_single_data_line_with_blank_terminator():
+    from chess_equity.broadcast import sse_frame
+
+    frame = sse_frame({"type": "position", "ply": 3})
+    assert frame == 'data: {"type": "position", "ply": 3}\n\n'
+
+
+def test_overlay_events_emits_game_metadata_before_its_positions():
+    from chess_equity.broadcast import overlay_events
+
+    ingestor = BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model())
+    events = list(overlay_events(ingestor, interval=0, max_polls=None, max_idle_polls=1))
+    # First the one-time game event, then a position per ply (4 in GAME_PGN).
+    assert events[0]["type"] == "game"
+    assert events[0]["players"]["white"]["name"] == "Carlsen"
+    positions = [e for e in events if e["type"] == "position"]
+    assert [e["ply"] for e in positions] == [1, 2, 3, 4]
+    # Overlay schema: White-POV equity in [0, 1], not the flat [0, 100] internal form.
+    assert all(0.0 <= e["equity"] <= 1.0 for e in positions)
+
+
+def test_serve_sse_streams_a_replay_to_an_eventsource_client():
+    import json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    def make_events():
+        return overlay_events(
+            BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()),
+            interval=0,
+            max_polls=None,
+            max_idle_polls=1,
+        )
+
+    server = make_sse_server(make_events, port=0)  # OS-assigned port
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=10).read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    frames = [f for f in body.split("\n\n") if f.strip()]
+    parsed = [json.loads(f[len("data: "):]) for f in frames]
+    assert parsed[0]["type"] == "game"
+    assert [e["type"] for e in parsed[1:]] == ["position"] * 4
+
+
+def test_sse_server_404s_non_sse_paths_when_no_static_dir():
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        directory=None,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/index.html", timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
