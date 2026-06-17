@@ -146,5 +146,42 @@ check("click-scrub still works (main board ply changes, unchanged behaviour)", (
   assert.strictEqual(shown, expected, "main board reflects clicked ply");
 });
 
+// ---- touch + keyboard parity (task 0101) -----------------------------------
+
+check("tapping a dot pops the preview at the tap point (touch path)", () => {
+  hidePreview_via_mouseleave();
+  // A touch-generated click carries clientX/clientY; the preview should show + position.
+  dots[6].dispatchEvent({ type: "click", clientX: 200, clientY: 120 });
+  assert.strictEqual(preview.hidden, false, "tap should reveal the preview");
+  assert.strictEqual(previewBoard.children.length, 64, "preview board renders on tap");
+  assert.strictEqual(preview.style.left, "216px", "preview positioned at the tap x+16");
+  assert.strictEqual(preview.style.top, "136px", "preview positioned at the tap y+16");
+});
+
+check("chart dots are keyboard-focusable (tabindex=0)", () => {
+  assert.strictEqual(dots[6].getAttribute("tabindex"), "0");
+});
+
+check("focusing a dot shows that ply's preview (keyboard path)", () => {
+  hidePreview_via_mouseleave();
+  dots[4].dispatchEvent({ type: "focus" });
+  assert.strictEqual(preview.hidden, false, "focus should reveal the preview");
+  const expectedPieces = game.moves[4].fen.split(" ")[0].replace(/[^a-zA-Z]/g, "").length;
+  const shownPieces = previewBoard.children.filter((sq) => sq.children.length > 0).length;
+  assert.strictEqual(shownPieces, expectedPieces, "focused dot previews its own ply");
+});
+
+check("blur hides the preview (keyboard dismiss)", () => {
+  dots[4].dispatchEvent({ type: "focus" });
+  dots[4].dispatchEvent({ type: "blur" });
+  assert.strictEqual(preview.hidden, true, "blur should dismiss the preview");
+});
+
+// A tiny helper: reset the preview to hidden between cases via the public mouseleave path
+// (the fake DOM has no global listeners, so we reset through a dot we already have).
+function hidePreview_via_mouseleave() {
+  dots[6].dispatchEvent({ type: "mouseleave" });
+}
+
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("ok - hover board preview");
