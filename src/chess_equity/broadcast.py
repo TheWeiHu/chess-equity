@@ -21,9 +21,13 @@ Three pieces compose:
   its tracker, and emits events. Survives transient feed errors (reconnects).
 
 Equity comes from any :class:`~chess_equity.adapters.EquityModel`; today that is the
-placeholder baseline, but Maia-2 (task 0005) drops in unchanged. Clock is parsed and
-carried on every event so a clock-aware model (task 0015) can use it later — this
-module does not yet feed the clock *into* the equity computation.
+placeholder baseline, but Maia-2 (task 0005) drops in unchanged. The clock is parsed,
+carried on every event, **and** (task 0097) fed into the emitted bar: when a game has
+``[%clk]`` tags, :class:`GameTracker` warps the published ``equity`` by the side-to-move's
+time pressure via :func:`chess_equity.clock.clock_adjusted_white_equity`, so a won
+position with seconds left reads as less safe on the live overlay. Gate with
+``clock_aware`` (CLI ``--clock-aware`` / ``--no-clock-aware``); it is a no-op when no
+clocks are present or for correspondence time controls.
 """
 
 from __future__ import annotations
@@ -42,6 +46,8 @@ import chess
 import chess.pgn
 
 from chess_equity.adapters import EquityModel
+from chess_equity.clock import clock_adjusted_white_equity
+from chess_equity.data.schema import tc_bucket
 
 # --------------------------------------------------------------------------- #
 # Event + move grading
@@ -262,11 +268,17 @@ class GameTracker:
         *,
         white_elo: Optional[int],
         black_elo: Optional[int],
+        clock_aware: bool = True,
     ) -> None:
         self.game_id = game_id
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
+        self.clock_aware = clock_aware
+        # Time-control bucket for the clock warp, read once from the PGN's TimeControl
+        # header on first ingest. None until then; missing/unknown -> "correspondence",
+        # whose flag multiplier is 0, so the warp is a safe no-op.
+        self.tc_bucket: Optional[str] = None
         self.emitted_ply = 0
 
     def _elos(self) -> tuple[int, int]:
@@ -285,6 +297,8 @@ class GameTracker:
             self.white_elo = _parse_elo(game.headers, "WhiteElo")
         if self.black_elo is None:
             self.black_elo = _parse_elo(game.headers, "BlackElo")
+        if self.tc_bucket is None:
+            self.tc_bucket = tc_bucket(game.headers.get("TimeControl", "-"))
 
         nodes = list(game.mainline())
         resync = False
@@ -334,10 +348,19 @@ class GameTracker:
             )
 
             # Δequity from the mover's POV: White reads equity_white directly, Black
-            # reads its complement.
+            # reads its complement. The delta is computed on the *raw* model equity (a
+            # move's positional merit), so prev_equity_white below stays raw too; only the
+            # published bar is clock-warped.
             after = equity_white if mover_white else 100.0 - equity_white
             before = prev_equity_white if mover_white else 100.0 - prev_equity_white
             delta = after - before
+
+            # The published bar reflects the side-to-move's time pressure (task 0097): in
+            # the post-move FEN the side to move is the mover's opponent, so warp by their
+            # remaining clock. A no-op without clocks / for correspondence / clock-blind.
+            bar_equity = self._clock_warp(
+                equity_white, white_clock, black_clock, stm_white=not mover_white
+            )
 
             events.append(
                 MoveEvent(
@@ -351,7 +374,7 @@ class GameTracker:
                     black_clock=black_clock,
                     white_elo=self.white_elo,
                     black_elo=self.black_elo,
-                    equity=equity_white,
+                    equity=bar_equity,
                     delta_equity=delta,
                     last_move_grade=grade_delta(delta),
                     source=self.model.__class__.__name__,
@@ -367,6 +390,31 @@ class GameTracker:
 
     def _equity_white(self, fen: str, white_elo: int, black_elo: int) -> float:
         return self.model.evaluate(fen, white_elo, black_elo).equity_white
+
+    def _clock_warp(
+        self,
+        equity_white: float,
+        white_clock: Optional[float],
+        black_clock: Optional[float],
+        *,
+        stm_white: bool,
+    ) -> float:
+        """Warp a White-POV bar (in [0, 100]%) by the side-to-move's time pressure.
+
+        Returns ``equity_white`` unchanged when clock-awareness is off, no tc_bucket has
+        been read yet, or the side to move has no recorded clock — so clock-blind feeds
+        and correspondence games pass through untouched. Otherwise scales through
+        :func:`chess_equity.clock.clock_adjusted_white_equity` (which works in [0, 1]).
+        """
+        if not self.clock_aware or self.tc_bucket is None:
+            return equity_white
+        stm_clock = white_clock if stm_white else black_clock
+        if stm_clock is None:
+            return equity_white
+        adjusted = clock_adjusted_white_equity(
+            equity_white / 100.0, stm_clock, self.tc_bucket, white_to_move=stm_white
+        )
+        return adjusted * 100.0
 
 
 # --------------------------------------------------------------------------- #
@@ -528,11 +576,13 @@ class BroadcastIngestor:
         *,
         white_elo: Optional[int] = None,
         black_elo: Optional[int] = None,
+        clock_aware: bool = True,
     ) -> None:
         self.feed = feed
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
+        self.clock_aware = clock_aware
         self._trackers: Dict[str, GameTracker] = {}
         self.stats = IngestStats()
         # Fired once per game, the first time it is seen, with its :class:`GameEvent`
@@ -550,6 +600,7 @@ class BroadcastIngestor:
                 self.model,
                 white_elo=self.white_elo,
                 black_elo=self.black_elo,
+                clock_aware=self.clock_aware,
             )
             self._trackers[game_id] = tracker
         return tracker

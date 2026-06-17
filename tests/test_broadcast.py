@@ -560,3 +560,62 @@ def test_serve_sse_sends_keepalive_comment_during_idle():
         server.server_close()
     assert ": keepalive" in body  # the idle-poll heartbeat comment
     assert '"type": "position"' in body  # and the real move frames
+
+
+# --------------------------------------------------------------------------- #
+# Clock-aware equity warp (task 0097)
+# --------------------------------------------------------------------------- #
+
+# A bullet game (TimeControl -> bullet bucket, the deadliest multiplier) whose clocks
+# fall to a few seconds — the regime where time pressure dominates practical results.
+LOW_CLOCK_PGN = """[Event "Time scramble"]
+[Site "https://lichess.org/lc000001"]
+[White "A"]
+[Black "B"]
+[Round "1"]
+[WhiteElo "2000"]
+[BlackElo "2000"]
+[TimeControl "60+0"]
+[Result "*"]
+
+1. e4 { [%clk 0:00:05] } e5 { [%clk 0:00:04] } 2. Nf3 { [%clk 0:00:03] } *
+"""
+
+
+def _last_equity(pgn, *, clock_aware):
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=clock_aware)
+    return tracker.ingest(pgn)[-1].equity
+
+
+def test_clock_aware_shifts_equity_on_low_clock():
+    # Acceptance: a low-clock position's published bar differs from the clock-blind value.
+    blind = _last_equity(LOW_CLOCK_PGN, clock_aware=False)
+    aware = _last_equity(LOW_CLOCK_PGN, clock_aware=True)
+    assert abs(aware - blind) > 1.0, "seconds-left bullet position should move the bar"
+    assert 0.0 <= aware <= 100.0
+    # After 2.Nf3 Black is to move with ~4s: Black's practical chances fall, so the
+    # White-POV bar rises above the clock-blind reading.
+    assert aware > blind
+
+
+def test_clock_aware_is_default_on():
+    # The flag defaults on, so the plain tracker already warps a low-clock bar.
+    default = _last_equity(LOW_CLOCK_PGN, clock_aware=True)
+    explicit_off = _last_equity(LOW_CLOCK_PGN, clock_aware=False)
+    assert default != explicit_off
+
+
+def test_clock_aware_negligible_with_minutes_left():
+    # The comfortable-clock GAME_PGN (3 minutes) should warp essentially not at all —
+    # it's the *low* clock that matters, not merely the presence of clocks.
+    blind = _last_equity(GAME_PGN, clock_aware=False)
+    aware = _last_equity(GAME_PGN, clock_aware=True)
+    assert abs(aware - blind) < 0.5
+
+
+def test_clock_blind_when_no_clk_tags():
+    # No [%clk] tags -> the side-to-move clock is None -> a no-op even with clock_aware on.
+    no_clk = LOW_CLOCK_PGN.replace(" { [%clk 0:00:05] }", "").replace(
+        " { [%clk 0:00:04] }", ""
+    ).replace(" { [%clk 0:00:03] }", "")
+    assert _last_equity(no_clk, clock_aware=True) == _last_equity(no_clk, clock_aware=False)
