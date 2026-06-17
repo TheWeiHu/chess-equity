@@ -22,7 +22,12 @@ Swap in a new ``EquityModel`` and the CLI / bar keep working unchanged.
 from chess_equity.adapters import EquityModel, HumanPolicy, ObjectiveEngine
 from chess_equity.maia2 import Maia2Equity, Maia2Policy
 from chess_equity.models import LichessBaselineModel, MaterialEngine
-from chess_equity.stockfish import StockfishEngine, StockfishNotFound, stockfish_path
+from chess_equity.stockfish import (
+    StockfishEngine,
+    StockfishNotFound,
+    resolve_objective_engine,
+    stockfish_path,
+)
 from chess_equity.types import Equity, WDL, lichess_win_percent
 
 __all__ = [
@@ -37,6 +42,7 @@ __all__ = [
     "StockfishEngine",
     "StockfishNotFound",
     "stockfish_path",
+    "resolve_objective_engine",
     "Maia2Equity",
     "Maia2Policy",
 ]
