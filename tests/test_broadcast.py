@@ -619,3 +619,62 @@ def test_clock_blind_when_no_clk_tags():
         " { [%clk 0:00:04] }", ""
     ).replace(" { [%clk 0:00:03] }", "")
     assert _last_equity(no_clk, clock_aware=True) == _last_equity(no_clk, clock_aware=False)
+
+
+# --------------------------------------------------------------------------- #
+# Objective cp fallback for cp-less models (task 0103)
+# --------------------------------------------------------------------------- #
+
+from chess_equity.adapters import EquityModel, ObjectiveEngine, ObjectiveEval
+from chess_equity.types import WDL, Equity
+
+
+class _CpLessModel(EquityModel):
+    """A rating-blind model whose Equity carries no cp (mimics maia2's win-prob)."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        wdl = WDL.from_unnormalized(p_win=1 / 3, p_draw=1 / 3, p_loss=1 / 3)
+        return Equity(wdl=wdl, equity_white=50.0, source="cpless", cp=None)
+
+
+class _StubEngine(ObjectiveEngine):
+    """Counts calls and returns a fixed side-to-move cp (or a mate -> cp None)."""
+
+    def __init__(self, cp_value):
+        self.cp_value = cp_value
+        self.calls = 0
+
+    def eval(self, fen):
+        self.calls += 1
+        return ObjectiveEval(cp=self.cp_value)
+
+
+def test_cp_fallback_populates_cp_for_cpless_model():
+    # Acceptance: a cp-less model + an objective engine -> every event carries a cp,
+    # so the overlay's ghost tick + divergence badge work on a maia2-style feed.
+    engine = _StubEngine(123.0)
+    tracker = GameTracker("g", _CpLessModel(), white_elo=2000, black_elo=2000, engine=engine)
+    events = tracker.ingest(GAME_PGN)
+    assert events
+    assert all(e.cp is not None for e in events)
+    # cp is rendered White-POV (the engine's side-to-move cp is flipped per ply), so the
+    # magnitude is the stub value while the sign alternates.
+    assert all(abs(e.cp) == 123.0 for e in events)
+    assert engine.calls == len(events)
+
+
+def test_cpless_model_without_engine_leaves_cp_none():
+    # No engine -> nothing to fall back to; cp stays None (unchanged behaviour).
+    tracker = GameTracker("g", _CpLessModel(), white_elo=2000, black_elo=2000)
+    events = tracker.ingest(GAME_PGN)
+    assert events and all(e.cp is None for e in events)
+
+
+def test_model_with_cp_does_not_consult_engine():
+    # A model that already exposes cp (the baseline) must not call the fallback engine.
+    engine = _StubEngine(123.0)
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, engine=engine)
+    events = tracker.ingest(GAME_PGN)
+    assert events
+    assert engine.calls == 0
+    assert any(e.cp is not None for e in events)
