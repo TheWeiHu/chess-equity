@@ -54,6 +54,11 @@ raises a clear hint rather than silently falling back to material. Tests stay
 engine-free via an injectable backend, so `uv run pytest` needs no binary. (The bar
 still defaults to the material placeholder until Stockfish is wired in as the default.)
 
+Anything beyond `uv sync --extra dev` — the Stockfish binary, the `data`/`maia2`/`plots`
+extras, a Lichess dump, Maia-2 weights, network access — is opt-in per task and
+catalogued in **[DEPENDENCIES.md](DEPENDENCIES.md)**: one row per external requirement
+with its install command, which tasks need it, and whether CI needs it (it never should).
+
 ## Use
 
 ```bash
