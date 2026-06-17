@@ -1,0 +1,28 @@
+name: CI
+
+# A deliberately tiny smoke check (task 0022): just "does the test suite still pass?"
+# so parallel branches can't silently break each other or the base. NOT a strict gate —
+# no coverage thresholds, no lint enforcement (this is a nukeable prototype; keep it
+# out of the way of fast iteration). See README's experimental-prototype warning.
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # The `data` extra (pyarrow/pandas/zstandard) is needed by the Parquet/dump tests;
+      # `maia2`/`plots` stay out so CI never pulls torch/matplotlib for the smoke run.
+      - name: Install
+        run: pip install -e ".[dev,data]"
+      # Tests live in tests/, plus the isolated baseline/, overlay/, and web/ suites.
+      - name: Run tests
+        run: pytest tests baseline overlay web -q
