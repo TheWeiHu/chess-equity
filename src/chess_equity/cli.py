@@ -252,6 +252,12 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
+        # A live round (--round/--url) may be tuned into before its first move: keep
+        # polling (no idle stop) and send keep-alive heartbeats so the connection
+        # survives the quiet wait. A local --pgn replay is finite, so it still
+        # terminates on idle (max_idle_polls=1, no heartbeat).
+        is_live = bool(args.round or args.url)
+
         def make_events():
             ingestor = BroadcastIngestor(
                 _build_broadcast_feed(args),
@@ -263,7 +269,8 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 ingestor,
                 interval=args.interval,
                 max_polls=args.max_polls,
-                max_idle_polls=1,
+                max_idle_polls=None if is_live else 1,
+                heartbeat=is_live,
             )
 
         serve_sse(

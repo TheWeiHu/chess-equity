@@ -584,13 +584,20 @@ class BroadcastIngestor:
         max_polls: Optional[int] = None,
         max_idle_polls: Optional[int] = 1,
         sleep: Callable[[float], None] = time.sleep,
-    ) -> Iterator[MoveEvent]:
+        heartbeat: bool = False,
+    ) -> Iterator[Optional[MoveEvent]]:
         """Yield events as they arrive. Generator so callers control the sink.
 
         ``interval`` seconds between polls; ``max_polls`` caps total polls (None =
         unbounded, for a true live stream); ``max_idle_polls`` stops after that many
         consecutive polls produced no PGN (so a finished replay or a dead round ends).
         ``sleep`` is injectable for tests.
+
+        With ``heartbeat=True`` an idle poll that does *not* end the stream yields
+        ``None`` — a tick the SSE bridge turns into a keep-alive comment so an
+        early-tuned-in connection (a round that hasn't started) isn't dropped. Default
+        ``False`` keeps the historical ``Iterator[MoveEvent]`` contract for the JSONL
+        path and existing callers.
         """
         polls = 0
         idle = 0
@@ -610,11 +617,15 @@ class BroadcastIngestor:
                     # Keep retrying live feeds; only give up if we never connected.
                     if not self._trackers:
                         break
+                if heartbeat:
+                    yield None
                 continue
             if not snapshot:
                 idle += 1
                 if max_idle_polls is not None and idle >= max_idle_polls:
                     break
+                if heartbeat:
+                    yield None
                 continue
             idle = 0
             for event in self.ingest_snapshot(snapshot):
@@ -636,13 +647,20 @@ class BroadcastIngestor:
             max_idle_polls=max_idle_polls,
             sleep=sleep,
         ):
-            emit(event)
+            if event is not None:  # heartbeat is off here, but stay type-safe
+                emit(event)
         return self.stats
 
 
 # --------------------------------------------------------------------------- #
 # Live SSE bridge: a round straight into the overlay (task 0094)
 # --------------------------------------------------------------------------- #
+
+
+# Sentinel yielded by overlay_events on an idle poll — the SSE bridge turns it into a
+# keep-alive comment (": ...\n\n"), which EventSource ignores, so an idle connection
+# (a round that hasn't started) stays open instead of being dropped by a proxy/OBS.
+HEARTBEAT = object()
 
 
 def sse_frame(event: Dict[str, object]) -> str:
@@ -654,7 +672,7 @@ def sse_frame(event: Dict[str, object]) -> str:
     return "data: " + json.dumps(event) + "\n\n"
 
 
-def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[Dict[str, object]]:
+def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[object]:
     """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
 
     Yields overlay-shaped dicts in the order ``overlay.js`` expects: a one-time
@@ -665,11 +683,15 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[D
     generator the SSE server can write frame-by-frame as moves arrive.
 
     ``stream_kwargs`` pass straight through to ``stream`` (``interval`` / ``max_polls``
-    / ``max_idle_polls`` / ``sleep``).
+    / ``max_idle_polls`` / ``sleep`` / ``heartbeat``). With ``heartbeat=True`` an idle
+    poll yields the :data:`HEARTBEAT` sentinel instead of a ``position`` dict.
     """
     queued: List[Dict[str, object]] = []
     ingestor.on_game = lambda game: queued.append(game.to_overlay())
     for move_event in ingestor.stream(**stream_kwargs):
+        if move_event is None:  # idle-poll heartbeat tick from stream()
+            yield HEARTBEAT
+            continue
         while queued:  # game announcements fire during the poll, before their moves
             yield queued.pop(0)
         yield move_event.to_overlay_event()
@@ -677,7 +699,7 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[D
         yield queued.pop(0)
 
 
-def _sse_handler(event_source: Callable[[], Iterator[Dict[str, object]]], directory: Optional[str]):
+def _sse_handler(event_source: Callable[[], Iterator[object]], directory: Optional[str]):
     """Build a request handler that serves ``/sse`` as a live event stream.
 
     ``event_source`` is a zero-arg factory returning a *fresh* iterator of overlay
@@ -714,7 +736,12 @@ def _sse_handler(event_source: Callable[[], Iterator[Dict[str, object]]], direct
             self.end_headers()
             try:
                 for event in event_source():
-                    self.wfile.write(sse_frame(event).encode("utf-8"))
+                    if isinstance(event, dict):
+                        self.wfile.write(sse_frame(event).encode("utf-8"))
+                    else:
+                        # HEARTBEAT sentinel → an SSE comment: ignored by EventSource,
+                        # just keeps the idle socket warm.
+                        self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the overlay / OBS closed the source — normal.
@@ -726,7 +753,7 @@ def _sse_handler(event_source: Callable[[], Iterator[Dict[str, object]]], direct
 
 
 def make_sse_server(
-    event_source: Callable[[], Iterator[Dict[str, object]]],
+    event_source: Callable[[], Iterator[object]],
     *,
     port: int = 0,
     host: str = "127.0.0.1",
@@ -738,7 +765,7 @@ def make_sse_server(
 
 
 def serve_sse(
-    event_source: Callable[[], Iterator[Dict[str, object]]],
+    event_source: Callable[[], Iterator[object]],
     *,
     port: int,
     host: str = "127.0.0.1",
