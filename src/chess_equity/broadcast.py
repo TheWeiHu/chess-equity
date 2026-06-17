@@ -325,6 +325,9 @@ class GameTracker:
 
         for ply, node in enumerate(nodes, start=1):
             mover_white = node.parent.board().turn == chess.WHITE
+            # The mover's clock *before* this move — the time pressure they were under
+            # while facing the prior position (the "before" bar for the clock-aware delta).
+            prev_mover_clock = white_clock if mover_white else black_clock
             clock = node.clock()
             if clock is not None:
                 if mover_white:
@@ -347,20 +350,30 @@ class GameTracker:
             equity_white = equity.equity_white
             cp = self._white_pov_cp(equity, fen, mover_white)
 
-            # Δequity from the mover's POV: White reads equity_white directly, Black
-            # reads its complement. The delta is computed on the *raw* model equity (a
-            # move's positional merit), so prev_equity_white below stays raw too; only the
-            # published bar is clock-warped.
-            after = equity_white if mover_white else 100.0 - equity_white
-            before = prev_equity_white if mover_white else 100.0 - prev_equity_white
-            delta = after - before
-
             # The published bar reflects the side-to-move's time pressure (task 0097): in
             # the post-move FEN the side to move is the mover's opponent, so warp by their
             # remaining clock. A no-op without clocks / for correspondence / clock-blind.
             bar_equity = self._clock_warp(
                 equity_white, white_clock, black_clock, stm_white=not mover_white
             )
+
+            # Δequity from the mover's POV (task 0106): grade the swing in *practical*
+            # win chance, so a low-clock survival reads as the save it is rather than the
+            # raw positional dip. Both bars are clock-warped at their own ply/clock state —
+            # the "before" position faced the mover (warp by their pre-move clock), the
+            # "after" position faces the opponent (the already-warped published bar). When
+            # clock-blind (no tc_bucket / no clocks / clock_aware off) ``_clock_warp`` is a
+            # no-op, so this degrades to the plain raw-equity delta. White reads the
+            # White-POV bar directly; Black reads its complement.
+            before_bar_white = self._clock_warp(
+                prev_equity_white,
+                prev_mover_clock if mover_white else white_clock,
+                black_clock if mover_white else prev_mover_clock,
+                stm_white=mover_white,
+            )
+            after = bar_equity if mover_white else 100.0 - bar_equity
+            before = before_bar_white if mover_white else 100.0 - before_bar_white
+            delta = after - before
 
             events.append(
                 MoveEvent(

@@ -678,3 +678,38 @@ def test_model_with_cp_does_not_consult_engine():
     assert events
     assert engine.calls == 0
     assert any(e.cp is not None for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# Clock-aware Δequity move grade (task 0106)
+# --------------------------------------------------------------------------- #
+
+
+def _last_delta(pgn, *, clock_aware):
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=clock_aware)
+    return tracker.ingest(pgn)[-1].delta_equity
+
+
+def test_clock_aware_delta_differs_from_blind_on_low_clock():
+    # The grade is computed from delta_equity, so a clock-warped delta is the grade going
+    # clock-aware. In the bullet scramble the warp is live, so the mover's swing -- the
+    # practical win-chance change the grade reflects -- differs from the clock-blind delta.
+    blind = _last_delta(LOW_CLOCK_PGN, clock_aware=False)
+    aware = _last_delta(LOW_CLOCK_PGN, clock_aware=True)
+    assert blind is not None and aware is not None
+    assert abs(aware - blind) > 0.5, "seconds-left bullet move should move the graded swing"
+
+
+def test_clock_aware_grade_degrades_to_raw_when_blind():
+    # The clock-blind path must still grade the *raw* equity delta unchanged: with the
+    # warp off, before/after both pass through _clock_warp untouched, so the delta (and
+    # thus the grade) is exactly the positional swing -- no clock contribution leaks in.
+    blind = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=False)
+    events = blind.ingest(LOW_CLOCK_PGN)
+    last = events[-1]
+    assert last.last_move_grade == grade_delta(last.delta_equity)
+    # And a clock-blind run equals a no-[%clk] run's delta: clocks only ever enter via warp.
+    no_clk = LOW_CLOCK_PGN.replace(" { [%clk 0:00:05] }", "").replace(
+        " { [%clk 0:00:04] }", ""
+    ).replace(" { [%clk 0:00:03] }", "")
+    assert _last_delta(no_clk, clock_aware=True) == last.delta_equity
