@@ -95,6 +95,14 @@
     return feedRating == null ? "" : feedRating;
   }
 
+  // Is this side in time trouble? True when a real remaining-seconds reading is at or
+  // under the threshold (default 30s, tunable via ?lowclock=). Drives the visual cue
+  // (task 0104) so a viewer can see a clock-driven equity shift, not just a positional
+  // one. ``null``/missing/negative clocks are never "pressure".
+  function timePressure(secs, threshold) {
+    return typeof secs === "number" && !isNaN(secs) && secs >= 0 && secs <= threshold;
+  }
+
   // Seconds -> M:SS (or H:MM:SS). Sub-10s shows tenths for the scramble feel.
   function formatClock(secs) {
     if (typeof secs !== "number" || isNaN(secs) || secs < 0) return "";
@@ -120,6 +128,7 @@
       speed: parseFloat(p.get("speed")) || 1,
       welo: p.get("welo"),
       belo: p.get("belo"),
+      lowclock: parseFloat(p.get("lowclock")) || 30,
     };
   }
 
@@ -215,6 +224,12 @@
     updateClock("[data-white-clock]", clk.white);
     updateClock("[data-black-clock]", clk.black);
 
+    // Time-pressure cue (task 0104): tint the nameplate of whichever side is low on
+    // the clock so a clock-driven equity shift reads as such, not as a positional one.
+    const lc = cfg.lowclock != null ? cfg.lowclock : 30;
+    setPressure(".player-white", clk.white, lc);
+    setPressure(".player-black", clk.black, lc);
+
     // Per-move Δequity grade pill.
     if (evt.grade && evt.grade.label) showGrade(evt.grade);
 
@@ -231,6 +246,12 @@
     }
     el.textContent = formatClock(secs);
     el.classList.toggle("low", secs < 10);
+  }
+
+  // Toggle the time-pressure class on a player's nameplate from its remaining clock.
+  function setPressure(playerSel, secs, threshold) {
+    const el = q(playerSel);
+    if (el) el.classList.toggle("time-pressure", timePressure(secs, threshold));
   }
 
   function showGrade(grade) {
@@ -318,6 +339,7 @@
     pct: pct,
     cpToWhitePos: cpToWhitePos,
     formatClock: formatClock,
+    timePressure: timePressure,
     overrideRating: overrideRating,
     fmtDelta: fmtDelta,
     dramaSwing: dramaSwing,
