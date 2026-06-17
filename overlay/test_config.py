@@ -49,6 +49,19 @@ def test_overlay_reads_rating_overrides():
     assert "overrideRating" in js, "overlay.js must have a rating-override path"
 
 
+def test_config_persists_setup_in_localstorage():
+    """An OBS browser-source reload must keep the streamer's setup (task 0056).
+
+    No JS runtime in the harness, so assert the wiring by content: the page both
+    writes to and reads from localStorage, and re-applies the saved state on load.
+    """
+    html = _read(CONFIG)
+    assert "localStorage.setItem" in html, "config must SAVE the setup to localStorage"
+    assert "localStorage.getItem" in html, "config must READ the setup back on load"
+    # restore() must run before the first render so saved fields are rehydrated.
+    assert "restore()" in html and html.index("restore()") < html.index("build();")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
