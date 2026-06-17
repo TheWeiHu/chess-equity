@@ -687,6 +687,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
     tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
 
+    sub.add_parser(
+        "doctor",
+        help="check the optional engines (Stockfish, Maia-2) are installed and working",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "eval":
@@ -713,6 +718,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_train(args)
     if args.command == "precompute":
         return _run_precompute(args)
+    if args.command == "doctor":
+        from chess_equity.doctor import doctor
+
+        return doctor()
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2
