@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import chess  # noqa: E402
 import chess.pgn  # noqa: E402
 
+from chess_equity.adapters import ObjectiveEngine  # noqa: E402
 from chess_equity.models import MaterialEngine  # noqa: E402
 
 # Standard ladder mixed in with the players' real ratings so the slider has a few
@@ -77,13 +78,22 @@ def _eval_in_comment(comment: str) -> Optional[float]:
     return eval_to_cp_white(m.group(1)) if m else None
 
 
-def _material_cp_white(fen: str, engine: MaterialEngine) -> float:
+def _material_cp_white(fen: str, engine: ObjectiveEngine) -> float:
+    """White-POV centipawns from any objective engine (material or a real UCI engine).
+
+    ``engine.eval`` is side-to-move-relative; flip it to White POV. A forced mate
+    becomes a decisive ±MATE_CP: a *positive* mate count means the side to move is
+    mating, a non-positive one means it is (being) mated. (For the bare
+    :class:`MaterialEngine` the only mate is ``mate=0`` on a finished board, i.e. the
+    side to move has just been mated — so this reduces to the old behaviour.)
+    """
     obj = engine.eval(fen)
+    white = chess.Board(fen).turn == chess.WHITE
     if obj.mate is not None:
-        # Mate on the board: the side NOT to move just delivered it.
-        return MATE_CP if chess.Board(fen).turn == chess.BLACK else -MATE_CP
+        stm_decisive = MATE_CP if obj.mate > 0 else -MATE_CP
+        return stm_decisive if white else -stm_decisive
     cp_stm = obj.cp or 0.0
-    return cp_stm if chess.Board(fen).turn == chess.WHITE else -cp_stm
+    return cp_stm if white else -cp_stm
 
 
 def _int_header(headers, key: str) -> Optional[int]:

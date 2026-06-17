@@ -115,9 +115,13 @@
     if (Math.abs(gap) >= 15) {
       div.hidden = false;
       var side = gap > 0 ? "White" : "Black";
+      var barLabel =
+        state.data.cp_engine === "stockfish"
+          ? "the engine's objective eval"
+          : "the material count";
       div.textContent =
         "Equity favours " + side + " by " + Math.round(Math.abs(gap)) +
-        " pts over the centipawn bar — the material count misreads this position.";
+        " pts over the centipawn bar — " + barLabel + " misreads this position.";
     } else {
       div.hidden = true;
     }
