@@ -96,9 +96,14 @@ def build_model(name: str = "baseline") -> EquityModel:
         from chess_equity.maia2 import build_maia2_equity
 
         return build_maia2_equity()
+    if name == "wdl-a":
+        # Lazy import + artifact load so the baseline path stays free of the model file.
+        from chess_equity.wdl_regression import build_wdl_a_equity
+
+        return build_wdl_a_equity()
     if name == "baseline":
         return LichessBaselineModel()
-    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2")
+    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2, wdl-a")
 
 
 def _run_eval(args: argparse.Namespace) -> int:
@@ -259,6 +264,30 @@ def _run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_train(args: argparse.Namespace) -> int:
+    """Fit the wdl-a rating-conditioned WDL model and write the artifact (task 0004)."""
+    from chess_equity.data.build import load_rows
+    from chess_equity.wdl_regression import default_artifact_path, fit
+
+    try:
+        rows = load_rows(args.data)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not rows:
+        print(f"error: no rows in {args.data}", file=sys.stderr)
+        return 1
+    model = fit(rows, lr=args.lr, iters=args.iters, l2=args.l2)
+    out = args.out or str(default_artifact_path())
+    model.save(out)
+    meta = model.meta or {}
+    print(
+        f"wrote {out} (n_train={meta.get('n_train')}, "
+        f"iters={meta.get('iters')}, final_log_loss={meta.get('final_log_loss'):.4f})"
+    )
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -266,9 +295,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     def add_model_arg(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--model",
-            choices=("baseline", "maia2"),
+            choices=("baseline", "maia2", "wdl-a"),
             default="baseline",
-            help="equity model: rating-blind baseline (default) or rating-conditioned maia2",
+            help=(
+                "equity model: rating-blind baseline (default), rating-conditioned "
+                "maia2, or the wdl-a regression"
+            ),
         )
 
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
@@ -327,6 +359,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     val.add_argument("--models", default="baseline", help="comma-separated predictor names")
     val.add_argument("--out", help="write the Markdown report here (default: stdout)")
 
+    tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
+    tr.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
+    tr.add_argument("--out", help="artifact path (default: the packaged wdl_a.json)")
+    tr.add_argument("--iters", type=int, default=3000, help="gradient-descent iterations")
+    tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
+    tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
+
     args = parser.parse_args(argv)
 
     if args.command == "eval":
@@ -349,6 +388,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_data(args)
     if args.command == "validate":
         return _run_validate(args)
+    if args.command == "train":
+        return _run_train(args)
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2

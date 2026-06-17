@@ -59,10 +59,33 @@ def baseline_cp_clock(row: PositionRow) -> float:
     )
 
 
+_WDL_A_MODEL = None
+
+
+def wdl_a(row: PositionRow) -> float:
+    """Approach A — the rating-conditioned WDL regression (task 0004).
+
+    The natural drop-in for this gate: it reads ``(cp_eval, white_elo, black_elo, ply,
+    tc_bucket)`` straight off the row, so it sits beside the rating-blind baseline with
+    no harness change. The fitted artifact is loaded lazily and cached, so importing
+    this module stays free of the model file (and a missing artifact only bites the
+    callers that actually ask for ``wdl-a``).
+    """
+    global _WDL_A_MODEL
+    if _WDL_A_MODEL is None:
+        from chess_equity.wdl_regression import load_wdl_a_model
+
+        _WDL_A_MODEL = load_wdl_a_model()
+    return _WDL_A_MODEL.predict_white_equity(
+        row.cp_eval, row.white_elo, row.black_elo, row.ply, row.tc_bucket
+    )
+
+
 # The registry the CLI selects from. New approaches register here.
 PREDICTORS: Dict[str, Predictor] = {
     "baseline": baseline_cp,
     "baseline+clock": baseline_cp_clock,
+    "wdl-a": wdl_a,
 }
 
 
