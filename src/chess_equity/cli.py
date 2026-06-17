@@ -174,7 +174,7 @@ def _run_eval(args: argparse.Namespace) -> int:
 
 
 def _run_grade(args: argparse.Namespace) -> int:
-    model = build_model(args.model)
+    model = build_model(args.model, depth=args.depth)
     try:
         for line in _grade_pgn(model, args.pgn, args.white_elo, args.black_elo):
             print(line)
@@ -500,6 +500,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     gr.add_argument("--pgn", required=True, help="PGN file to grade")
     gr.add_argument("--white-elo", type=int, default=1500)
     gr.add_argument("--black-elo", type=int, default=1500)
+    gr.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
     add_model_arg(gr)
 
     bc = sub.add_parser(
@@ -518,6 +522,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+    bc.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
     add_model_arg(bc)
 
     hl = sub.add_parser(
@@ -615,7 +623,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_grade(args)
     if args.command == "broadcast":
         try:
-            return _run_broadcast(args, build_model(args.model), sys.stdout)
+            return _run_broadcast(args, build_model(args.model, depth=args.depth), sys.stdout)
         except (ValueError, OSError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
