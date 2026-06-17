@@ -83,31 +83,44 @@ def _event_line(event: MoveEvent) -> str:
     return json.dumps(event.to_dict())
 
 
-def build_model() -> EquityModel:
-    """The model the CLI uses. Swap this single line to change models."""
-    return LichessBaselineModel()
+def build_model(name: str = "baseline") -> EquityModel:
+    """Construct the requested equity model by name.
+
+    ``baseline`` is the rating-blind placeholder (no extra deps); ``maia2`` is the
+    real rating-conditioned bar and lazily loads Maia-2 on first evaluation (so the
+    error, if it's not installed, surfaces only when actually used).
+    """
+    if name == "maia2":
+        # Lazy import so the common baseline path never pays for the maia2 module.
+        from chess_equity.maia2 import build_maia2_equity
+
+        return build_maia2_equity()
+    if name == "baseline":
+        return LichessBaselineModel()
+    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2")
 
 
 def _run_eval(args: argparse.Namespace) -> int:
-    model = build_model()
+    model = build_model(args.model)
     try:
         if args.pgn:
             for line in _eval_pgn(model, args.pgn, args.white_elo, args.black_elo):
                 print(line)
         else:
             print(_eval_fen(model, args.fen, args.white_elo, args.black_elo))
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
+        # RuntimeError covers Maia2NotInstalled (a model failing to load at use time).
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
 
 
 def _run_grade(args: argparse.Namespace) -> int:
-    model = build_model()
+    model = build_model(args.model)
     try:
         for line in _grade_pgn(model, args.pgn, args.white_elo, args.black_elo):
             print(line)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
@@ -216,16 +229,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def add_model_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--model",
+            choices=("baseline", "maia2"),
+            default="baseline",
+            help="equity model: rating-blind baseline (default) or rating-conditioned maia2",
+        )
+
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
     ev.add_argument("fen", nargs="?", default=START_FEN, help="FEN (default: startpos)")
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
     ev.add_argument("--white-elo", type=int, default=1500)
     ev.add_argument("--black-elo", type=int, default=1500)
+    add_model_arg(ev)
 
     gr = sub.add_parser("grade", help="grade every move of a PGN by Δequity vs rating peers")
     gr.add_argument("--pgn", required=True, help="PGN file to grade")
     gr.add_argument("--white-elo", type=int, default=1500)
     gr.add_argument("--black-elo", type=int, default=1500)
+    add_model_arg(gr)
 
     bc = sub.add_parser(
         "broadcast",
@@ -243,6 +266,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+    add_model_arg(bc)
 
     data = sub.add_parser("data", help="build / manage the training+validation dataset")
     data_sub = data.add_subparsers(dest="data_command", required=True)
@@ -266,8 +290,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_grade(args)
     if args.command == "broadcast":
         try:
-            return _run_broadcast(args, build_model(), sys.stdout)
-        except (ValueError, OSError) as exc:
+            return _run_broadcast(args, build_model(args.model), sys.stdout)
+        except (ValueError, OSError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
     if args.command == "data":
