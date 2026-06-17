@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import IO, Iterable, Iterator, List, Optional, Sequence
 
 from chess_equity.data.pgn import iter_rows
-from chess_equity.data.schema import PositionRow, columns as schema_columns
+from chess_equity.data.schema import PositionRow, columns as schema_columns, rating_bucket
 
 LICHESS_DB_URL = "https://database.lichess.org/standard/lichess_db_standard_rated_{month}.pgn.zst"
 
@@ -87,6 +87,34 @@ def _write_parquet(rows: Iterable[PositionRow], out: Path, cols: Sequence[str]) 
     return len(materialised)
 
 
+def _write_partitioned(
+    rows: Iterable[PositionRow], root: Path, cols: Sequence[str], fmt: str
+) -> int:
+    """Write a hive-partitioned tree ``root/tc_bucket=<b>/rating_bucket=<rb>/part.<fmt>``.
+
+    Groups rows by (``tc_bucket``, rating band) so 0004/0009 can read just the slices
+    they need. Rows are grouped in memory — fine for the committed sample and sampled
+    builds; a full-dump streaming writer (pyarrow ``write_dataset``) is a follow-up.
+    The partition keys live in the directory names; each row still carries
+    ``tc_bucket`` and the ratings, so reads reconstruct identical rows.
+    """
+    groups: dict = {}
+    for row in rows:
+        key = (row.tc_bucket, rating_bucket(row.white_elo, row.black_elo))
+        groups.setdefault(key, []).append(row)
+
+    count = 0
+    for (tcb, rb), group in groups.items():
+        part_dir = root / f"tc_bucket={tcb}" / f"rating_bucket={rb}"
+        part_dir.mkdir(parents=True, exist_ok=True)
+        target = part_dir / f"part.{fmt}"
+        if fmt == "csv":
+            count += _write_csv(group, target, cols)
+        else:
+            count += _write_parquet(group, target, cols)
+    return count
+
+
 def build_dataset(
     pgn_path: str,
     out_dir: str,
@@ -95,6 +123,7 @@ def build_dataset(
     fmt: str = "csv",
     name: str = "dataset",
     include_fen: bool = False,
+    partition: bool = False,
 ) -> Path:
     """Parse ``pgn_path`` into ``out_dir/<name>.<fmt>`` and return the written path.
 
@@ -102,15 +131,25 @@ def build_dataset(
     consumes the whole file. ``fmt`` is ``"csv"`` or ``"parquet"``. ``include_fen``
     appends a ``fen`` column so board models (Maia, 0005) can be validated in 0009 —
     off by default because it ~triples row size.
+
+    With ``partition=True`` the output is a hive-partitioned **directory**
+    ``out_dir/<name>/tc_bucket=…/rating_bucket=…/part.<fmt>`` (and that dir is
+    returned) so 0004/0009 can read only the rating/time-control slices they need;
+    :func:`load_rows` reads such a directory transparently.
     """
     if fmt not in ("csv", "parquet"):
         raise ValueError(f"unknown format {fmt!r} (expected 'csv' or 'parquet')")
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    target = out_path / f"{name}.{fmt}"
     cols = schema_columns(include_fen=include_fen)
     with open_pgn(pgn_path) as handle:
         rows = iter_rows(handle, limit=sample, include_fen=include_fen)
+        if partition:
+            target = out_path / name
+            target.mkdir(parents=True, exist_ok=True)
+            _write_partitioned(rows, target, cols, fmt)
+            return target
+        target = out_path / f"{name}.{fmt}"
         if fmt == "csv":
             _write_csv(rows, target, cols)
         else:
@@ -142,13 +181,8 @@ def _coerce_row(record: dict) -> PositionRow:
     )
 
 
-def load_rows(path: str) -> List[PositionRow]:
-    """Load a built dataset (CSV or Parquet) back into typed rows.
-
-    The import surface for downstream tasks — they get :class:`PositionRow`s and never
-    re-derive the schema or the column names.
-    """
-    p = Path(path)
+def _read_file(p: Path) -> List[PositionRow]:
+    """Read one dataset part file (``.csv`` or ``.parquet``) into typed rows."""
     if p.suffix == ".parquet":
         import pyarrow.parquet as pq
 
@@ -156,6 +190,24 @@ def load_rows(path: str) -> List[PositionRow]:
         return [_coerce_row(rec) for rec in table.to_pylist()]
     with p.open("r", encoding="utf-8") as fh:
         return [_coerce_row(rec) for rec in csv.DictReader(fh)]
+
+
+def load_rows(path: str) -> List[PositionRow]:
+    """Load a built dataset back into typed rows.
+
+    Accepts a single CSV/Parquet file, or a **partitioned directory** written with
+    ``partition=True`` (every ``part.*`` under the hive tree is read and concatenated;
+    partition order is not significant). The import surface for downstream tasks — they
+    get :class:`PositionRow`s and never re-derive the schema or the column names.
+    """
+    p = Path(path)
+    if p.is_dir():
+        parts = sorted(q for q in p.rglob("part.*") if q.suffix in (".csv", ".parquet"))
+        rows: List[PositionRow] = []
+        for part in parts:
+            rows.extend(_read_file(part))
+        return rows
+    return _read_file(p)
 
 
 def load_dataframe(path: str):

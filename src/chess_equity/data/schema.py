@@ -35,6 +35,10 @@ _TC_RAPID_MAX = 1499
 _OPENING_MAX_PLY = 20
 _ENDGAME_MAX_PIECES = 6  # non-king pieces left on the board
 
+# Width (Elo points) of a rating-partition band. 200 keeps buckets coarse enough that
+# each holds plenty of rows yet fine enough to slice calibration by strength (0025).
+RATING_BUCKET_WIDTH = 200
+
 # The ordered column list — the contract loaders and the Parquet/CSV writer share.
 # ``game_id`` is the game each position came from; it is what lets validation split
 # train/test at the *game* level so positions from one game never leak across the
@@ -189,3 +193,14 @@ def game_phase(ply: int, non_king_pieces: int) -> str:
     if non_king_pieces <= _ENDGAME_MAX_PIECES:
         return "endgame"
     return "middlegame"
+
+
+def rating_bucket(white_elo: int, black_elo: int, width: int = RATING_BUCKET_WIDTH) -> str:
+    """Partition label for a game's rating band: the floored mean of both ratings.
+
+    Lichess pairs similar ratings, so the mean is a faithful single label. ``1690`` ->
+    ``"1600"`` (the band ``[1600, 1800)``) at the default 200-wide bands. The label is
+    the band's lower bound as a string, so it sorts and reads cleanly in a hive path.
+    """
+    mean = (white_elo + black_elo) / 2.0
+    return str(int(mean // width) * width)

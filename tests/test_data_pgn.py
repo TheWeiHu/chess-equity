@@ -209,3 +209,57 @@ def test_load_dataset_without_fen_column_is_backward_compatible(tmp_path):
     assert "fen" not in out.read_text(encoding="utf-8").splitlines()[0]
     loaded = load_rows(str(out))
     assert loaded and all(r.fen is None for r in loaded)
+
+
+# --- partitioned dataset (task 0025) -------------------------------------------
+
+def test_rating_bucket_floors_mean_to_band():
+    from chess_equity.data.schema import rating_bucket
+
+    assert rating_bucket(1690, 1690) == "1600"  # mean 1690 -> band [1600,1800)
+    assert rating_bucket(1500, 1480) == "1400"  # mean 1490 -> [1400,1600)
+    assert rating_bucket(2000, 2000) == "2000"
+    assert rating_bucket(1500, 1500, width=100) == "1500"
+
+
+def test_partitioned_build_creates_hive_tree(tmp_path):
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    assert out.is_dir() and out.name == "part"
+    parts = sorted(out.rglob("part.csv"))
+    assert parts, "expected at least one partition file"
+    # Every part lives under a tc_bucket=…/rating_bucket=… hive path.
+    for p in parts:
+        rel = p.relative_to(out).parts
+        assert rel[0].startswith("tc_bucket=")
+        assert rel[1].startswith("rating_bucket=")
+
+
+def test_partitioned_round_trips_same_rows(tmp_path):
+    flat = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="flat")
+    part = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    flat_rows = load_rows(str(flat))
+    part_rows = load_rows(str(part))
+    assert len(part_rows) == len(flat_rows)
+    # Same multiset of rows, partition order aside.
+    key = lambda r: (r.game_id, r.ply, r.cp_eval, r.white_elo, r.black_elo)
+    assert sorted(map(key, part_rows)) == sorted(map(key, flat_rows))
+
+
+def test_partitioned_directory_groups_by_bucket(tmp_path):
+    from chess_equity.data.schema import rating_bucket
+
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    for p in out.rglob("part.csv"):
+        tcb = p.parent.parent.name.split("=", 1)[1]
+        rb = p.parent.name.split("=", 1)[1]
+        for row in load_rows(str(p)):  # every row in a part matches its dir's keys
+            assert row.tc_bucket == tcb
+            assert rating_bucket(row.white_elo, row.black_elo) == rb
+
+
+def test_partitioned_with_fen_round_trips(tmp_path):
+    out = build_dataset(
+        str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="pf", partition=True, include_fen=True
+    )
+    loaded = load_rows(str(out))
+    assert loaded and all(r.fen for r in loaded)
