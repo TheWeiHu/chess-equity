@@ -143,6 +143,10 @@ uv sync --extra data
 uv run chess-equity data build --pgn lichess_db_standard_rated_2026-05.pgn.zst \
     --sample 50000 --out data/ --format parquet
 
+# Or let --month stream + cache the dump for you (resumable), then build from it.
+# The .zst dump needs the data extra; it lands in ~/.cache/chess-equity/dumps:
+uv run chess-equity data build --month 2026-05 --sample 50000 --out data/ --format parquet
+
 # CSV is the default and needs no extra:
 uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sample
 
@@ -160,8 +164,11 @@ A small committed fixture lives in `data/sample/` so tests and downstream tasks
 With `--with-fen`, an optional `fen` column is appended; datasets built without it
 load unchanged (`fen=None`). `validate.harness.model_predictor(model)` adapts any
 board-based `EquityModel` into a 0009 predictor by reading that column.
-`--month YYYY-MM` prints the canonical Lichess dump URL to fetch (auto-download is a
-follow-up). See `data/schema.py` for the column contract.
+`--month YYYY-MM` streams the canonical Lichess dump to a cache dir (`--dump-dir` to
+override), resuming a partial download via an HTTP `Range` request and never holding
+the multi-GB file in memory, then builds from it. Checksum verification is opt-in
+(`download_month(expected_sha256=...)`) since Lichess publishes no stable per-dump
+hash. See `data/schema.py` for the column contract.
 
 ## Validation (task 0009)
 

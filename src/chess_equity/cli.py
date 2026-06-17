@@ -211,14 +211,29 @@ def _run_data(args: argparse.Namespace) -> int:
     pgn = args.pgn
     if pgn is None:
         if args.month is None:
-            print("error: provide --pgn <file> (or --month with a downloaded dump)", file=sys.stderr)
+            print("error: provide --pgn <file> (or --month to auto-download)", file=sys.stderr)
             return 1
-        print(
-            f"error: --month is a convenience; download {month_url(args.month)} first, "
-            "then pass it via --pgn",
-            file=sys.stderr,
-        )
-        return 1
+        from urllib.error import URLError
+
+        from chess_equity.data.download import DEFAULT_DUMP_DIR, download_month
+
+        def _progress(done: int, total: Optional[int]) -> None:
+            mb = done / 1e6
+            if total:
+                print(f"\rdownloading {month_url(args.month)}: {mb:.0f}/{total / 1e6:.0f} MB",
+                      end="", file=sys.stderr)
+            else:
+                print(f"\rdownloading {month_url(args.month)}: {mb:.0f} MB", end="", file=sys.stderr)
+
+        try:
+            dump = download_month(
+                args.month, dest_dir=args.dump_dir or DEFAULT_DUMP_DIR, progress=_progress
+            )
+        except (URLError, OSError, RuntimeError) as exc:
+            print(f"\nerror: downloading {args.month} dump: {exc}", file=sys.stderr)
+            return 1
+        print(f"\nfetched {dump}", file=sys.stderr)
+        pgn = str(dump)
     try:
         out = build_dataset(
             pgn, args.out, sample=args.sample, fmt=args.format, include_fen=args.with_fen
@@ -388,7 +403,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     data_sub = data.add_subparsers(dest="data_command", required=True)
     build = data_sub.add_parser("build", help="parse a Lichess PGN dump into a dataset")
     build.add_argument("--pgn", help="path to a PGN file (plain or .zst)")
-    build.add_argument("--month", help="YYYY-MM Lichess month (prints the dump URL to fetch)")
+    build.add_argument(
+        "--month", help="YYYY-MM Lichess month — streams + caches the dump, then builds"
+    )
     build.add_argument("--sample", type=int, default=None, help="cap the number of rows")
     build.add_argument("--out", default="data", help="output directory (default: data/)")
     build.add_argument("--format", choices=("csv", "parquet"), default="csv")
@@ -396,6 +413,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--with-fen",
         action="store_true",
         help="record each position's FEN (needed to validate board models like Maia; ~3x size)",
+    )
+    build.add_argument(
+        "--dump-dir",
+        default=None,
+        help="cache dir for downloaded --month dumps (default: ~/.cache/chess-equity/dumps)",
     )
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
