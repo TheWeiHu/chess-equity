@@ -121,6 +121,10 @@ uv run chess-equity data build --pgn lichess_db_standard_rated_2026-05.pgn.zst \
 
 # CSV is the default and needs no extra:
 uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sample
+
+# Add --with-fen to record each position so board models (Maia, 0005) can be
+# scored in validation — off by default because the FEN ~triples row size:
+uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sample --with-fen
 ```
 
 A small committed fixture lives in `data/sample/` so tests and downstream tasks
@@ -129,6 +133,9 @@ A small committed fixture lives in `data/sample/` so tests and downstream tasks
 `load_dataframe(path)` (pandas, needs the data extra).
 
 `cp_eval` and `result` are both White-POV; mate scores are clamped to ±10000 cp.
+With `--with-fen`, an optional `fen` column is appended; datasets built without it
+load unchanged (`fen=None`). `validate.harness.model_predictor(model)` adapts any
+board-based `EquityModel` into a 0009 predictor by reading that column.
 `--month YYYY-MM` prints the canonical Lichess dump URL to fetch (auto-download is a
 follow-up). See `data/schema.py` for the column contract.
 

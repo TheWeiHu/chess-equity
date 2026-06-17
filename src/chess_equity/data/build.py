@@ -19,10 +19,10 @@ from __future__ import annotations
 import contextlib
 import csv
 from pathlib import Path
-from typing import IO, Iterable, Iterator, List, Optional
+from typing import IO, Iterable, Iterator, List, Optional, Sequence
 
 from chess_equity.data.pgn import iter_rows
-from chess_equity.data.schema import COLUMNS, PositionRow
+from chess_equity.data.schema import PositionRow, columns as schema_columns
 
 LICHESS_DB_URL = "https://database.lichess.org/standard/lichess_db_standard_rated_{month}.pgn.zst"
 
@@ -60,10 +60,12 @@ def month_url(month: str) -> str:
     return LICHESS_DB_URL.format(month=month)
 
 
-def _write_csv(rows: Iterable[PositionRow], out: Path) -> int:
+def _write_csv(rows: Iterable[PositionRow], out: Path, cols: Sequence[str]) -> int:
     count = 0
     with out.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(COLUMNS))
+        # ``extrasaction="ignore"`` drops the ``fen`` key when it is not selected, so
+        # the row's full ``as_dict()`` can be written against either column set.
+        writer = csv.DictWriter(fh, fieldnames=list(cols), extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row.as_dict())
@@ -71,7 +73,7 @@ def _write_csv(rows: Iterable[PositionRow], out: Path) -> int:
     return count
 
 
-def _write_parquet(rows: Iterable[PositionRow], out: Path) -> int:
+def _write_parquet(rows: Iterable[PositionRow], out: Path, cols: Sequence[str]) -> int:
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -80,7 +82,7 @@ def _write_parquet(rows: Iterable[PositionRow], out: Path) -> int:
             "writing Parquet needs the 'data' extra: pip install 'chess-equity[data]'"
         ) from exc
     materialised: List[PositionRow] = list(rows)
-    table = pa.table({col: [getattr(r, col) for r in materialised] for col in COLUMNS})
+    table = pa.table({col: [getattr(r, col) for r in materialised] for col in cols})
     pq.write_table(table, out)
     return len(materialised)
 
@@ -92,28 +94,35 @@ def build_dataset(
     sample: Optional[int] = None,
     fmt: str = "csv",
     name: str = "dataset",
+    include_fen: bool = False,
 ) -> Path:
     """Parse ``pgn_path`` into ``out_dir/<name>.<fmt>`` and return the written path.
 
     ``sample`` caps the row count (for the committed fixture / quick runs); ``None``
-    consumes the whole file. ``fmt`` is ``"csv"`` or ``"parquet"``.
+    consumes the whole file. ``fmt`` is ``"csv"`` or ``"parquet"``. ``include_fen``
+    appends a ``fen`` column so board models (Maia, 0005) can be validated in 0009 —
+    off by default because it ~triples row size.
     """
     if fmt not in ("csv", "parquet"):
         raise ValueError(f"unknown format {fmt!r} (expected 'csv' or 'parquet')")
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     target = out_path / f"{name}.{fmt}"
+    cols = schema_columns(include_fen=include_fen)
     with open_pgn(pgn_path) as handle:
-        rows = iter_rows(handle, limit=sample)
+        rows = iter_rows(handle, limit=sample, include_fen=include_fen)
         if fmt == "csv":
-            _write_csv(rows, target)
+            _write_csv(rows, target, cols)
         else:
-            _write_parquet(rows, target)
+            _write_parquet(rows, target, cols)
     return target
 
 
 def _coerce_row(record: dict) -> PositionRow:
     clk = record.get("clock_remaining")
+    # ``fen`` is optional: datasets built before it existed (or without it) have no
+    # such key, so a missing/empty value loads back as ``None``.
+    fen = record.get("fen")
     return PositionRow(
         cp_eval=float(record["cp_eval"]),
         white_elo=int(record["white_elo"]),
@@ -125,6 +134,7 @@ def _coerce_row(record: dict) -> PositionRow:
         clock_remaining=(float(clk) if clk not in (None, "") else None),
         side_to_move=str(record["side_to_move"]),
         result=float(record["result"]),
+        fen=(str(fen) if fen not in (None, "") else None),
     )
 
 

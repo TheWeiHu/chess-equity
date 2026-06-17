@@ -215,7 +215,9 @@ def _run_data(args: argparse.Namespace) -> int:
         )
         return 1
     try:
-        out = build_dataset(pgn, args.out, sample=args.sample, fmt=args.format)
+        out = build_dataset(
+            pgn, args.out, sample=args.sample, fmt=args.format, include_fen=args.with_fen
+        )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -321,6 +323,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     build.add_argument("--sample", type=int, default=None, help="cap the number of rows")
     build.add_argument("--out", default="data", help="output directory (default: data/)")
     build.add_argument("--format", choices=("csv", "parquet"), default="csv")
+    build.add_argument(
+        "--with-fen",
+        action="store_true",
+        help="record each position's FEN (needed to validate board models like Maia; ~3x size)",
+    )
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
     val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
