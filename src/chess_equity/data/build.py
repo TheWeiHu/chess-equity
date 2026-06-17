@@ -24,6 +24,10 @@ from typing import IO, Iterable, Iterator, List, Optional, Sequence
 from chess_equity.data.pgn import iter_rows
 from chess_equity.data.schema import PositionRow, columns as schema_columns, rating_bucket
 
+# Alias so :func:`load_rows` can take a ``rating_bucket=`` selector arg without the
+# parameter shadowing the schema helper of the same name.
+_rating_bucket_of = rating_bucket
+
 LICHESS_DB_URL = "https://database.lichess.org/standard/lichess_db_standard_rated_{month}.pgn.zst"
 
 
@@ -198,30 +202,80 @@ def _read_file(p: Path) -> List[PositionRow]:
         return [_coerce_row(rec) for rec in csv.DictReader(fh)]
 
 
-def load_rows(path: str) -> List[PositionRow]:
-    """Load a built dataset back into typed rows.
+def _as_selector(sel) -> Optional[set]:
+    """Normalise a selector (None / a single value / an iterable) to a set of strings."""
+    if sel is None:
+        return None
+    if isinstance(sel, (str, bytes)):
+        return {str(sel)}
+    return {str(s) for s in sel}
+
+
+def _hive_value(part: Path, root: Path, key: str) -> Optional[str]:
+    """The ``<key>=<value>`` from ``part``'s hive path under ``root``, or None if absent."""
+    for comp in part.relative_to(root).parts[:-1]:  # drop the filename
+        if comp.startswith(f"{key}="):
+            return comp.split("=", 1)[1]
+    return None
+
+
+def load_rows(
+    path: str,
+    *,
+    tc_bucket: "Optional[object]" = None,
+    rating_bucket: "Optional[object]" = None,
+) -> List[PositionRow]:
+    """Load a built dataset back into typed rows, optionally selecting partitions.
 
     Accepts a single CSV/Parquet file, or a **partitioned directory** written with
     ``partition=True`` (every ``part.*`` under the hive tree is read and concatenated;
     partition order is not significant). The import surface for downstream tasks — they
     get :class:`PositionRow`s and never re-derive the schema or the column names.
+
+    ``tc_bucket`` / ``rating_bucket`` select a subset (each a single value or an
+    iterable of values, e.g. ``rating_bucket=("1600", "1800")``). On a partitioned
+    directory this is **predicate pushdown** — non-matching ``part.*`` files are never
+    opened, which is the whole point of partitioning (0004/0009 read only the slices
+    they need). A row-level filter is also applied so the result is identical on a flat
+    file (no partitions to prune) and on any partition dimension absent from the path.
     """
+    tcb_sel = _as_selector(tc_bucket)
+    rb_sel = _as_selector(rating_bucket)
+
     p = Path(path)
+    rows: List[PositionRow] = []
     if p.is_dir():
         parts = sorted(q for q in p.rglob("part.*") if q.suffix in (".csv", ".parquet"))
-        rows: List[PositionRow] = []
         for part in parts:
+            # Pushdown: skip a part whose hive key is present and not selected, without
+            # opening it. (A selector whose key is absent from the path falls through to
+            # the row-level filter below, so correctness never depends on the layout.)
+            if tcb_sel is not None:
+                v = _hive_value(part, p, "tc_bucket")
+                if v is not None and v not in tcb_sel:
+                    continue
+            if rb_sel is not None:
+                v = _hive_value(part, p, "rating_bucket")
+                if v is not None and v not in rb_sel:
+                    continue
             rows.extend(_read_file(part))
-        return rows
-    return _read_file(p)
+    else:
+        rows = _read_file(p)
+
+    if tcb_sel is not None:
+        rows = [r for r in rows if r.tc_bucket in tcb_sel]
+    if rb_sel is not None:
+        rows = [r for r in rows if _rating_bucket_of(r.white_elo, r.black_elo) in rb_sel]
+    return rows
 
 
-def load_dataframe(path: str):
+def load_dataframe(path: str, **selectors):
     """Load a built dataset as a pandas DataFrame (needs the 'data' extra).
 
     A convenience for the modelling tasks (0004) that want a frame; everything else
-    should use :func:`load_rows` and stay pandas-free.
+    should use :func:`load_rows` and stay pandas-free. ``**selectors`` are forwarded to
+    :func:`load_rows` (``tc_bucket=`` / ``rating_bucket=`` partition pushdown).
     """
     import pandas as pd
 
-    return pd.DataFrame([r.as_dict() for r in load_rows(path)])
+    return pd.DataFrame([r.as_dict() for r in load_rows(path, **selectors)])

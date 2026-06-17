@@ -294,3 +294,54 @@ def test_partitioned_with_fen_round_trips(tmp_path):
     )
     loaded = load_rows(str(out))
     assert loaded and all(r.fen for r in loaded)
+
+
+# --- partition selection / predicate pushdown (task 0040) ---------------------
+
+def test_load_rows_selects_by_tc_bucket(tmp_path):
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    blitz = load_rows(str(out), tc_bucket="blitz")
+    assert blitz and all(r.tc_bucket == "blitz" for r in blitz)
+    # It's a strict subset of the full read (the sample spans bullet/blitz/rapid).
+    assert len(blitz) < len(load_rows(str(out)))
+
+
+def test_load_rows_selects_by_rating_bucket(tmp_path):
+    from chess_equity.data.schema import rating_bucket
+
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    rows = load_rows(str(out), rating_bucket="1400")
+    assert rows and all(rating_bucket(r.white_elo, r.black_elo) == "1400" for r in rows)
+
+
+def test_load_rows_selector_accepts_iterable(tmp_path):
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    multi = load_rows(str(out), tc_bucket=["blitz", "rapid"])
+    assert {r.tc_bucket for r in multi} == {"blitz", "rapid"}
+
+
+def test_load_rows_nonmatching_selector_is_empty(tmp_path):
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    assert load_rows(str(out), tc_bucket="correspondence") == []
+
+
+def test_pushdown_skips_nonmatching_part_files(tmp_path, monkeypatch):
+    # The whole point of partitioning: a selector must not OPEN non-matching parts.
+    from chess_equity.data import build as build_mod
+
+    out = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="part", partition=True)
+    opened = []
+    real_read = build_mod._read_file
+    monkeypatch.setattr(build_mod, "_read_file", lambda p: (opened.append(str(p)), real_read(p))[1])
+
+    build_mod.load_rows(str(out), tc_bucket="blitz")
+    assert opened, "expected at least one part to be read"
+    assert all("tc_bucket=blitz" in p for p in opened)  # only the blitz partition opened
+
+
+def test_selector_on_flat_file_filters_rows(tmp_path):
+    # No partitions to prune, but the selector still applies row-wise (consistent result).
+    flat = build_dataset(str(SAMPLE_PGN), str(tmp_path), fmt="csv", name="flat")
+    blitz = load_rows(str(flat), tc_bucket="blitz")
+    assert blitz and all(r.tc_bucket == "blitz" for r in blitz)
+    assert len(blitz) < len(load_rows(str(flat)))
