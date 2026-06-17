@@ -180,6 +180,20 @@ uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sam
 uv run chess-equity data build --pgn data/sample/sample_games.pgn --out data/sample --with-fen
 ```
 
+For the **realistic ~50k-row sample** that tasks 0003/0004/0009 actually train and
+validate on, use the reproducible wrapper (task 0024) instead of committing the data:
+
+```bash
+uv sync --extra data                          # zstandard (.zst) + pyarrow (parquet)
+scripts/build_real_sample.sh                  # → data/dataset.parquet from Lichess 2026-05
+ROWS=100000 MONTH=2026-04 scripts/build_real_sample.sh   # override size / month
+WITH_FEN=1 scripts/build_real_sample.sh       # add FENs for board-model validation
+scripts/build_real_sample.sh --dry-run        # print the command, build nothing
+```
+
+The output lands under `data/` (gitignored except `data/sample/`), so the repo stays
+small — the reproducible command is the deliverable, not a checked-in multi-GB file.
+
 A small committed fixture lives in `data/sample/` so tests and downstream tasks
 (0003/0004/0009) have substrate without a download: `dataset.csv` is the cp-only
 sample, and `dataset_fen.csv` is its FEN-bearing companion (same 15 rows + a `fen`
