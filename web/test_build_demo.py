@@ -111,5 +111,32 @@ def test_build_with_real_stockfish_changes_the_cp_line():
     assert material_cps != sf_cps
 
 
+# --- multi-game catalog (task 0084) -----------------------------------------
+
+def test_build_accepts_every_catalog_game():
+    """Each bundled game builds with ref_equity sized to its move list."""
+    for key, spec in build_demo.GAMES.items():
+        data = build_demo.build("demo", game=key)
+        assert data["game"]["key"] == key
+        assert data["game"]["name"] == spec["name"]
+        # one node per ply plus the start position
+        assert len(data["moves"]) == len(spec["moves"]) + 1
+
+
+def test_build_default_game_is_legals_unchanged():
+    """Omitting --game still builds the flagship Légal's Mate."""
+    assert build_demo.build("demo")["game"]["key"] == build_demo.DEFAULT_GAME
+    assert build_demo.DEFAULT_GAME == "legals"
+
+
+def test_manifest_lists_every_game_with_its_file():
+    manifest = build_demo.build_manifest()
+    assert manifest["default"] == build_demo.DEFAULT_GAME
+    keys = {g["key"] for g in manifest["games"]}
+    assert keys == set(build_demo.GAMES)
+    for g in manifest["games"]:
+        assert g["file"] == build_demo.GAMES[g["key"]]["file"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
