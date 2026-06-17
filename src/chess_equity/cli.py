@@ -37,6 +37,7 @@ from chess_equity.broadcast import (
 )
 from chess_equity.grading import EquityGrader
 from chess_equity.models import LichessBaselineModel
+from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
 
 START_FEN = chess.STARTING_FEN
 
@@ -84,12 +85,13 @@ def _event_line(event: MoveEvent) -> str:
     return json.dumps(event.to_dict())
 
 
-def build_model(name: str = "baseline") -> EquityModel:
+def build_model(name: str = "baseline", *, n: int = 500, seed: Optional[int] = None) -> EquityModel:
     """Construct the requested equity model by name.
 
     ``baseline`` is the rating-blind placeholder (no extra deps); ``maia2`` is the
     real rating-conditioned bar and lazily loads Maia-2 on first evaluation (so the
-    error, if it's not installed, surfaces only when actually used).
+    error, if it's not installed, surfaces only when actually used). ``maia-rollout``
+    is the slow Monte Carlo self-play oracle (``n`` rollouts; non-interactive).
     """
     if name == "maia2":
         # Lazy import so the common baseline path never pays for the maia2 module.
@@ -101,17 +103,33 @@ def build_model(name: str = "baseline") -> EquityModel:
         from chess_equity.wdl_regression import build_wdl_a_equity
 
         return build_wdl_a_equity()
+    if name == "maia-rollout":
+        from chess_equity.rollout import build_maia_rollout
+
+        return build_maia_rollout(n=n, seed=seed)
     if name == "baseline":
         return LichessBaselineModel()
-    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2, wdl-a")
+    raise ValueError(f"unknown model {name!r}; choose from: baseline, maia2, wdl-a, maia-rollout")
+
+
+def _eval_rollout_fen(model: MaiaRolloutModel, fen: str, white_elo: int, black_elo: int) -> str:
+    """Bar + 95% CI line for the Monte Carlo rollout oracle (task 0007)."""
+    est = model.estimate(fen, white_elo, black_elo)
+    equity = estimate_to_equity(est, fen, model.SOURCE)
+    return (
+        f"{render_eval(equity)}  95% CI [{est.ci_low:.1f}, {est.ci_high:.1f}]  "
+        f"n={est.n} ({est.n_terminal} terminal, {est.mean_plies:.0f} avg plies)"
+    )
 
 
 def _run_eval(args: argparse.Namespace) -> int:
-    model = build_model(args.model)
+    model = build_model(args.model, n=args.n, seed=args.seed)
     try:
         if args.pgn:
             for line in _eval_pgn(model, args.pgn, args.white_elo, args.black_elo):
                 print(line)
+        elif isinstance(model, MaiaRolloutModel):
+            print(_eval_rollout_fen(model, args.fen, args.white_elo, args.black_elo))
         else:
             print(_eval_fen(model, args.fen, args.white_elo, args.black_elo))
     except (ValueError, OSError, RuntimeError) as exc:
@@ -349,11 +367,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     def add_model_arg(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--model",
-            choices=("baseline", "maia2", "wdl-a"),
+            choices=("baseline", "maia2", "wdl-a", "maia-rollout"),
             default="baseline",
             help=(
                 "equity model: rating-blind baseline (default), rating-conditioned "
-                "maia2, or the wdl-a regression"
+                "maia2, the wdl-a regression, or the maia-rollout Monte Carlo oracle "
+                "(slow, non-interactive)"
             ),
         )
 
@@ -362,6 +381,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
     ev.add_argument("--white-elo", type=int, default=1500)
     ev.add_argument("--black-elo", type=int, default=1500)
+    ev.add_argument(
+        "--n", type=int, default=500, help="rollout count for --model maia-rollout"
+    )
+    ev.add_argument(
+        "--seed", type=int, default=None, help="RNG seed for --model maia-rollout (reproducible)"
+    )
     add_model_arg(ev)
 
     gr = sub.add_parser("grade", help="grade every move of a PGN by Δequity vs rating peers")

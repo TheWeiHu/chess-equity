@@ -154,6 +154,28 @@ the "beats baseline on held-out log-loss/calibration, especially off-2300" evide
 on a real tens-of-thousands-row dataset (task 0024). The model and CLI need no extra deps;
 training is plain batch gradient descent, fine for the sample and documented to scale.
 
+## Maia rollout oracle (task 0007) — the slow ground truth
+
+`--model maia-rollout` estimates equity the honest, expensive way: **play the
+position out.** It samples White moves from Maia-2 at `--white-elo` and Black moves at
+`--black-elo` (both sides err like their rating), to checkmate / a draw rule / a ply
+cutoff; positions surviving the cutoff are scored by Maia-2's value head. Averaging
+`--n` rollouts gives the equity plus a 95% confidence interval on it.
+
+```bash
+chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model maia-rollout --n 500 --seed 0
+# [#####---] 41.2% (B)  W/D/L ...  [maia-rollout]  95% CI [38.1, 44.3]  n=500 (123 terminal, 47 avg plies)
+```
+
+- **Reference, not the bar.** This is the oracle for validation (0009) and for
+  sanity-checking the expectimax search (0006) — explicitly **non-interactive**.
+- **Cost:** ~`n · mean_plies` Maia inferences per position (n=500 to an 80-ply cutoff
+  ≈ up to ~40k forward passes → minutes). The same `(fen, elo, elo)` cache as `maia2`
+  amortises repeats; batching/precompute is 0012.
+- **Decoupled + testable:** the model takes a `HumanPolicy` (move sampler) + a leaf
+  `EquityModel` (cutoff scorer) by injection, so the suite drives it with the uniform
+  policy + material baseline — no torch/weights. `--seed` makes a run reproducible.
+
 ## Data (task 0002)
 
 The training + validation substrate. `chess-equity data build` turns a Lichess
