@@ -26,7 +26,12 @@ from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
-from chess_equity.validate.bootstrap import DeltaCI, compare_predictions
+from chess_equity.validate.bootstrap import (
+    DeltaCI,
+    EceCI,
+    compare_predictions,
+    ece_bootstrap_ci,
+)
 from chess_equity.validate.metrics import (
     brier_score,
     expected_calibration_error,
@@ -370,6 +375,99 @@ def format_baseline_comparison(
             out.append(
                 f"| {c.name} | {ci.metric} | {ci.delta:+.4f} | "
                 f"[{ci.lo:+.4f}, {ci.hi:+.4f}] | {_verdict(ci)} |"
+            )
+    out.append("")
+    return "\n".join(out)
+
+
+def compare_ece_to_baseline(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline: str = "baseline",
+    bins: int = 10,
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> List[EceCI]:
+    """Bin-resampling bootstrap CI on each predictor's ECE, with the ECE delta vs baseline.
+
+    Companion to :func:`compare_to_baseline` for calibration (task 0072): 0060's paired
+    row-bootstrap can't touch ECE (no per-row term), so here every predictor's ECE gets
+    its own bin-resampling CI, and each non-baseline predictor also gets a paired CI on
+    its ECE delta vs ``baseline`` (negative = better calibrated). Returns one
+    :class:`~chess_equity.validate.bootstrap.EceCI` per predictor in registry order; the
+    baseline's own entry carries no delta. ``seed`` makes the CIs byte-reproducible.
+
+    Raises ``KeyError`` if ``baseline`` is not among ``predictors``.
+    """
+    if baseline not in predictors:
+        raise KeyError(f"baseline {baseline!r} not in predictors {sorted(predictors)}")
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    base_preds = [predictors[baseline](r) for r in rows]
+    out: List[EceCI] = []
+    for i, (name, predictor) in enumerate(predictors.items()):
+        preds = [predictor(r) for r in rows]
+        out.append(
+            ece_bootstrap_ci(
+                preds,
+                labels,
+                predictor=name,
+                baseline_preds=None if name == baseline else base_preds,
+                bins=bins,
+                n_resamples=n_resamples,
+                confidence=confidence,
+                seed=seed + i,
+            )
+        )
+    return out
+
+
+def _ece_verdict(ci: EceCI) -> str:
+    """One-word read on an ECE delta CI: better/worse calibrated than the baseline?"""
+    if ci.delta is None:
+        return "—"
+    if ci.beats_baseline:
+        return "beats"
+    if ci.worse_than_baseline:
+        return "worse"
+    return "inconclusive"
+
+
+def format_ece_comparison(
+    ece_cis: Sequence[EceCI], *, title: str = "Calibration (ECE) confidence intervals"
+) -> str:
+    """Render per-predictor ECE CIs + the ECE delta vs baseline as Markdown (task 0072).
+
+    One row per predictor: its ECE point estimate and CI, then (for non-baseline
+    predictors) the ECE delta vs baseline, that delta's CI, and a verdict. ``beats`` only
+    when the whole delta CI clears zero below, so a real calibration win is distinguished
+    from noise at a glance. Lower ECE = better calibrated.
+    """
+    if not ece_cis:
+        return ""
+    conf_pct = round(ece_cis[0].confidence * 100)
+    out: List[str] = [f"## {title}", ""]
+    out.append(
+        f"Bin-resampling bootstrap ({ece_cis[0].n_resamples} resamples) on ECE "
+        "(**lower = better calibrated**); ECE has no per-row term, so rows are resampled "
+        "and the binning recomputed each draw. A `beats` verdict means the whole "
+        f"ECE-delta {conf_pct}% CI vs baseline sits below zero."
+    )
+    out.append("")
+    out.append(
+        f"| predictor | ECE | {conf_pct}% CI | Δ vs baseline | Δ {conf_pct}% CI | verdict |"
+    )
+    out.append("|---|--:|:--:|--:|:--:|:--:|")
+    for c in ece_cis:
+        ci_str = f"[{c.lo:.4f}, {c.hi:.4f}]"
+        if c.delta is None:
+            out.append(f"| {c.predictor} | {c.ece:.4f} | {ci_str} | — | — | — |")
+        else:
+            out.append(
+                f"| {c.predictor} | {c.ece:.4f} | {ci_str} | {c.delta:+.4f} | "
+                f"[{c.delta_lo:+.4f}, {c.delta_hi:+.4f}] | {_ece_verdict(c)} |"
             )
     out.append("")
     return "\n".join(out)

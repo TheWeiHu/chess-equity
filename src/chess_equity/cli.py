@@ -322,9 +322,11 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.validate.harness import (
         PREDICTORS,
         build_predictors,
+        compare_ece_to_baseline,
         compare_to_baseline,
         evaluate,
         format_baseline_comparison,
+        format_ece_comparison,
         format_report,
     )
 
@@ -387,6 +389,21 @@ def _run_validate(args: argparse.Namespace) -> int:
         section = format_baseline_comparison(comparisons)
         if section:
             report = report + "\n" + section
+
+    # Calibration error bars: a bin-resampling CI on each predictor's ECE plus the ECE
+    # delta vs baseline (task 0072). ECE has no per-row term, so this is a separate
+    # bootstrap from the significance section above; same --bootstrap budget / seed.
+    if args.bootstrap > 0 and baseline_name in predictors:
+        ece_cis = compare_ece_to_baseline(
+            rows,
+            predictors,
+            baseline=baseline_name,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+        ece_section = format_ece_comparison(ece_cis)
+        if ece_section:
+            report = report + "\n" + ece_section
 
     if args.out:
         from pathlib import Path
