@@ -201,6 +201,16 @@ class Maia2Equity(EquityModel):
 
     def evaluate(self, fen: str, white_elo: int, black_elo: int) -> Equity:
         is_white = white_to_move(fen)
+        # Terminal positions have no legal moves, which Maia-2's preprocessing can't encode
+        # (it builds an empty move-index tensor and raises). The outcome is already settled,
+        # so read the equity straight off the rules instead of calling the model: a
+        # checkmated side-to-move has lost (equity 0); any other no-move position
+        # (stalemate / insufficient material) is a draw (equity 0.5).
+        board = chess.Board(fen)
+        if not any(board.legal_moves):
+            equity = 0.0 if board.is_checkmate() else 0.5
+            wdl = wdl_from_equity(equity, draw_scale=self.draw_scale)
+            return Equity.from_side_to_move(wdl, white_to_move=is_white, source=self.SOURCE)
         elo_self, elo_oppo = (white_elo, black_elo) if is_white else (black_elo, white_elo)
         _, win_prob = self._backend(fen, elo_self, elo_oppo)
         wdl = wdl_from_equity(win_prob, draw_scale=self.draw_scale)

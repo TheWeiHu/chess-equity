@@ -23,8 +23,14 @@ data = [
 # The real Maia-2 equity model (task 0005, `--model maia2`). Heavyweight (pulls torch
 # + a downloaded checkpoint), so it's opt-in; the baseline path and tests need none of
 # it — tests inject a fake inference backend.
+# `maia2` lists pyzstd/einops/gdown in its requirements.txt but NOT in install_requires,
+# so `pip install maia2` alone doesn't pull them and `inference`/checkpoint-download fail
+# at use time (task 0087). Pin them here so `--extra maia2` actually runs end-to-end.
 maia2 = [
     "maia2",
+    "einops",
+    "pyzstd",
+    "gdown",
 ]
 # Reliability-curve plots for the validation gate (task 0036, `validate --plots`).
 # Optional: every numeric metric and the Markdown reports work without it.

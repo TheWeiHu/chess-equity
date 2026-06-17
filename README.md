@@ -153,19 +153,32 @@ forced lines: a deep engine is right about the board, but blind to *this* player
 *that* one. (The web demo's material bar is a separate, shallow teaching foil — see
 [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md).)
 
-The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
-a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
-baseline on log-loss *and* Brier?) followed by a **head-to-head "where equity wins"** table
-that ranks slices by the baseline-minus-model log-loss gap. On the sample, rating-conditioned
-equity (`wdl-a`) wins most in the lower rating band — exactly where the rating-blind bar is most
-wrong — though the 15-row numbers are illustrative only, not proof. Regenerate it with:
+**The answer, on real data: yes.** The gate is checked in at
+**[reports/validation_real.md](reports/validation_real.md)** — computed on **n = 8,000 real
+Lichess `2013-01` positions** with the real Maia-2 value head and a Stockfish-backed
+baseline. Both rating-conditioned predictors **PASS**: `wdl-a` and `maia2` each have
+strictly lower log-loss *and* Brier than the rating-blind baseline, with every
+paired-bootstrap 95% CI clearing zero (the `beats` verdict). The **head-to-head "where
+equity wins"** table ranks the biggest wins in the **middlegame** and **1200-1599** band —
+exactly where the rating-blind centipawn bar is most wrong about how real games resolve.
+`wdl-a` was fit on a *different* month (`2016-05`), so the whole `2013-01` set is held out
+for it. Per-band calibration with paired ECE deltas is in the companion
+[reports/validation_real_calibration.md](reports/validation_real_calibration.md). Reproduce:
 
 ```bash
-uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md
+chess-equity data build --month 2013-01 --with-fen --sample 8000 --out data/
+chess-equity validate --data data/dataset.csv --models baseline,wdl-a,maia2 \
+  --bootstrap 2000 --seed 0 --out reports/validation_real.md \
+  --calibration reports/validation_real_calibration.md
 ```
 
-Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is captured
-step-by-step in **[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
+A tiny 15-row smoke fixture is also checked in at
+[reports/validation_sample.md](reports/validation_sample.md) (regenerate with
+`chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a
+--out reports/validation_sample.md`) — it proves the wiring with no download, but its
+numbers are illustrative only, **not** evidence. The full attended runbook (dump + Maia-2 +
+Stockfish provisioning) is in
+**[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
 
 ## Architecture
 

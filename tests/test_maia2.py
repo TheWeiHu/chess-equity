@@ -112,6 +112,25 @@ def test_equity_white_pov_stable_across_turn():
     assert model.evaluate(black_turn, 2600, 1000).equity_white > 50.0
 
 
+def test_terminal_positions_bypass_backend():
+    """Checkmate/stalemate have no legal moves, which Maia-2's preprocessing can't encode.
+    The outcome is settled, so evaluate() must read it off the rules without touching the
+    backend: checkmated side-to-move = loss (equity 0), stalemate = draw (equity 50)."""
+
+    def exploding_backend(fen, elo_self, elo_oppo):  # must never be called for terminals
+        raise AssertionError(f"backend called for terminal position {fen}")
+
+    model = Maia2Equity(exploding_backend)
+
+    # Fool's mate: White to move and checkmated -> White has lost.
+    mate = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+    assert model.evaluate(mate, 1500, 1500).equity_white == pytest.approx(0.0)
+
+    # Stalemate (White to move, no legal moves, not in check) -> draw.
+    stale = "5k2/8/1p1n2p1/2p2n2/8/3K4/1q6/2b5 w - - 6 52"
+    assert model.evaluate(stale, 1500, 1500).equity_white == pytest.approx(50.0)
+
+
 def test_cache_hits_avoid_recompute():
     calls = []
     cached = CachedBackend(make_backend(calls))
