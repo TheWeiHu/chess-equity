@@ -344,6 +344,48 @@ def test_ingestor_emits_one_game_event_per_game():
     assert names == {"Carlsen", "Ding"}
 
 
+# --------------------------------------------------------------------------- #
+# Drama classifier attached to the overlay event (task 0053)
+# --------------------------------------------------------------------------- #
+
+
+def _move_event(delta_equity, *, equity=60.0, white_clock=120.0):
+    """A MoveEvent with a tunable mover-POV swing (White to have just moved)."""
+    return MoveEvent(
+        game_id="g",
+        ply=10,
+        san="Qxf7",
+        uci="d1f7",
+        fen="8/8/8/8/8/8/8/8 b - - 0 1",
+        white_to_move=False,  # Black to move => White just moved (the mover)
+        white_clock=white_clock,
+        black_clock=120.0,
+        white_elo=1500,
+        black_elo=1500,
+        equity=equity,
+        delta_equity=delta_equity,
+        last_move_grade=grade_delta(delta_equity),
+        source="test",
+        compute_ms=0.0,
+    )
+
+
+def test_overlay_event_attaches_real_drama_on_a_sharp_swing():
+    # A +15pt mover swing is a "clutch" find for chess_equity.drama.
+    event = _move_event(15.0).to_overlay_event()
+    assert "drama" in event
+    drama = event["drama"]
+    assert drama["kind"] == "clutch"
+    assert drama["headline"]  # caster-facing one-liner
+    assert 0.0 <= drama["magnitude"] <= 1.0  # matches overlay.js / test_overlay schema
+
+
+def test_overlay_event_has_no_drama_when_quiet():
+    # A small swing isn't highlight-worthy: no drama payload (overlay won't flare).
+    event = _move_event(1.0).to_overlay_event()
+    assert "drama" not in event
+
+
 def test_move_event_is_json_serializable():
     import json
 

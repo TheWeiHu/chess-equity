@@ -131,6 +131,19 @@ class MoveEvent:
                 if self.delta_equity is None
                 else self.delta_equity / 100.0,
             }
+        # Real drama classification (tasks 0020/0053): attach the chess_equity.drama
+        # verdict so the overlay flares on the actual classifier (clutch / missed_win /
+        # escape / scramble) instead of its client-side equity-swing heuristic. Lazy
+        # import: drama imports MoveEvent from here, so a top-level import would cycle.
+        from chess_equity.drama import score_event
+
+        drama = score_event(self)
+        if drama is not None:
+            event["drama"] = {
+                "kind": drama.kind,
+                "magnitude": drama.magnitude,
+                "headline": drama.headline,
+            }
         return event
 
 
