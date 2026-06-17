@@ -134,6 +134,36 @@ class MoveEvent:
         return event
 
 
+@dataclass(frozen=True)
+class GameEvent:
+    """One-time game metadata in the overlay's ``"game"`` schema (task 0047).
+
+    The bridge emits this once per game, before that game's first :class:`MoveEvent`,
+    so the overlay's name-plates show *who* is playing — previously names were parsed
+    only to build :func:`_game_id`, never surfaced, so the overlay always fell back to
+    literal "White"/"Black". Ratings mirror the per-move ``white_elo``/``black_elo``.
+    """
+
+    game_id: str
+    white_name: Optional[str]
+    black_name: Optional[str]
+    white_elo: Optional[int]
+    black_elo: Optional[int]
+
+    def to_overlay(self) -> Dict[str, object]:
+        """Render as the overlay's ``{type: "game", players: {...}}`` event (see
+        overlay/README.md). ``name``/``rating`` may be ``null``; overlay.js falls back
+        to "White"/"Black" and a blank rating."""
+        return {
+            "type": "game",
+            "game_id": self.game_id,
+            "players": {
+                "white": {"name": self.white_name, "rating": self.white_elo},
+                "black": {"name": self.black_name, "rating": self.black_elo},
+            },
+        }
+
+
 # --------------------------------------------------------------------------- #
 # Clock / rating parsing from PGN
 # --------------------------------------------------------------------------- #
@@ -148,6 +178,33 @@ def _parse_elo(headers: chess.pgn.Headers, key: str) -> Optional[int]:
         return int(raw)
     except ValueError:
         return None
+
+
+def _player_name(headers: chess.pgn.Headers, key: str) -> Optional[str]:
+    """Read a player-name header, tolerating ``?`` / blank (anonymous / OTB)."""
+    raw = headers.get(key, "").strip()
+    return raw or None if raw != "?" else None
+
+
+def game_event(
+    headers: chess.pgn.Headers,
+    game_id: str,
+    *,
+    white_elo: Optional[int] = None,
+    black_elo: Optional[int] = None,
+) -> GameEvent:
+    """Build the one-time :class:`GameEvent` for a game from its PGN headers.
+
+    An explicit ``white_elo``/``black_elo`` (the ingestor's override) wins over the
+    header so the announced ratings match the ones the trackers actually evaluate at.
+    """
+    return GameEvent(
+        game_id=game_id,
+        white_name=_player_name(headers, "White"),
+        black_name=_player_name(headers, "Black"),
+        white_elo=white_elo if white_elo is not None else _parse_elo(headers, "WhiteElo"),
+        black_elo=black_elo if black_elo is not None else _parse_elo(headers, "BlackElo"),
+    )
 
 
 def _game_id(headers: chess.pgn.Headers, fallback: int) -> str:
@@ -452,6 +509,12 @@ class BroadcastIngestor:
         self.black_elo = black_elo
         self._trackers: Dict[str, GameTracker] = {}
         self.stats = IngestStats()
+        # Fired once per game, the first time it is seen, with its :class:`GameEvent`
+        # (overlay "game" metadata). Optional so the MoveEvent stream is unchanged when
+        # a caller doesn't care (e.g. the existing tests). The CLI wires it to emit the
+        # game line before that game's moves.
+        self.on_game: Optional[Callable[["GameEvent"], None]] = None
+        self._announced: set[str] = set()
 
     def _tracker_for(self, game_id: str) -> GameTracker:
         tracker = self._trackers.get(game_id)
@@ -473,6 +536,14 @@ class BroadcastIngestor:
             if headers is None:
                 continue
             gid = _game_id(headers, index)
+            if gid not in self._announced:
+                self._announced.add(gid)
+                if self.on_game is not None:
+                    self.on_game(
+                        game_event(
+                            headers, gid, white_elo=self.white_elo, black_elo=self.black_elo
+                        )
+                    )
             new = self._tracker_for(gid).ingest(game_pgn)
             events.extend(new)
         for ev in events:

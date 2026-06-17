@@ -11,9 +11,11 @@ from chess_equity.broadcast import (
     BroadcastFeed,
     BroadcastIngestor,
     FeedError,
+    GameEvent,
     GameTracker,
     LocalPgnFeed,
     MoveEvent,
+    game_event,
     grade_delta,
     split_games,
 )
@@ -273,6 +275,73 @@ class _OneShotFeed(BroadcastFeed):
             return None
         self._done = True
         return self._snapshot
+
+
+# --------------------------------------------------------------------------- #
+# GameEvent — player names threaded to the overlay "game" metadata (task 0047)
+# --------------------------------------------------------------------------- #
+
+
+def _headers(pgn):
+    import io
+
+    return chess.pgn.read_headers(io.StringIO(pgn))
+
+
+def test_game_event_parses_names_and_ratings():
+    ge = game_event(_headers(GAME_PGN), "g")
+    assert ge.white_name == "Carlsen" and ge.black_name == "Nakamura"
+    assert ge.white_elo == 2850 and ge.black_elo == 2780
+    players = ge.to_overlay()["players"]
+    assert ge.to_overlay()["type"] == "game"
+    assert players["white"] == {"name": "Carlsen", "rating": 2850}
+    assert players["black"] == {"name": "Nakamura", "rating": 2780}
+
+
+def test_game_event_missing_names_are_none():
+    anon = """[Event "OTB"]
+[White "?"]
+[Black ""]
+[Result "*"]
+
+1. e4 e5 *
+"""
+    ge = game_event(_headers(anon), "g")
+    assert ge.white_name is None and ge.black_name is None
+    # overlay.js falls back to "White"/"Black" on a null name.
+    assert ge.to_overlay()["players"]["white"]["name"] is None
+
+
+def test_game_event_rating_override_wins():
+    ge = game_event(_headers(GAME_PGN), "g", white_elo=1200, black_elo=2400)
+    assert ge.white_elo == 1200 and ge.black_elo == 2400
+
+
+def test_ingestor_emits_game_event_once_with_names_before_moves():
+    feed = LocalPgnFeed(GAME_PGN)
+    ingestor = BroadcastIngestor(feed, _model())
+    games, moves = [], []
+    ingestor.on_game = games.append
+    ingestor.run(moves.append, interval=0.0, sleep=lambda _: None)
+    # Exactly one game event, carrying the PGN's player names.
+    assert len(games) == 1
+    assert isinstance(games[0], GameEvent)
+    assert games[0].white_name == "Carlsen" and games[0].black_name == "Nakamura"
+    # ...and the moves still all stream (game event is additive, not a replacement).
+    assert [e.san for e in moves] == ["e4", "e5", "Nf3", "Nc6"]
+
+
+def test_ingestor_emits_one_game_event_per_game():
+    game2 = GAME_PGN.replace("Carlsen", "Ding").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    feed = _OneShotFeed(GAME_PGN + "\n" + game2)
+    ingestor = BroadcastIngestor(feed, _model())
+    games = []
+    ingestor.on_game = games.append
+    ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
+    names = {g.white_name for g in games}
+    assert names == {"Carlsen", "Ding"}
 
 
 def test_move_event_is_json_serializable():
