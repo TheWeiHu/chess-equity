@@ -272,7 +272,34 @@
     return "demo-game.json";
   }
 
+  // Populate the catalog selector from games.json so you can scroll through the
+  // bundled games. Switching navigates to ?game=<file>; a fresh load keeps the URL,
+  // board, sliders and chart all in sync without bespoke teardown. Best-effort: if
+  // games.json is missing (e.g. an imported single game), hide the picker.
+  function setupGamePicker(current) {
+    var sel = $("game-select");
+    if (!sel) return;
+    fetch("games.json")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (manifest) {
+        var games = manifest && manifest.games;
+        if (!games || !games.length) { sel.parentNode.hidden = true; return; }
+        games.forEach(function (g) {
+          var opt = document.createElement("option");
+          opt.value = g.file;
+          opt.textContent = g.name;
+          if (g.file === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener("change", function () {
+          window.location.search = "?game=" + encodeURIComponent(sel.value);
+        });
+      })
+      .catch(function () { sel.parentNode.hidden = true; });
+  }
+
   var file = gameFile();
+  setupGamePicker(file);
   fetch(file)
     .then(function (r) { return r.json(); })
     .then(init)
