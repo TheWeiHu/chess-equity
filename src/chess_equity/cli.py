@@ -30,6 +30,7 @@ from chess_equity.adapters import EquityModel
 from chess_equity.bar import render_eval
 from chess_equity.broadcast import (
     BroadcastIngestor,
+    GameEvent,
     LichessRoundFeed,
     LocalPgnFeed,
     MoveEvent,
@@ -83,8 +84,13 @@ def _grade_pgn(model: EquityModel, path: str, white_elo: int, black_elo: int) ->
 
 
 def _event_line(event: MoveEvent) -> str:
-    """One JSONL record the overlay (task 0019) can tail."""
-    return json.dumps(event.to_dict())
+    """One JSONL ``position`` record in the overlay's schema (task 0019).
+
+    Emits :meth:`MoveEvent.to_overlay_event` (nested, White-POV equity in [0, 1]) so
+    the broadcast stream is directly consumable by overlay.js — paired with the
+    one-time ``game`` metadata event (player names) emitted via ``on_game``.
+    """
+    return json.dumps(event.to_overlay_event())
 
 
 def build_model(
@@ -206,6 +212,14 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     def emit(event: MoveEvent) -> None:
         out.write(_event_line(event) + "\n")
         out.flush()
+
+    # Emit the overlay "game" metadata event (player names + ratings) once per game,
+    # before its moves, so the overlay name-plates are populated (task 0047).
+    def emit_game(game: GameEvent) -> None:
+        out.write(json.dumps(game.to_overlay()) + "\n")
+        out.flush()
+
+    ingestor.on_game = emit_game
 
     # A local replay terminates (max_idle_polls=1); a live feed runs until interrupted
     # (--max-polls caps it). interval=0 for replays keeps tests/CI instant.
