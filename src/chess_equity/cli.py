@@ -777,9 +777,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
     tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
 
-    sub.add_parser(
+    dr = sub.add_parser(
         "doctor",
         help="check the optional engines (Stockfish, Maia-2) are installed and working",
+    )
+    dr.add_argument(
+        "--engine",
+        action="append",
+        choices=["stockfish", "maia2"],
+        help="check only this engine (repeatable); default checks all. Use "
+        "`--engine stockfish` on a binary-only runner with no torch/Maia-2.",
     )
 
     pp = sub.add_parser(
@@ -828,7 +835,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "doctor":
         from chess_equity.doctor import doctor
 
-        return doctor()
+        return doctor(engines=args.engine)
     if args.command == "personal":
         return _run_personal(args)
 

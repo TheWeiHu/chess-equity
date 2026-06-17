@@ -1,0 +1,39 @@
+name: Engine smoke
+
+# Optional engine-regression check (task 0090). The default `CI` lane (ci.yml) is
+# deliberately binary/torch-free; it never exercises the Stockfish path or
+# baseline/verify_engine.py. This separate job provisions a real Stockfish binary
+# (apt, no torch/Maia-2) and runs the two engine-backed checks:
+#
+#   * `chess-equity doctor --engine stockfish` — resolves Stockfish and runs a real eval
+#   * baseline/verify_engine.py              — engine-checks the 0003 failure-mode set
+#
+# It is intentionally NOT a required gate: it stays out of the fast iteration lane and
+# only catches gross engine regressions. verify_engine.py self-skips (exit 0) when no
+# binary is present, and `--engine stockfish` avoids the torch/Maia-2 path entirely, so
+# nothing here pulls heavyweight deps.
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+jobs:
+  engine-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Stockfish
+        run: sudo apt-get update && sudo apt-get install -y stockfish
+      # No `maia2`/`plots` extras: this lane stays torch-free. `data` is harmless but
+      # unneeded for the engine checks, so keep the install minimal.
+      - name: Install package
+        run: pip install -e ".[dev]"
+      - name: doctor (Stockfish only)
+        run: chess-equity doctor --engine stockfish
+      - name: verify_engine vs Stockfish
+        run: python baseline/verify_engine.py
