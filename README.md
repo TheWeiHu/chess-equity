@@ -105,6 +105,30 @@ pip install maia2          # pulls torch; the ~23M-param checkpoint downloads on
 Tests inject a fake backend (the `Backend` seam: `(fen, elo_self, elo_oppo) ->
 (move_probs, win_prob)`), so the suite needs neither torch nor weights.
 
+## Approach A — rating-conditioned WDL regression (task 0004)
+
+`--model wdl-a` is a transparent, dependency-free alternative to Maia-2: a pure-Python
+multinomial-logistic model fitting `P(White W/D/L | cp_eval, white_elo, black_elo, ply,
+time_control)`. Re-scoped now that Maia-2 is the principled core — this is the cheap
+**baseline to compare against Maia-2's value head** in the 0009 validation (and a
+Stockfish-only fallback when no learned head is available). The feature that makes it
+genuinely rating-conditioned is the `cp × skill` interaction: the *same* engine eval is
+more/less decisive depending on who's playing, which a rating-blind logistic can't express.
+
+```bash
+chess-equity train --data data/dataset.csv          # fits + writes the wdl_a.json artifact
+chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600 --model wdl-a
+chess-equity validate --data data/dataset.csv --models baseline,wdl-a   # the A/B
+```
+
+The artifact (`src/chess_equity/artifacts/wdl_a.json`) is a small, diff-friendly JSON of
+weights. **The committed one is a placeholder fit on the 15-row sample** (`n_train=15` in
+its `meta`) — it proves the train→persist→serve→validate wiring, but its numbers are not
+meaningful (15 rows from 3 games carry a spurious rating↔outcome signal). A real fit, and
+the "beats baseline on held-out log-loss/calibration, especially off-2300" evidence, wait
+on a real tens-of-thousands-row dataset (task 0024). The model and CLI need no extra deps;
+training is plain batch gradient descent, fine for the sample and documented to scale.
+
 ## Data (task 0002)
 
 The training + validation substrate. `chess-equity data build` turns a Lichess
@@ -153,8 +177,8 @@ A **predictor** maps a dataset row to a predicted White expected-score
 (`P(win)+0.5·P(draw)`); the harness scores each with **log-loss, Brier, and ECE**
 (calibration) — overall and sliced by **rating band** and **game phase** — so a model
 that only wins in the off-2300 bands still shows up. Shipped today: `baseline`
-(Lichess's rating-blind Win% over the row's centipawns — the thing to beat). Approach
-A (0004) registers as a predictor with no harness change. A demonstration run on the
+(Lichess's rating-blind Win% over the row's centipawns — the thing to beat), `baseline+clock`,
+and `wdl-a` (Approach A, the rating-conditioned regression — task 0004). A demonstration run on the
 sample fixture lives in [`reports/validation_sample.md`](reports/validation_sample.md)
 (smoke test — meaningless at 15 rows, real evidence needs a real dataset). Models that
 need the full board (Maia, 0005) wait on positions being added to the dataset schema.
