@@ -309,10 +309,18 @@ be shown drifting away from the ~2300 band it was fit on (it can't see who is pl
 
 ```bash
 uv run chess-equity validate --data data/dataset.csv --models baseline \
-    --calibration reports/baseline_calibration.md
+    --calibration reports/baseline_calibration.md \
+    --plots reports/calibration.png        # optional: needs chess-equity[plots]
 ```
 
-A sample run is in [`reports/baseline_calibration_sample.md`](reports/baseline_calibration_sample.md).
+`--plots PATH` renders the same per-band reliability data as a **calibration curve**
+(one predicted-vs-observed line per rating band against the `y = x` diagonal — task
+0036), so the baseline's drift is visible at a glance. matplotlib is an optional extra
+(`pip install chess-equity[plots]`); every numeric metric and the Markdown reports work
+without it, and `--plots` errors with a clear install hint when it's absent.
+
+A sample run is in [`reports/baseline_calibration_sample.md`](reports/baseline_calibration_sample.md),
+with the matching curve at [`reports/calibration_sample.png`](reports/calibration_sample.png).
 Separately, `python baseline/measure_practical.py --data <dataset> --write` replaces the
 *hypothesised* practical numbers in `baseline/failure_modes.json` with the **measured**
 rating-sliced mean White result for each position's class (its engine-eval band) — `null`
