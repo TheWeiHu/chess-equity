@@ -93,8 +93,10 @@ while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's q
 "sacrifice" tanks the material count while it is in fact a forced mate, so the move is
 **green on equity but red on centipawns**.
 
-The committed demo's centipawn bar is a deliberately **shallow material count**, not the
-deep engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
+The committed demo's equity bar is **real Maia-2** output (rating-conditioned win-equity
+from its value head), regenerated with `python web/build_demo.py --all --model maia2`. Its
+centipawn bar, by contrast, is a deliberately **shallow material count**, not the deep
+engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
 contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games;
 see [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md)).
 The project's actual *"equity beats centipawns"* claim is the validation gate below,
