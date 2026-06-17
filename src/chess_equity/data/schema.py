@@ -36,6 +36,10 @@ _OPENING_MAX_PLY = 20
 _ENDGAME_MAX_PIECES = 6  # non-king pieces left on the board
 
 # The ordered column list — the contract loaders and the Parquet/CSV writer share.
+# ``game_id`` is the game each position came from; it is what lets validation split
+# train/test at the *game* level so positions from one game never leak across the
+# split (task 0030). Always written going forward; datasets built before it existed
+# load it back as ``None`` (the column is keyed, not positional — see ``_coerce_row``).
 COLUMNS = (
     "cp_eval",
     "white_elo",
@@ -47,6 +51,7 @@ COLUMNS = (
     "clock_remaining",
     "side_to_move",
     "result",
+    "game_id",
 )
 
 # The FEN is opt-in: it roughly triples a row's on-disk size, and the
@@ -82,6 +87,10 @@ class PositionRow:
     clock_remaining: Optional[float]
     side_to_move: str
     result: float
+    # The id of the game this position came from (the Lichess game slug). Lets the
+    # validation split partition whole games into train/test so no game's positions
+    # leak across the split (task 0030). ``None`` for datasets built before it existed.
+    game_id: Optional[str] = None
     # The position itself, White-POV FEN. Optional: ``None`` unless the dataset was
     # built with ``include_fen`` (it is what lets board models be scored in 0009).
     fen: Optional[str] = None

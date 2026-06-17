@@ -225,8 +225,10 @@ data with no PGN rebuild. Load a built dataset with
 `load_dataframe(path)` (pandas, needs the data extra).
 
 `cp_eval` and `result` are both White-POV; mate scores are clamped to ±10000 cp.
-With `--with-fen`, an optional `fen` column is appended; datasets built without it
-load unchanged (`fen=None`). `validate.harness.model_predictor(model)` adapts any
+Each row also carries a `game_id` (the Lichess game slug) so validation can split
+train/test at the game level without leakage (task 0030); datasets built before it
+existed load with `game_id=None`. With `--with-fen`, an optional `fen` column is
+appended; datasets built without it load unchanged (`fen=None`). `validate.harness.model_predictor(model)` adapts any
 board-based `EquityModel` into a 0009 predictor by reading that column.
 `--month YYYY-MM` streams the canonical Lichess dump to a cache dir (`--dump-dir` to
 override), resuming a partial download via an HTTP `Range` request and never holding
@@ -242,12 +244,23 @@ the rating-blind centipawn baseline at predicting **actual** game results?
 ```bash
 uv run chess-equity validate --data data/dataset.csv --models baseline \
     --out reports/validation.md
+# held-out, leak-free evaluation: score only a test split of whole games (task 0030)
+uv run chess-equity validate --data data/dataset.csv --models baseline \
+    --holdout 0.2 --seed 0
 ```
 
 A **predictor** maps a dataset row to a predicted White expected-score
 (`P(win)+0.5·P(draw)`); the harness scores each with **log-loss, Brier, and ECE**
 (calibration) — overall and sliced by **rating band** and **game phase** — so a model
-that only wins in the off-2300 bands still shows up. Shipped today: `baseline`
+that only wins in the off-2300 bands still shows up.
+
+`--holdout FRACTION` scores only a held-out **game-level** split: positions from one
+game are correlated, so a random row split would leak near-identical positions across
+train/test and flatter every predictor. The split partitions *whole games* (keyed on
+the new `game_id` column) so no game spans the boundary — the honest measure of
+generalisation (task 0030). It's deterministic per `--seed`, and errors loudly on a
+dataset built before `game_id` existed. *Deferred:* reliability-curve plots committed
+to `reports/` (the numeric reliability table already ships in `validate.metrics`). Shipped today: `baseline`
 (Lichess's rating-blind Win% over the row's centipawns — the thing to beat), `baseline+clock`,
 and `wdl-a` (Approach A, the rating-conditioned regression — task 0004). A demonstration run on the
 sample fixture lives in [`reports/validation_sample.md`](reports/validation_sample.md)

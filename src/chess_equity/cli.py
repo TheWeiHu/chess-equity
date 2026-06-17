@@ -285,9 +285,26 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    title = f"Validation report — {args.data}"
+    if args.holdout is not None:
+        from chess_equity.validate.split import game_level_split
+
+        try:
+            train, rows = game_level_split(
+                rows, test_fraction=args.holdout, seed=args.seed
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        title += (
+            f" (held-out test: {len(rows)} rows / "
+            f"{len({r.game_id for r in rows})} games; "
+            f"train: {len(train)} rows, seed {args.seed})"
+        )
+
     predictors = {name: PREDICTORS[name] for name in requested}
     reports = evaluate(rows, predictors)
-    report = format_report(reports, title=f"Validation report — {args.data}")
+    report = format_report(reports, title=title)
     if args.out:
         from pathlib import Path
 
@@ -449,6 +466,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     val.add_argument("--models", default="baseline", help="comma-separated predictor names")
     val.add_argument("--out", help="write the Markdown report here (default: stdout)")
+    val.add_argument(
+        "--holdout",
+        type=float,
+        metavar="FRACTION",
+        help="score only a held-out test split (this fraction of GAMES, leak-free); "
+        "needs a dataset with game_id (task 0030)",
+    )
+    val.add_argument(
+        "--seed", type=int, default=0, help="RNG seed for the --holdout game split"
+    )
 
     pc = sub.add_parser(
         "precompute",
