@@ -28,13 +28,18 @@ import json
 import os
 import sys
 
-# Allow running from the repo without an install: add ../src to the path.
+# Allow running from the repo without an install: add ../src and this dir to the path.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import chess  # noqa: E402
 
 from chess_equity.models import MaterialEngine  # noqa: E402
 from chess_equity.types import lichess_win_percent  # noqa: E402
+
+# Single source of truth for the cp/grade formulas the web demo shares with the
+# import path (web/game_json.py) — keep them here and the two can't drift.
+from game_json import _material_cp_white, grade_label  # noqa: E402
 
 # The demo game (SAN) and, per ply, the hand-annotated practical White-POV equity at
 # the reference band (1500 vs 1500). These annotations encode the *known* truth about
@@ -45,18 +50,6 @@ REF_EQUITY_WHITE = [52, 53, 52, 53, 52, 54, 53, 55, 56, 60, 92, 96, 98, 100]
 
 REFERENCE_BAND = 1500
 RATING_BANDS = [1100, 1500, 1900, 2300]
-
-# Move-grade label bands on the mover-POV Δequity (percentage points). Mirrors the
-# spirit of grading.py's bands; coarse on purpose — this is for colouring the move list.
-GRADE_BANDS = [(10, "brilliant"), (3, "good"), (-3, "ok"), (-8, "inaccuracy"), (-15, "mistake")]
-
-
-def _grade_label(delta: float) -> str:
-    for threshold, label in GRADE_BANDS:
-        if delta >= threshold:
-            return label
-    return "blunder"
-
 
 def _demo_equity(eq_ref: float, cp_white: float, white_elo: int, black_elo: int) -> float:
     """Illustrative rating skew: expand the reference-band equity across ratings.
@@ -92,13 +85,8 @@ def build(model_name: str) -> dict:
     prev_white_eq = None
     for i, node in enumerate(plies):
         fen = node["fen"]
-        obj = engine.eval(fen)
         # Material centipawns, always White-POV (mate => a decisive ±10000).
-        if obj.mate is not None:
-            cp_white = 10000.0 if board_white_winning(fen) else -10000.0
-        else:
-            cp_stm = obj.cp or 0.0
-            cp_white = cp_stm if chess.Board(fen).turn == chess.WHITE else -cp_stm
+        cp_white = _material_cp_white(fen, engine)
 
         equity = {}
         for we in RATING_BANDS:
@@ -114,7 +102,7 @@ def build(model_name: str) -> dict:
             mover_white = chess.Board(plies[i - 1]["fen"]).turn == chess.WHITE
             # Δ from the mover's POV (White-POV delta flips for Black).
             delta = (ref_white - prev_white_eq) if mover_white else (prev_white_eq - ref_white)
-            grade = {"label": _grade_label(delta), "delta": round(delta, 1)}
+            grade = {"label": grade_label(delta), "delta": round(delta, 1)}
         prev_white_eq = ref_white
 
         moves.append(
@@ -147,11 +135,6 @@ def build(model_name: str) -> dict:
         "rating_bands": RATING_BANDS,
         "moves": moves,
     }
-
-
-def board_white_winning(fen: str) -> bool:
-    """True if the side just mated was White (i.e. it is Black to move and mated)."""
-    return chess.Board(fen).turn == chess.BLACK
 
 
 def main(argv=None) -> int:
