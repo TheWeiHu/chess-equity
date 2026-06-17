@@ -46,9 +46,21 @@ background is transparent, so only the bar composites over your stream.
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
 | `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
+| `welo`   | _(feed)_ | override the White rating shown (Maia-2's top band is a coarse `>2000` — pin the real number) |
+| `belo`   | _(feed)_ | override the Black rating shown |
 
 Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
 Caster setup: `http://localhost:8777/?caster=1&cpbar=1`
+
+### Setup page — no hand-editing query params (task 0021)
+
+Don't want to assemble that URL by hand? Open **`/config.html`** (served by
+`serve.py`): a small form that picks the feed (bundled replay, live `/sse`, or a
+custom URL), takes optional rating overrides, toggles layout/theme/caster, and
+spits out the ready-to-paste OBS browser-source URL. For a live game, enter the
+Lichess broadcast round URL and it shows the `chess-equity broadcast … --serve-sse`
+command to run the [0018](../src/chess_equity/broadcast.py) ingestor that feeds the
+overlay.
 
 ## What it shows
 

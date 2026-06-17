@@ -57,6 +57,14 @@
     };
   }
 
+  // Streamer rating override (task 0021): when the setup page sets ?welo=/?belo=,
+  // that rating wins over whatever the feed reports. Useful because Maia-2's top
+  // band is a coarse ">2000" — a caster can pin the real ratings for context.
+  function overrideRating(feedRating, override) {
+    if (override != null && override !== "") return override;
+    return feedRating == null ? "" : feedRating;
+  }
+
   // Seconds -> M:SS (or H:MM:SS). Sub-10s shows tenths for the scramble feel.
   function formatClock(secs) {
     if (typeof secs !== "number" || isNaN(secs) || secs < 0) return "";
@@ -80,6 +88,8 @@
       cpbar: p.get("cpbar") === "1",
       caster: p.get("caster") === "1",
       speed: parseFloat(p.get("speed")) || 1,
+      welo: p.get("welo"),
+      belo: p.get("belo"),
     };
   }
 
@@ -98,15 +108,16 @@
   let prevEquity = null;
   let prevCp = null;
 
-  function applyGame(evt) {
+  function applyGame(evt, cfg) {
+    cfg = cfg || {};
     const pl = evt.players || {};
     if (pl.white) {
       setText("[data-white-name]", pl.white.name || "White");
-      setText("[data-white-rating]", pl.white.rating != null ? pl.white.rating : "");
+      setText("[data-white-rating]", overrideRating(pl.white.rating, cfg.welo));
     }
     if (pl.black) {
       setText("[data-black-name]", pl.black.name || "Black");
-      setText("[data-black-rating]", pl.black.rating != null ? pl.black.rating : "");
+      setText("[data-black-rating]", overrideRating(pl.black.rating, cfg.belo));
     }
   }
 
@@ -163,7 +174,7 @@
     if (evt.grade && evt.grade.label) showGrade(evt.grade);
 
     // Late-arriving player metadata in a position event.
-    if (evt.players) applyGame(evt);
+    if (evt.players) applyGame(evt, cfg);
   }
 
   function updateClock(sel, secs) {
@@ -225,7 +236,7 @@
 
   function dispatch(evt, cfg) {
     if (!evt || !evt.type) return;
-    if (evt.type === "game") applyGame(evt);
+    if (evt.type === "game") applyGame(evt, cfg);
     else if (evt.type === "position") applyPosition(evt, cfg);
   }
 
@@ -237,6 +248,10 @@
       root.classList.add("layout-" + cfg.layout);
     }
     document.body.className = "theme-" + cfg.theme;
+
+    // Show any rating overrides immediately, before the first game event arrives.
+    if (cfg.welo != null && cfg.welo !== "") setText("[data-white-rating]", cfg.welo);
+    if (cfg.belo != null && cfg.belo !== "") setText("[data-black-rating]", cfg.belo);
 
     if (global.EquityFeed) {
       global.EquityFeed.connect(cfg.src, {
@@ -258,6 +273,7 @@
     pct: pct,
     cpToWhitePos: cpToWhitePos,
     formatClock: formatClock,
+    overrideRating: overrideRating,
     fmtDelta: fmtDelta,
     dramaSwing: dramaSwing,
     dramaHeadline: dramaHeadline,
