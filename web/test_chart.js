@@ -18,7 +18,10 @@ const game = JSON.parse(fs.readFileSync(path.join(HERE, "demo-game.json"), "utf8
 const noopChain = { then() { return noopChain; }, catch() { return noopChain; } };
 const sandbox = {
   window: { location: { search: "" } },
-  document: { createElementNS() { return {}; } },
+  // app.js runs setupGamePicker() at load, which calls $("game-select") ->
+  // getElementById; returning null makes it early-return so we never need a real DOM
+  // (the fetch chain below never resolves, so init() stays off too).
+  document: { createElementNS() { return {}; }, getElementById() { return null; } },
   fetch() { return noopChain; },
   URLSearchParams,
   Math,

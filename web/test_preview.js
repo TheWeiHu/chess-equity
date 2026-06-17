@@ -66,7 +66,15 @@ function resolved(val) {
 const sandbox = {
   window: { location: { search: "" }, ChessEquityDemo: null },
   document,
-  fetch() { return resolved({ json: () => game }); },
+  // app.js fetches games.json (the catalog) at load before fetching the game itself.
+  // Return a one-entry manifest for it so setupGamePicker populates the dropdown
+  // instead of hitting its "no catalog" hide-path; any other URL resolves to the game.
+  fetch(url) {
+    if (url === "games.json") {
+      return resolved({ ok: true, json: () => ({ games: [{ file: "demo-game.json", name: "Demo" }] }) });
+    }
+    return resolved({ json: () => game });
+  },
   URLSearchParams,
   Math,
   parseInt,
