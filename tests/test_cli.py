@@ -33,6 +33,17 @@ def test_eval_pgn_annotates_every_move(tmp_path, capsys):
     assert "e4" in out and "Nf3" in out
 
 
+def test_precompute_warns_default_model_is_placeholder(tmp_path, capsys):
+    """precompute on the default baseline tells the user the bar is NOT Maia (task 0081)."""
+    pgn = tmp_path / "game.pgn"
+    pgn.write_text("1. e4 e5 *\n")
+    out_json = tmp_path / "out.json"
+    rc = main(["precompute", "--pgn", str(pgn), "--out", str(out_json)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "maia2" in err and "rating-blind" in err
+
+
 # --- --depth threads through grade/broadcast (task 0044) ------------------------
 # The Stockfish baseline depth comes from build_model(depth=...); grade/broadcast used
 # to call build_model(args.model) with no depth, leaving the engine stuck at depth=2.

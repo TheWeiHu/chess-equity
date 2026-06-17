@@ -37,7 +37,7 @@ from chess_equity.broadcast import (
     UrlPgnFeed,
 )
 from chess_equity.grading import EquityGrader
-from chess_equity.models import LichessBaselineModel
+from chess_equity.models import LichessBaselineModel, placeholder_equity_warning
 from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
 from chess_equity.search import MaiaSearchModel
 from chess_equity.search import estimate_to_equity as search_estimate_to_equity
@@ -444,7 +444,14 @@ def _run_precompute(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    model = CachingEquityModel(build_model(args.model), path=args.cache)
+    base_model = build_model(args.model)
+    # Be honest about what the bar is: the default 'baseline' is the rating-blind
+    # material/centipawn placeholder, not Maia-2 (task 0081). Warn so the web demo's
+    # equity isn't mistaken for the real rating-conditioned model.
+    warning = placeholder_equity_warning(base_model)
+    if warning:
+        print(warning, file=sys.stderr)
+    model = CachingEquityModel(base_model, path=args.cache)
     try:
         result = precompute_game(
             model, pgn_text, white_elo=args.white_elo, black_elo=args.black_elo

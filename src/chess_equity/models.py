@@ -15,6 +15,7 @@ interfaces are exercised before the real models land:
 from __future__ import annotations
 
 from math import exp
+from typing import Optional
 
 import chess
 
@@ -93,3 +94,26 @@ class LichessBaselineModel(EquityModel):
             source=self.SOURCE,
             cp=cp,
         )
+
+
+def placeholder_equity_warning(model: object) -> Optional[str]:
+    """An advisory string if ``model`` is the rating-blind placeholder, else ``None``.
+
+    The shipped demo defaults to :class:`LichessBaselineModel`, which IGNORES player
+    ratings and — when no Stockfish is found — scores material only. So the equity bar
+    can look like a naive material count, which surprises anyone expecting Maia-2 (task
+    0081). This lets callers that feed a UI (e.g. ``precompute``) say so out loud rather
+    than emit a placeholder bar silently. The White-POV direction itself is correct.
+    """
+    if not isinstance(model, LichessBaselineModel):
+        return None
+    detail = (
+        "material-only, no Stockfish found"
+        if isinstance(model.engine, MaterialEngine)
+        else "objective-engine centipawns"
+    )
+    return (
+        f"note: '--model baseline' is the rating-blind placeholder ({detail}); the "
+        "equity bar is NOT Maia-2 and ignores player ratings. Pass '--model maia2' for "
+        "the real rating-conditioned equity."
+    )
