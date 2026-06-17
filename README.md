@@ -243,6 +243,29 @@ transient feed errors (reconnect). Latency: with the placeholder model, equity
 compute is ~0.1 ms/move — well under the sub-second target (Maia-2 in 0005 sets the
 real number; cache/batch live in 0012).
 
+## Performance: caching + precompute (task 0012)
+
+A live overlay needs interactive per-move latency, so equity is cacheable.
+`CachingEquityModel` wraps **any** `EquityModel` and memoises by `(model, fen,
+white_elo, black_elo)` — the inputs the result depends on — returning a result
+identical to the uncached model (a warm lookup recomputes nothing). With a `--cache`
+path the cache is a small JSON that survives restarts.
+
+`precompute` evaluates a whole game in one cache-backed pass and emits a UI-ready JSON,
+so the web demo (0010) can scrub a finished game with no live backend:
+
+```bash
+chess-equity precompute --pgn game.pgn --model wdl-a --cache .cache.json --out game.json
+# stderr: "# 8 plies, 2.6 ms total (0.33 ms/ply), cache 0 hit / 8 miss"  (cold)
+# re-run:  "# 8 plies, 0.6 ms total (0.07 ms/ply), cache 8 hit / 0 miss"  (warm)
+```
+
+Each ply record carries `equity_white` (the [0,100]% bar), the side-to-move WDL split,
+and the objective `cp`. **Deferred:** leaf-eval **batching** (GPU batch for Maia-2,
+multi-PV Stockfish) and search-parameter (`depth`/`k`) cache keys land with the search
+baselines (0006/0007); a measured p50/p95 interactive target waits on a real model
+(Maia-2) under load — the baseline is already sub-millisecond.
+
 ## Architecture
 
 | Type | Role |

@@ -266,6 +266,43 @@ def _run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_precompute(args: argparse.Namespace) -> int:
+    """Evaluate a whole game's equity in one cache-backed pass → UI-ready JSON (0012)."""
+    from chess_equity.cache import CachingEquityModel
+    from chess_equity.precompute import precompute_game
+
+    try:
+        with open(args.pgn, encoding="utf-8") as fh:
+            pgn_text = fh.read()
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    model = CachingEquityModel(build_model(args.model), path=args.cache)
+    try:
+        result = precompute_game(
+            model, pgn_text, white_elo=args.white_elo, black_elo=args.black_elo
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    payload = json.dumps(result.to_dict(), indent=2)
+    if args.out:
+        from pathlib import Path
+
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(payload + "\n", encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(payload)
+    print(
+        f"# {len(result.plies)} plies, {result.compute_ms:.1f} ms total "
+        f"({result.compute_ms / max(len(result.plies), 1):.2f} ms/ply), "
+        f"cache {result.cache_hits} hit / {result.cache_misses} miss",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _run_train(args: argparse.Namespace) -> int:
     """Fit the wdl-a rating-conditioned WDL model and write the artifact (task 0004)."""
     from chess_equity.data.build import load_rows
@@ -366,6 +403,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     val.add_argument("--models", default="baseline", help="comma-separated predictor names")
     val.add_argument("--out", help="write the Markdown report here (default: stdout)")
 
+    pc = sub.add_parser(
+        "precompute",
+        help="evaluate a whole game's equity into a UI-ready JSON (task 0012)",
+    )
+    pc.add_argument("--pgn", required=True, help="PGN file to precompute")
+    pc.add_argument("--white-elo", type=int, default=1500)
+    pc.add_argument("--black-elo", type=int, default=1500)
+    pc.add_argument("--out", help="write the JSON here (default: stdout)")
+    pc.add_argument(
+        "--cache", help="persistent cache path for warm restarts (omit = in-memory only)"
+    )
+    add_model_arg(pc)
+
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
     tr.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     tr.add_argument("--out", help="artifact path (default: the packaged wdl_a.json)")
@@ -397,6 +447,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_validate(args)
     if args.command == "train":
         return _run_train(args)
+    if args.command == "precompute":
+        return _run_precompute(args)
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2
