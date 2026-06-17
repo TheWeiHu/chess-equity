@@ -132,3 +132,31 @@ def test_precompute_to_dict_is_json_shaped():
 def test_precompute_rejects_empty_pgn():
     with pytest.raises(ValueError):
         precompute_game(LichessBaselineModel(), "   ")
+
+
+# A position where White is in check with a single legal reply (Kg1); see task 0075.
+FORCED_PGN = (
+    '[SetUp "1"]\n'
+    '[FEN "8/8/8/8/8/6k1/7r/7K w - - 0 1"]\n\n'
+    "1. Kg1 *\n"
+)
+
+
+def test_precompute_flags_forced_moves():
+    result = precompute_game(LichessBaselineModel(), FORCED_PGN)
+    # ply 0 is the start position (no move led here) -> never forced.
+    assert result.plies[0].forced is False
+    # ply 1 is reached by Kg1, the only legal move from the start position -> forced.
+    assert result.plies[1].san == "Kg1"
+    assert result.plies[1].forced is True
+
+
+def test_precompute_unforced_moves_are_not_flagged():
+    # The sample game has normal opening choices, so no ply is forced.
+    result = precompute_game(LichessBaselineModel(), SAMPLE_PGN)
+    assert all(p.forced is False for p in result.plies)
+
+
+def test_forced_flag_serialises():
+    result = precompute_game(LichessBaselineModel(), FORCED_PGN)
+    assert "forced" in result.to_dict()["plies"][1]
