@@ -1,0 +1,24 @@
+{
+  "_comment": "Replay fixture for the equity overlay. A bullet time-scramble where the PRACTICAL equity bar (clock-aware) diverges from the classic centipawn eval, then converges after Black blunders under flag pressure. Conforms to the schema in README.md. `equity`/`cp` are White-POV; `clock` is seconds remaining; `delayMs` is the pause before the NEXT event (scaled by ?speed).",
+  "events": [
+    {
+      "type": "game",
+      "format": "bullet",
+      "players": {
+        "white": { "name": "Carlsen", "rating": 2839 },
+        "black": { "name": "Nakamura", "rating": 2802 }
+      },
+      "delayMs": 800
+    },
+    { "type": "position", "ply": 30, "move": { "san": "Rd1" }, "equity": 0.55, "cp": 20, "clock": { "white": 18.0, "black": 9.5 }, "delayMs": 2200 },
+    { "type": "position", "ply": 32, "move": { "san": "Kg7" }, "equity": 0.58, "cp": 10, "clock": { "white": 17.2, "black": 7.8 }, "delayMs": 2200 },
+    { "type": "position", "ply": 34, "move": { "san": "h4" }, "equity": 0.63, "cp": 0, "clock": { "white": 16.5, "black": 5.9 }, "grade": { "label": "practical", "delta": 0.05 }, "delayMs": 2400 },
+    { "type": "position", "ply": 36, "move": { "san": "Re8" }, "equity": 0.69, "cp": -15, "clock": { "white": 15.8, "black": 4.1 }, "delayMs": 2400 },
+    { "type": "position", "ply": 38, "move": { "san": "h5" }, "equity": 0.62, "cp": -30, "clock": { "white": 15.0, "black": 3.2 }, "grade": { "label": "great defense", "delta": 0.07 }, "delayMs": 2400 },
+    { "type": "position", "ply": 40, "move": { "san": "Kf6" }, "equity": 0.74, "cp": -10, "clock": { "white": 14.3, "black": 1.8 }, "delayMs": 2000 },
+    { "type": "position", "ply": 42, "move": { "san": "Rc8" }, "equity": 0.66, "cp": -25, "clock": { "white": 13.9, "black": 0.9 }, "delayMs": 1800 },
+    { "type": "position", "ply": 44, "move": { "san": "Rxd5??" }, "equity": 0.88, "cp": 60, "clock": { "white": 13.2, "black": 1.6 }, "grade": { "label": "blunder", "delta": -0.22 }, "delayMs": 1800 },
+    { "type": "position", "ply": 46, "move": { "san": "Rxd5" }, "equity": 0.95, "cp": 240, "clock": { "white": 12.8, "black": 0.7 }, "grade": { "label": "winning", "delta": 0.07 }, "delayMs": 1600 },
+    { "type": "position", "ply": 48, "move": { "san": "e6" }, "equity": 0.99, "cp": 900, "clock": { "white": 12.4, "black": 0.4 }, "delayMs": 1600 }
+  ]
+}
