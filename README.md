@@ -137,6 +137,19 @@ uv run chess-equity validate --data data/dataset.csv --models baseline,wdl-a --h
 A small fixture under `data/sample/` lets tests and demos run with no download — its
 numbers are a smoke test, not evidence (real evidence needs a real dump).
 
+### Does equity beat centipawns?
+
+The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
+a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
+baseline on log-loss *and* Brier?) followed by a **head-to-head "where equity wins"** table
+that ranks slices by the baseline-minus-model log-loss gap. On the sample, rating-conditioned
+equity (`wdl-a`) wins most in the lower rating band — exactly where the rating-blind bar is most
+wrong — though the 15-row numbers are illustrative only, not proof. Regenerate it with:
+
+```bash
+uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md
+```
+
 Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is captured
 step-by-step in **[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
 
