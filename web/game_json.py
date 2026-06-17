@@ -49,6 +49,19 @@ def grade_label(delta: float) -> str:
     return "blunder"
 
 
+def grade_move(prev_ref: float, ref_white: float, prev_fen: str) -> dict:
+    """Mover-POV Δequity grade between two consecutive reference-band equities.
+
+    ``prev_ref``/``ref_white`` are White-POV equity (%) before and after the move;
+    ``prev_fen`` is the position the move was played from (its side-to-move is the
+    mover, so the White-POV delta is flipped for Black). Shared by build_demo.py and
+    build_game.py so the grade computation can't drift between the demo and import paths.
+    """
+    mover_white = chess.Board(prev_fen).turn == chess.WHITE
+    delta = (ref_white - prev_ref) if mover_white else (prev_ref - ref_white)
+    return {"label": grade_label(delta), "delta": round(delta, 1)}
+
+
 def eval_to_cp_white(token: str) -> Optional[float]:
     """Parse a Lichess ``[%eval]`` token (White POV) to centipawns, or None.
 
@@ -156,9 +169,7 @@ def build_game(
         ref_white = equity[ref_key]
         grade = None
         if i > 0 and prev_ref is not None:
-            mover_white = chess.Board(plies[i - 1]["fen"]).turn == chess.WHITE
-            delta = (ref_white - prev_ref) if mover_white else (prev_ref - ref_white)
-            grade = {"label": grade_label(delta), "delta": round(delta, 1)}
+            grade = grade_move(prev_ref, ref_white, plies[i - 1]["fen"])
         prev_ref = ref_white
 
         moves.append(
