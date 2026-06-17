@@ -24,13 +24,37 @@ def _clip(p: float) -> float:
     return min(max(p, EPS), 1.0 - EPS)
 
 
+def brier_terms(preds: Sequence[float], labels: Sequence[float]) -> List[float]:
+    """Per-row squared error ``(p - y)**2`` — the un-averaged Brier contributions.
+
+    Exposed so a paired bootstrap (:mod:`chess_equity.validate.bootstrap`) can resample
+    these row terms directly: the mean of the list IS :func:`brier_score`.
+    """
+    _check(preds, labels)
+    return [(p - y) ** 2 for p, y in zip(preds, labels)]
+
+
 def brier_score(preds: Sequence[float], labels: Sequence[float]) -> float:
     """Mean squared error between predicted expected-score and actual result.
 
     Lower is better; 0 is perfect. Works directly with 0.5 draw labels.
     """
+    terms = brier_terms(preds, labels)
+    return sum(terms) / len(terms)
+
+
+def log_loss_terms(preds: Sequence[float], labels: Sequence[float]) -> List[float]:
+    """Per-row cross-entropy ``-[y*log(p)+(1-y)*log(1-p)]`` — the un-averaged log-loss.
+
+    The mean of the list IS :func:`log_loss`; exposed for the paired bootstrap so the
+    same clipped formula is the single source of truth.
+    """
     _check(preds, labels)
-    return sum((p - y) ** 2 for p, y in zip(preds, labels)) / len(preds)
+    out = []
+    for p, y in zip(preds, labels):
+        c = _clip(p)
+        out.append(-(y * log(c) + (1.0 - y) * log(1.0 - c)))
+    return out
 
 
 def log_loss(preds: Sequence[float], labels: Sequence[float]) -> float:
@@ -40,12 +64,8 @@ def log_loss(preds: Sequence[float], labels: Sequence[float]) -> float:
     proper soft-label generalisation, so a draw rewards a prediction near 0.5. Lower
     is better.
     """
-    _check(preds, labels)
-    total = 0.0
-    for p, y in zip(preds, labels):
-        c = _clip(p)
-        total += -(y * log(c) + (1.0 - y) * log(1.0 - c))
-    return total / len(preds)
+    terms = log_loss_terms(preds, labels)
+    return sum(terms) / len(terms)
 
 
 def reliability_table(

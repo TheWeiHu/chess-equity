@@ -322,7 +322,9 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.validate.harness import (
         PREDICTORS,
         build_predictors,
+        compare_to_baseline,
         evaluate,
+        format_baseline_comparison,
         format_report,
     )
 
@@ -369,6 +371,23 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     report = format_report(reports, title=title)
+
+    # Significance: paired-bootstrap CI on each model's metric delta vs the baseline,
+    # so the report says whether a win clears zero or is just noise (task 0060). Needs
+    # the baseline plus at least one other predictor; --bootstrap 0 turns it off.
+    baseline_name = "baseline"
+    if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
+        comparisons = compare_to_baseline(
+            rows,
+            predictors,
+            baseline=baseline_name,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+        section = format_baseline_comparison(comparisons)
+        if section:
+            report = report + "\n" + section
+
     if args.out:
         from pathlib import Path
 
@@ -596,7 +615,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         "needs a dataset with game_id (task 0030)",
     )
     val.add_argument(
-        "--seed", type=int, default=0, help="RNG seed for the --holdout game split"
+        "--seed",
+        type=int,
+        default=0,
+        help="RNG seed for the --holdout game split and the bootstrap resampling",
+    )
+    val.add_argument(
+        "--bootstrap",
+        type=int,
+        default=2000,
+        metavar="N",
+        help="paired-bootstrap resamples for the 95%% CI on each model-vs-baseline "
+        "metric delta (task 0060; 0 disables; needs `baseline` + another model)",
     )
     val.add_argument(
         "--calibration",

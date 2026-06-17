@@ -26,6 +26,7 @@ from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
+from chess_equity.validate.bootstrap import DeltaCI, compare_predictions
 from chess_equity.validate.metrics import (
     brier_score,
     expected_calibration_error,
@@ -279,6 +280,99 @@ def evaluate(
             }
         reports.append(PredictorReport(name=name, overall=_score(preds, labels), slices=slices))
     return reports
+
+
+@dataclass(frozen=True)
+class BaselineComparison:
+    """One model's paired-bootstrap metric deltas vs the baseline (task 0060)."""
+
+    name: str  # the model predictor's name
+    baseline: str  # the baseline predictor's name
+    cis: List[DeltaCI]  # one per bootstrapped metric (log-loss, Brier)
+
+
+def compare_to_baseline(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline: str = "baseline",
+    metrics: Sequence[str] = ("log_loss", "brier"),
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> List[BaselineComparison]:
+    """Paired-bootstrap CIs on each non-baseline predictor's metric delta vs ``baseline``.
+
+    Turns the side-by-side scores into a *significance* statement: for every other
+    predictor, resample the held-out rows and put a ``confidence`` CI on its log-loss /
+    Brier delta against the baseline (negative = the model wins). Returns an empty list
+    when ``baseline`` is the only predictor — there is nothing to compare it to.
+
+    Pure computation; ``seed`` makes the CIs byte-reproducible. Raises ``KeyError`` if
+    ``baseline`` is not among ``predictors``.
+    """
+    if baseline not in predictors:
+        raise KeyError(f"baseline {baseline!r} not in predictors {sorted(predictors)}")
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    base_preds = [predictors[baseline](r) for r in rows]
+    comparisons: List[BaselineComparison] = []
+    for name, predictor in predictors.items():
+        if name == baseline:
+            continue
+        model_preds = [predictor(r) for r in rows]
+        cis = compare_predictions(
+            model_preds,
+            base_preds,
+            labels,
+            metrics=metrics,
+            n_resamples=n_resamples,
+            confidence=confidence,
+            seed=seed,
+        )
+        comparisons.append(BaselineComparison(name=name, baseline=baseline, cis=cis))
+    return comparisons
+
+
+def _verdict(ci: DeltaCI) -> str:
+    """A one-word read on a delta CI: does the model significantly beat the baseline?"""
+    if ci.beats_baseline:
+        return "beats"
+    if ci.worse_than_baseline:
+        return "worse"
+    return "inconclusive"
+
+
+def format_baseline_comparison(
+    comparisons: Sequence[BaselineComparison], *, title: str = "Significance vs baseline"
+) -> str:
+    """Render the paired-bootstrap deltas + CIs as a Markdown section (task 0060).
+
+    One row per (model, metric): the delta (model - baseline; negative = better), the
+    confidence interval, and a verdict. ``beats`` only when the whole CI clears zero, so
+    a real win is distinguished from noise at a glance.
+    """
+    if not comparisons:
+        return ""
+    conf_pct = round(comparisons[0].cis[0].confidence * 100) if comparisons[0].cis else 95
+    out: List[str] = [f"## {title}", ""]
+    out.append(
+        f"Paired bootstrap ({comparisons[0].cis[0].n_resamples if comparisons[0].cis else 0} "
+        f"resamples) on the per-row metric delta vs `{comparisons[0].baseline}`. "
+        "**Negative delta = the model is better** (lower loss); a verdict of `beats` "
+        f"means the whole {conf_pct}% CI sits below zero."
+    )
+    out.append("")
+    out.append(f"| model | metric | delta | {conf_pct}% CI | verdict |")
+    out.append("|---|---|--:|:--:|:--:|")
+    for c in comparisons:
+        for ci in c.cis:
+            out.append(
+                f"| {c.name} | {ci.metric} | {ci.delta:+.4f} | "
+                f"[{ci.lo:+.4f}, {ci.hi:+.4f}] | {_verdict(ci)} |"
+            )
+    out.append("")
+    return "\n".join(out)
 
 
 # The threshold above which we care about per-band resolution (Maia-2's coarse bin).
