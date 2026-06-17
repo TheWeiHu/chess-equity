@@ -282,3 +282,53 @@ def test_validate_cli_maia2_needs_fen(tmp_path, monkeypatch, capsys):
     rc = main(["validate", "--data", str(data), "--models", "maia2"])
     assert rc == 1
     assert "include_fen" in capsys.readouterr().err
+
+
+# --- registering maia-search as a 0009 predictor (task 0037) -------------------
+
+def _fake_maia_search():
+    """A MaiaSearchModel with no torch: uniform move priors + a fake rating-conditioned
+    leaf, so the expectimax conditions on ratings like the real Maia-backed search."""
+    from chess_equity.grading import UniformPolicy
+    from chess_equity.maia2 import Maia2Equity
+    from chess_equity.search import MaiaSearchModel
+
+    def backend(fen, elo_self, elo_oppo):
+        return {}, min(0.99, elo_self / 4000.0)
+
+    return MaiaSearchModel(UniformPolicy(), Maia2Equity(backend=backend), depth=1, k=2)
+
+
+def test_maia_search_registered_as_board_model():
+    from chess_equity.validate.harness import BOARD_MODELS
+
+    assert "maia-search" in BOARD_MODELS
+
+
+def test_build_predictors_includes_maia_search(monkeypatch):
+    import chess_equity.validate.harness as h
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia-search", _fake_maia_search)
+    preds = h.build_predictors(["baseline", "maia-search"])
+    assert set(preds) == {"baseline", "maia-search"}
+    # It reads the board (fen) — a row without fen must raise, like any board model.
+    with pytest.raises(ValueError):
+        preds["maia-search"](_row())
+
+
+def test_validate_cli_scores_maia_search_against_baseline(tmp_path, monkeypatch, capsys):
+    """End-to-end: `validate --models baseline,maia-search` over a --with-fen dataset."""
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+    from chess_equity.data.build import build_dataset
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia-search", _fake_maia_search)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "sample_games.pgn"
+    data = build_dataset(str(sample), str(tmp_path), name="fen", include_fen=True)
+
+    rc = main(["validate", "--data", str(data), "--models", "baseline,maia-search"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "baseline" in out and "maia-search" in out
