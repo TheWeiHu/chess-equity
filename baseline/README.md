@@ -39,11 +39,13 @@ constant, so it runs standalone today.
    study). The baseline says 50/50, but the result depends on technique a given
    rating may not have — so real outcomes are *asymmetric*, which a rating-blind
    number cannot express.
-2. **`absurd-refutation` — "unequal only via an absurd refutation."** Positions an
-   engine scores decisively (Saavedra: win only via `c8=R`; the knight-promotion
-   fork: win only via `e8=N+`) where the eval banks on a single move almost no
-   human of that rating plays. The baseline reports ~95–97%; practically it's far
-   closer to equal.
+2. **`absurd-refutation` — "unequal only via an absurd refutation."** A position an
+   engine scores decisively (Saavedra: win only via `c8=R`) where the eval banks on a
+   single move almost no human of that rating plays. The baseline reports ~95–97%;
+   practically it's far closer to equal. (Task 0035 engine-checked the set against
+   Stockfish 18 and found the once-included "knight-promotion fork" **unsound** — the
+   underpromotion fork only reaches K+N-vs-K, a draw — so it was reclassified to
+   `dead-draw-hard` as a *material-illusion* example. See `verify_engine.py`.)
 
 ## ⚠️ Honesty note on the numbers
 
@@ -62,10 +64,12 @@ data from **0002**, which isn't merged yet. Follow-ups:
 
 - Replace the hypothesised practical scores with **measured** rating-sliced
   outcomes for these positions/classes from 0002 data.
-- ✅ **Done (0028):** a real **Stockfish** engine (0001's `ObjectiveEngine`) now
-  confirms each `cp` and the "only move" claims via `verify_engine.py` — see above.
+- ✅ **Done (0028 + 0035):** a real **Stockfish** engine (0001's `ObjectiveEngine`)
+  confirms each `cp` and the "only move" claims via `verify_engine.py`. Run against
+  Stockfish 18 (0035): **7/7 positions now agree** — the one disagreement (the
+  unsound knight fork) was reconciled away (see the `_reconcile_comment` in the JSON).
   Still deferred: walking the deep PV so Saavedra's move-6 `c8=R` underpromotion is
-  asserted (only the knight fork's root-move `e7e8n` is checked today), and recording
-  the engine's measured `cp`/depth back into the JSON as the canonical values.
+  asserted (depth-18 only reads +2.13 directionally), and recording the engine's
+  measured `cp`/depth back into the JSON as the canonical values for the decisive case.
 - Produce the calibration plot + Brier/log-loss by rating band (the quantified
   "before" the rest of the project improves on).

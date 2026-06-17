@@ -59,7 +59,7 @@
       "fen": "8/8/1KP5/3r4/8/8/8/k7 w - - 0 1",
       "name": "Saavedra position (win only via underpromotion)",
       "engine_cp": 1000,
-      "engine_note": "White is winning, but ONLY through 6.c8=R!! (queening stalemates). Engine shows a large advantage.",
+      "engine_note": "White is winning, but ONLY through 6.c8=R!! (queening stalemates). Stockfish 18 @ depth 18 reads +2.13 (task 0035); the full win resolves with deeper search, so engine_cp keeps the textbook decisive verdict.",
       "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~97% for White, but the win hinges on a rook underpromotion almost no sub-master finds \u2014 practically the position is close to a draw at club level.",
       "hypothesized_practical_white_1500": 0.55,
       "source": "Saavedra position, 1895 (famous underpromotion study)",
@@ -81,18 +81,18 @@
     },
     {
       "id": "knight-promotion-fork",
-      "category": "absurd-refutation",
+      "category": "dead-draw-hard",
       "fen": "8/4P1k1/5q2/8/8/8/8/6K1 w - - 0 1",
-      "name": "Knight-promotion fork (win only via e8=N+)",
-      "engine_cp": 800,
-      "only_move_uci": "e7e8n",
-      "engine_note": "White wins a queen with 1.e8=N+! forking Kg7 and Qf6; 1.e8=Q is not even check and stays roughly equal. Engine shows White ~winning.",
-      "why_baseline_misleads": "Baseline maps the engine's '+winning' to ~95% for White, but the advantage exists ONLY through an underpromotion fork many sub-1500 players miss (auto-queening throws it away) \u2014 practically far closer to equal.",
+      "name": "Knight-fork mirage (looks like White wins a queen \u2014 it's a draw)",
+      "engine_cp": 0,
+      "engine_note": "Reconciled against Stockfish 18 @ depth 18 (task 0035): cp 0, best move e8=Q. The 'winning' fork 1.e8=N+ Kxq-line nets only K+N vs K (insufficient material) \u2014 a DRAW. The composed 'win only via e8=N+' premise was unsound; this position is now kept as a material-illusion example.",
+      "why_baseline_misleads": "A material bar (or an impatient human) sees 1.e8=N+ 'winning the queen' and reads White as winning, but after Nxf6 Kxf6 it is K+N vs K \u2014 a dead draw the engine correctly calls 0.00. The naive material view, not a real engine, is what misleads here (cf. task 0043).",
       "hypothesized_practical_white_1100": 0.55,
-      "source": "Knight-underpromotion fork motif (composed, verifiable by hand)",
+      "source": "Composed; reconciled to a draw by Stockfish (was a flawed underpromotion-fork study).",
       "measured_practical_white_1100": null,
       "measured_n": 0
     }
   ],
+  "_reconcile_comment": "2026-06-17 (task 0035): engine_cp / only-move claims checked against Stockfish 18 via baseline/verify_engine.py. 6 positions agreed; the composed 'knight-promotion-fork' was found UNSOUND (the underpromotion fork only reaches K+N-vs-K, a draw) and was reclassified absurd-refutation -> dead-draw-hard with engine-true values. Saavedra reads +2.13 at depth 18 (the full underpromotion win resolves deeper); it stays the absurd-refutation exemplar.",
   "_measured_comment": "measured_practical_white_<band> = mean White result over dataset rows within \u00b175.0cp of engine_cp in that rating band (source: dataset.csv). null / measured_n=0 means the (committed sample) dataset had no row in the class; a full Lichess dump (task 0024) yields real numbers. Hypotheses are retained for comparison."
 }
