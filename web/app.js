@@ -42,14 +42,23 @@
     var n = moves.length;
     function xFor(i) { return n <= 1 ? pad + innerW / 2 : pad + (i / (n - 1)) * innerW; }
     function yFor(pct) { return pad + (1 - pct / 100) * innerH; }
+    // Drama markers track the equity line, so they are keyed by the *same* rating band
+    // the line is drawn for (chess_equity.drama, precomputed per band in build_demo.py).
+    var dramaByPly = {};
+    if (opts.drama) {
+      var dKey = nearestBand(bands, whiteElo) + "-" + nearestBand(bands, blackElo);
+      (opts.drama[dKey] || []).forEach(function (d) { dramaByPly[d.ply] = d; });
+    }
     var points = moves.map(function (m, i) {
       var eq = equityAt(m, bands, whiteElo, blackElo);
       var cp = cpToWhite(m.cp) * 100;
       var grade = m.grade ? " · " + m.grade.label + " " + (m.grade.delta > 0 ? "+" : "") + m.grade.delta : "";
+      var drama = dramaByPly[i] || null;
       return {
-        ply: i, x: xFor(i), eqY: yFor(eq), cpY: yFor(cp), eqVal: eq, cpVal: cp,
+        ply: i, x: xFor(i), eqY: yFor(eq), cpY: yFor(cp), eqVal: eq, cpVal: cp, drama: drama,
         label: (i === 0 ? "start" : m.san) + ": equity " + Math.round(eq) +
-          "% · cp-bar " + Math.round(cp) + "%" + grade,
+          "% · cp-bar " + Math.round(cp) + "%" + grade +
+          (drama ? " · ⚡ " + drama.kind + ": " + drama.headline : ""),
       };
     });
     return {
@@ -142,7 +151,7 @@
     if (!svg) return;
     var g = chartGeometry(
       state.data.moves, state.data.rating_bands, state.whiteElo, state.blackElo,
-      { width: 480, height: 160, pad: 24 }
+      { width: 480, height: 160, pad: 24, drama: state.data.drama }
     );
     svg.setAttribute("viewBox", "0 0 " + g.width + " " + g.height);
     svg.innerHTML = "";
@@ -161,8 +170,9 @@
     // One dot per ply on the equity line: native <title> tooltip on hover, click scrubs.
     g.points.forEach(function (p) {
       var dot = svgEl("circle", {
-        cx: p.x, cy: p.eqY, r: p.ply === state.ply ? 4 : 2.5,
-        class: "chart-dot" + (p.ply === state.ply ? " current" : ""),
+        cx: p.x, cy: p.eqY, r: p.ply === state.ply ? 4 : (p.drama ? 3.5 : 2.5),
+        class: "chart-dot" + (p.ply === state.ply ? " current" : "") +
+          (p.drama ? " drama drama-" + p.drama.kind : ""),
       });
       var title = svgEl("title", {});
       title.textContent = p.label;

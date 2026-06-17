@@ -94,6 +94,21 @@ check("hover label carries san + both readings", () => {
   assert.ok(/equity \d+% · cp-bar \d+%/.test(g.points[1].label));
 });
 
+check("drama markers annotate chart points for the firing band only (task 0077)", () => {
+  // demo-game.json carries a per-band `drama` map; vs a strong Black defender the
+  // mating Nd5# is a clutch, but the reference band is quiet.
+  assert.ok(game.drama && typeof game.drama === "object", "demo JSON must carry drama");
+  const firingKey = Object.keys(game.drama)[0];
+  const [we, be] = firingKey.split("-").map(Number);
+  const fired = api.chartGeometry(game.moves, bands, we, be, Object.assign({ drama: game.drama }, opts));
+  const marked = fired.points.filter((p) => p.drama);
+  assert.ok(marked.length >= 1, "at least one ply marked for the firing band");
+  assert.ok(marked.every((p) => p.drama.kind && p.label.includes(p.drama.kind)), "kind in hover label");
+  // Reference band (1500-1500) has no drama -> no points marked.
+  const quiet = api.chartGeometry(game.moves, bands, 1500, 1500, Object.assign({ drama: game.drama }, opts));
+  assert.ok(quiet.points.every((p) => !p.drama), "reference band marks nothing");
+});
+
 check("single-ply game centers the point (no divide-by-zero)", () => {
   const one = [game.moves[0]];
   const g = api.chartGeometry(one, bands, 1500, 1500, opts);

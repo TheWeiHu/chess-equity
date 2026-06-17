@@ -21,6 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # import sibling modules (build_demo, game_json)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
+import chess  # noqa: E402
+
 import build_demo  # noqa: E402
 import game_json  # noqa: E402
 from chess_equity.adapters import ObjectiveEngine, ObjectiveEval  # noqa: E402
@@ -109,6 +111,50 @@ def test_build_with_real_stockfish_changes_the_cp_line():
     material_cps = [m["cp"] for m in material["moves"]]
     sf_cps = [m["cp"] for m in sf["moves"]]
     assert material_cps != sf_cps
+
+
+# --- drama markers on the equity line (task 0077) ---------------------------
+
+def _synthetic_moves(sans, eq_white_seq, band="1500-1500"):
+    """Build a minimal moves list (the demo-JSON shape) with a hand-set White-POV
+    equity per ply at one band, so we can drive ``drama_by_band`` to a known swing."""
+    board = chess.Board()
+    moves = [{"ply": 0, "san": "(start)", "fen": board.fen(), "equity": {band: eq_white_seq[0]}}]
+    for i, san in enumerate(sans, start=1):
+        board.push(board.parse_san(san))
+        moves.append({"ply": i, "san": san, "fen": board.fen(), "equity": {band: eq_white_seq[i]}})
+    return moves
+
+
+def test_drama_by_band_flags_a_known_missed_win():
+    """Black is practically winning (75%) then lets it slip 20 pts -> a 'missed_win'."""
+    # White-POV equity: 25 (Black 75%) at start, unchanged after White's e4, then White
+    # jumps to 45 after Black's e5 -> Black's POV 75% -> 55%, a -20 mover swing.
+    moves = _synthetic_moves(["e4", "e5"], [25.0, 25.0, 45.0])
+    drama = game_json.drama_by_band(moves, [1500])
+    assert "1500-1500" in drama
+    events = drama["1500-1500"]
+    assert [(e["ply"], e["kind"]) for e in events] == [(2, "missed_win")]
+    assert "slip" in events[0]["headline"]
+
+
+def test_drama_by_band_is_sparse_when_nothing_swings():
+    """Flat equity -> no drama events at all (the detector stays dark on dull games)."""
+    moves = _synthetic_moves(["e4", "e5"], [50.0, 50.0, 50.0])
+    assert game_json.drama_by_band(moves, [1500]) == {}
+
+
+def test_build_demo_emits_per_band_drama_markers():
+    """The committed demo carries a `drama` map; against a strong defender Légal's
+    mating Nd5# registers as a clutch — a marker the flat centipawn bar can't show."""
+    data = build_demo.build("demo")
+    assert isinstance(data.get("drama"), dict)
+    # The illustrative reference band is deliberately muted (no drama there)...
+    assert "1500-1500" not in data["drama"]
+    # ...but vs a strong Black defender, finding the forced mate is a clutch swing.
+    fired = data["drama"]["2300-2300"]
+    mate_ply = next(m["ply"] for m in data["moves"] if m["san"] == "Nd5#")
+    assert any(e["ply"] == mate_ply and e["kind"] == "clutch" for e in fired)
 
 
 if __name__ == "__main__":

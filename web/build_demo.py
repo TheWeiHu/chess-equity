@@ -54,7 +54,7 @@ from chess_equity.types import lichess_win_percent  # noqa: E402
 
 # Single source of truth for the cp/grade formulas the web demo shares with the
 # import path (web/game_json.py) — keep them here and the two can't drift.
-from game_json import _material_cp_white, grade_label  # noqa: E402
+from game_json import _material_cp_white, drama_by_band, grade_label  # noqa: E402
 
 # The demo game (SAN) and, per ply, the hand-annotated practical White-POV equity at
 # the reference band (1500 vs 1500). These annotations encode the *known* truth about
@@ -170,6 +170,7 @@ def build(model_name: str, cp_engine: str = "material", depth: int = 12) -> dict
         },
         "rating_bands": RATING_BANDS,
         "moves": moves,
+        "drama": drama_by_band(moves, RATING_BANDS),
     }
 
 

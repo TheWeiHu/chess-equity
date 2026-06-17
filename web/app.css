@@ -122,3 +122,8 @@ footer code { color: var(--ink); }
 .chart-dot { fill: var(--accent); opacity: 0.45; cursor: pointer; }
 .chart-dot:hover { opacity: 1; }
 .chart-dot.current { fill: var(--white-eq); opacity: 1; }
+/* Drama plies (chess_equity.drama): the clutch/escape/missed-win moments the flat
+   centipawn bar can't show. An amber ring makes them pop on the equity line. */
+.chart-dot.drama { fill: #f2b134; opacity: 0.95; stroke: #7a5410; stroke-width: 1; }
+.chart-dot.drama.missed_win { fill: #e0585b; stroke: #5a1f20; }
+.chart-dot.drama.current { fill: #ffd56b; }
