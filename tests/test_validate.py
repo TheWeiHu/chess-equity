@@ -393,6 +393,37 @@ def test_validate_cli_scores_maia2_against_baseline(tmp_path, monkeypatch, capsy
     assert "baseline" in out and "maia2" in out
 
 
+def test_validate_cli_scores_maia2_on_committed_fen_sample(monkeypatch, capsys):
+    """Runbook step-3 smoke: `validate --models maia2` end-to-end on the committed
+    ``data/sample/dataset_fen.csv`` via the injectable fake backend (no torch/weights).
+
+    The attended runbook scores ``baseline,wdl-a,maia2``, but the maia2 column only has
+    real numbers with torch+weights — so the *plumbing* (committed FEN fixture ->
+    Maia2Equity -> metrics) can rot silently in the sandbox. This drives it on the
+    checked-in fixture (not a freshly-built dataset) and asserts maia2 yields a scored
+    column, so a fixture that loses its FENs or broken maia2 wiring fails CI loudly.
+    """
+    from pathlib import Path
+
+    import chess_equity.validate.harness as h
+    from chess_equity.cli import main
+
+    monkeypatch.setitem(h.BOARD_MODELS, "maia2", _fake_maia2)
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+
+    rc = main(["validate", "--data", str(sample), "--models", "maia2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The Overall table must carry a maia2 row with a real (parseable) numeric log-loss
+    # and a positive n — i.e. the column was actually scored, not just named.
+    maia2_rows = [ln for ln in out.splitlines() if ln.strip().startswith("| maia2 |")]
+    assert maia2_rows, "maia2 must appear as a scored row in the report"
+    cells = [c.strip() for c in maia2_rows[0].strip("|").split("|")]
+    # | maia2 | n | log-loss | Brier | ECE |
+    assert int(cells[1]) > 0  # n scored rows
+    assert float(cells[2]) >= 0.0  # finite, parseable log-loss
+
+
 def test_validate_cli_maia2_needs_fen(tmp_path, monkeypatch, capsys):
     """A FEN-less dataset makes the maia2 predictor fail with a clean error, not a trace."""
     from pathlib import Path
