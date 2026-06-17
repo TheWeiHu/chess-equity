@@ -85,11 +85,18 @@ into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a
 
 **Live:** https://theweihu.github.io/chess-equity/
 
-A static, dependency-free page that puts the equity bar next to the classic centipawn
-bar and lets you drag both players' rating sliders — *move a slider and the equity bar
-moves while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
+A static, dependency-free page that puts the equity bar next to a centipawn bar and
+lets you drag both players' rating sliders — *move a slider and the equity bar moves
+while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
 "sacrifice" tanks the material count while it is in fact a forced mate, so the move is
 **green on equity but red on centipawns**.
+
+The committed demo's centipawn bar is a deliberately **shallow material count**, not the
+deep engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
+contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games;
+see [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md)).
+The project's actual *"equity beats centipawns"* claim is the validation gate below,
+which compares equity against the **real, rating-blind Stockfish** eval — not this demo.
 
 ```bash
 python3 -m http.server -d web 8000     # then open http://localhost:8000
@@ -138,6 +145,13 @@ A small fixture under `data/sample/` lets tests and demos run with no download �
 numbers are a smoke test, not evidence (real evidence needs a real dump).
 
 ### Does equity beat centipawns?
+
+"Beats centipawns" has a precise meaning here: a rating-conditioned predictor beats a
+**rating-blind OBJECTIVE eval** (real Stockfish) at predicting **actual human outcomes**
+— i.e. in *practical* terms. It is **not** a claim about out-tactic-ing a deep engine on
+forced lines: a deep engine is right about the board, but blind to *this* player against
+*that* one. (The web demo's material bar is a separate, shallow teaching foil — see
+[docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md).)
 
 The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
 a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
