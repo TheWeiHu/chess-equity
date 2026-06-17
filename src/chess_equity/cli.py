@@ -5,8 +5,9 @@ Commands:
     chess-equity eval "<fen>" --white-elo 1500 --black-elo 1500
     chess-equity eval --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity grade --pgn game.pgn --white-elo 1500 --black-elo 1500
-    chess-equity broadcast --round <id>            # live Lichess broadcast round
+    chess-equity broadcast --round <id>            # live Lichess broadcast round (JSONL)
     chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
+    chess-equity broadcast --pgn game.pgn --serve  # drive the OBS overlay over SSE (task 0021)
     chess-equity highlights --pgn game.pgn         # auto-detect drama/clutch moments
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
@@ -132,24 +133,64 @@ def _run_grade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
-    """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
+def _build_ingestor(args: argparse.Namespace, model: EquityModel) -> BroadcastIngestor:
+    """Construct a fresh feed + ingestor from the broadcast args.
+
+    Rebuilt per call so a replayed ``--pgn`` restarts from move one each time (the SSE
+    server calls this once per overlay connection).
+    """
     if args.pgn:
         with open(args.pgn, encoding="utf-8") as fh:
-            feed = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
+            feed: object = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
     elif args.round:
         feed = LichessRoundFeed(args.round, token=args.token)
     elif args.url:
         feed = UrlPgnFeed(args.url)
     else:
         raise ValueError("broadcast needs one of --pgn / --round / --url")
-
-    ingestor = BroadcastIngestor(
-        feed,
+    return BroadcastIngestor(
+        feed,  # type: ignore[arg-type]
         model,
         white_elo=args.white_elo,
         black_elo=args.black_elo,
     )
+
+
+def _run_broadcast_serve(args: argparse.Namespace, model: EquityModel) -> int:
+    """Serve the OBS overlay with a live SSE feed driven by the ingestor (task 0021).
+
+    No ``mock-game.json``: each overlay connection gets a fresh replay/live stream,
+    translated into the overlay's ``game``/``position`` schema.
+    """
+    from chess_equity.overlay import serve_overlay, stream_overlay_events
+
+    def stream_factory():
+        ingestor = _build_ingestor(args, model)
+        return stream_overlay_events(
+            ingestor, interval=args.interval, max_polls=args.max_polls
+        )
+
+    server = serve_overlay(stream_factory, port=args.port)
+    host, port = server.server_address[0], server.server_address[1]
+    print(f"chess-equity overlay: http://{host}:{port}/", file=sys.stderr)
+    print(f"  live SSE feed (point OBS here): http://{host}:{port}/?src=/sse", file=sys.stderr)
+    print("Ctrl-C to stop.", file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
+def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
+    """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
+    if args.serve:
+        return _run_broadcast_serve(args, model)
+
+    ingestor = _build_ingestor(args, model)
 
     def emit(event: MoveEvent) -> None:
         out.write(_event_line(event) + "\n")
@@ -386,6 +427,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+    bc.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve the OBS overlay with a live SSE feed instead of printing JSONL "
+        "(point OBS at http://localhost:PORT/?src=/sse)",
+    )
+    bc.add_argument("--port", type=int, default=8777, help="port for --serve (default 8777)")
     add_model_arg(bc)
 
     hl = sub.add_parser(

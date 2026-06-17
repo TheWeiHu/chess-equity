@@ -29,7 +29,24 @@ Then in OBS: **Sources → + → Browser**, and set the URL to one of:
 | URL | Feed |
 | --- | --- |
 | `http://localhost:8777/`            | bundled replay (`mock-game.json`) |
-| `http://localhost:8777/?src=/sse`   | **live** SSE push (same path 0018 will use) |
+| `http://localhost:8777/?src=/sse`   | **live** SSE push (replays `mock-game.json` over SSE) |
+
+### Live feed from a real (or replayed) broadcast — task 0021
+
+`serve.py` above replays the bundled mock over SSE. To drive the overlay from the
+**actual broadcast ingestor** (task 0018) — a live Lichess round or a PGN replayed
+move-by-move — start the bridge instead:
+
+```bash
+chess-equity broadcast --pgn game.pgn --serve            # replay a finished game as "live"
+chess-equity broadcast --round <id> --serve --interval 2 # a live Lichess broadcast round
+```
+
+It serves the same overlay files **and** pushes the live equity stream at `/sse`,
+translating the ingestor's `MoveEvent`s into this page's `game`/`position` schema (the
+translation lives in `chess_equity.overlay`). Point OBS at
+`http://localhost:8777/?src=/sse`. Equity numbers are the placeholder baseline until
+Maia-2 (task 0005) lands; the wiring is unchanged when it does.
 
 Set the source size to your scene (e.g. 1920×120 for a bottom strip) and tick
 **"Shutdown source when not visible"** off so the feed keeps running. The page
@@ -122,8 +139,11 @@ fixture contains a real time-scramble.
 
 ## Deferred (follow-ups)
 
-- Wire to the real **0018** broadcast feed (Lichess broadcast WebSocket) and a
-  config page that takes a round/game URL (currently config is via query params).
+- ~~Wire to the real **0018** broadcast feed~~ — done (task 0021):
+  `chess-equity broadcast --serve` pushes the live ingestor over `/sse`. Still
+  deferred: surfacing **player names** in the `game` event (the bridge sends ratings
+  only today), and a config page that takes a round/game URL (config is via query
+  params for now).
 - Emit the server-side `drama` payload from the pipeline (0018 + `chess_equity.drama`)
   so caster headlines use the full classifier (clutch / missed-win / escape / scramble)
   rather than the client-side swing heuristic.
