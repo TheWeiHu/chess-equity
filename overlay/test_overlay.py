@@ -146,6 +146,33 @@ def test_time_pressure_is_present():
     assert low, "fixture should include a real time-scramble"
 
 
+def time_pressure(secs, threshold):
+    """Mirror overlay.js EquityOverlay.timePressure — the cue's boolean predicate."""
+    return isinstance(secs, (int, float)) and secs >= 0 and secs <= threshold
+
+
+def test_time_pressure_predicate_boundaries():
+    """The cue fires at/under the threshold, and never on null/negative clocks."""
+    assert time_pressure(30, 30) is True          # at the threshold -> pressure
+    assert time_pressure(5.0, 30) is True
+    assert time_pressure(31, 30) is False         # above -> no cue
+    assert time_pressure(None, 30) is False       # missing clock -> no cue
+    assert time_pressure(-1, 30) is False         # malformed -> no cue
+
+
+def test_default_threshold_lights_the_cue_on_the_fixture():
+    """At the default 30s threshold a side's nameplate would light up on the fixture,
+    so the visual time-pressure cue is exercised by the committed mock game."""
+    events = load_events()
+    lit = [
+        e
+        for e in events
+        if e.get("type") == "position"
+        and (time_pressure(e["clock"]["white"], 30) or time_pressure(e["clock"]["black"], 30))
+    ]
+    assert lit, "fixture should drive the time-pressure cue at the default threshold"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

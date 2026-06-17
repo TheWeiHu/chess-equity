@@ -57,6 +57,14 @@ html, body {
 }
 .player .clock.low { color: var(--bad); }      /* time pressure: the heart of the wedge */
 
+/* Time-pressure cue (task 0104): when a side's clock is low (?lowclock=, default 30s),
+   tint its nameplate and prefix its clock with a ⏱ glyph so a clock-driven equity shift
+   is legible as such. Dependency-free; a slow pulse draws the eye without being loud. */
+.player.time-pressure { color: var(--bad); }
+.player.time-pressure .clock { animation: clockpulse 1s ease-in-out infinite; }
+.player.time-pressure .clock::before { content: "⏱ "; }
+@keyframes clockpulse { 50% { opacity: 0.45; } }
+
 /* The middle column: the equity bar, with the optional full centipawn bar stacked
    beneath it (?cpbar=1). */
 .bar-stack {
