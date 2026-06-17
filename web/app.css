@@ -100,3 +100,25 @@ main {
 
 footer { padding: 0 1.5rem 2rem; color: var(--muted); font-size: 0.8rem; }
 footer code { color: var(--ink); }
+
+/* across-the-game chart (task 0038) */
+.chart-block { margin: 0.4rem 0 0.2rem; }
+.chart-block figcaption {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.85rem; color: var(--muted); margin-bottom: 0.3rem;
+}
+.chart-block .legend { display: flex; gap: 0.8rem; }
+.chart-block .key { display: inline-flex; align-items: center; gap: 0.3rem; }
+.chart-block .key::before {
+  content: ""; width: 0.9rem; height: 0; border-top-width: 2px; border-top-style: solid;
+}
+.chart-block .key.eq::before { border-top-color: var(--accent); }
+.chart-block .key.cp::before { border-top-color: #aeb8c4; border-top-style: dashed; }
+.chart { width: 360px; height: 120px; display: block; }
+.chart-mid { stroke: #2c3038; stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-cursor { stroke: var(--accent); stroke-width: 1; opacity: 0.4; }
+.chart-cp { fill: none; stroke: #aeb8c4; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart-eq { fill: none; stroke: var(--accent); stroke-width: 2; }
+.chart-dot { fill: var(--accent); opacity: 0.45; cursor: pointer; }
+.chart-dot:hover { opacity: 1; }
+.chart-dot.current { fill: var(--white-eq); opacity: 1; }

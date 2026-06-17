@@ -32,6 +32,33 @@
     return move.equity[key];
   }
 
+  // Geometry for the across-the-game chart: equity (rating-conditioned) vs the classic
+  // centipawn bar, both as White win% per ply. Pure (no DOM) so it is unit-testable;
+  // renderChart() turns it into SVG. Y is flipped (0% at the bottom).
+  function chartGeometry(moves, bands, whiteElo, blackElo, opts) {
+    opts = opts || {};
+    var W = opts.width || 480, H = opts.height || 160, pad = opts.pad || 24;
+    var innerW = W - 2 * pad, innerH = H - 2 * pad;
+    var n = moves.length;
+    function xFor(i) { return n <= 1 ? pad + innerW / 2 : pad + (i / (n - 1)) * innerW; }
+    function yFor(pct) { return pad + (1 - pct / 100) * innerH; }
+    var points = moves.map(function (m, i) {
+      var eq = equityAt(m, bands, whiteElo, blackElo);
+      var cp = cpToWhite(m.cp) * 100;
+      var grade = m.grade ? " · " + m.grade.label + " " + (m.grade.delta > 0 ? "+" : "") + m.grade.delta : "";
+      return {
+        ply: i, x: xFor(i), eqY: yFor(eq), cpY: yFor(cp), eqVal: eq, cpVal: cp,
+        label: (i === 0 ? "start" : m.san) + ": equity " + Math.round(eq) +
+          "% · cp-bar " + Math.round(cp) + "%" + grade,
+      };
+    });
+    return {
+      width: W, height: H, pad: pad, y50: yFor(50), xFor: xFor, yFor: yFor, points: points,
+      eqPoints: points.map(function (p) { return p.x + "," + p.eqY; }).join(" "),
+      cpPoints: points.map(function (p) { return p.x + "," + p.cpY; }).join(" "),
+    };
+  }
+
   // ---- state ---------------------------------------------------------------
 
   var state = { data: null, ply: 0, whiteElo: 1500, blackElo: 1500 };
@@ -96,6 +123,51 @@
     }
   }
 
+  // ---- across-the-game chart -----------------------------------------------
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    for (var k in attrs) { if (attrs[k] != null) el.setAttribute(k, attrs[k]); }
+    return el;
+  }
+
+  function renderChart() {
+    var svg = $("chart");
+    if (!svg) return;
+    var g = chartGeometry(
+      state.data.moves, state.data.rating_bands, state.whiteElo, state.blackElo,
+      { width: 480, height: 160, pad: 24 }
+    );
+    svg.setAttribute("viewBox", "0 0 " + g.width + " " + g.height);
+    svg.innerHTML = "";
+    // 50% reference line.
+    svg.appendChild(svgEl("line", {
+      x1: g.pad, y1: g.y50, x2: g.width - g.pad, y2: g.y50, class: "chart-mid",
+    }));
+    // Current-ply cursor.
+    var cx = g.xFor(state.ply);
+    svg.appendChild(svgEl("line", {
+      x1: cx, y1: g.pad, x2: cx, y2: g.height - g.pad, class: "chart-cursor",
+    }));
+    // The two lines: centipawn bar (rating-blind) under equity (rating-conditioned).
+    svg.appendChild(svgEl("polyline", { points: g.cpPoints, class: "chart-cp" }));
+    svg.appendChild(svgEl("polyline", { points: g.eqPoints, class: "chart-eq" }));
+    // One dot per ply on the equity line: native <title> tooltip on hover, click scrubs.
+    g.points.forEach(function (p) {
+      var dot = svgEl("circle", {
+        cx: p.x, cy: p.eqY, r: p.ply === state.ply ? 4 : 2.5,
+        class: "chart-dot" + (p.ply === state.ply ? " current" : ""),
+      });
+      var title = svgEl("title", {});
+      title.textContent = p.label;
+      dot.appendChild(title);
+      dot.addEventListener("click", function () { goto(p.ply); });
+      svg.appendChild(dot);
+    });
+  }
+
   // ---- move list -----------------------------------------------------------
 
   function renderMoves() {
@@ -137,6 +209,7 @@
   function render() {
     renderBoard(state.data.moves[state.ply].fen);
     renderBars();
+    renderChart();
     renderMoves();
     renderCaption();
     $("scrub").value = state.ply;
@@ -161,6 +234,7 @@
       state[key] = elo;
       $(outId).textContent = elo;
       renderBars();
+      renderChart();  // equity line is rating-conditioned, so it moves with the slider
     }
     el.addEventListener("input", apply);
     apply();
@@ -207,5 +281,8 @@
     });
 
   // Expose pure helpers for testing.
-  window.ChessEquityDemo = { cpToWhite: cpToWhite, nearestBand: nearestBand, equityAt: equityAt };
+  window.ChessEquityDemo = {
+    cpToWhite: cpToWhite, nearestBand: nearestBand, equityAt: equityAt,
+    chartGeometry: chartGeometry,
+  };
 })();
