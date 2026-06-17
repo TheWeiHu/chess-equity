@@ -301,15 +301,18 @@ def _run_data(args: argparse.Namespace) -> int:
 def _run_validate(args: argparse.Namespace) -> int:
     # Lazy import: keeps the eval path free of the data loader.
     from chess_equity.data.build import load_rows
-    from chess_equity.validate.harness import PREDICTORS, evaluate, format_report
+    from chess_equity.validate.harness import (
+        PREDICTORS,
+        build_predictors,
+        evaluate,
+        format_report,
+    )
 
     requested = [m.strip() for m in args.models.split(",") if m.strip()]
-    unknown = [m for m in requested if m not in PREDICTORS]
-    if unknown:
-        print(
-            f"error: unknown model(s) {unknown}; available: {sorted(PREDICTORS)}",
-            file=sys.stderr,
-        )
+    try:
+        predictors = build_predictors(requested)
+    except KeyError as exc:
+        print(f"error: {exc.args[0]}", file=sys.stderr)
         return 1
     try:
         rows = load_rows(args.data)
@@ -337,8 +340,16 @@ def _run_validate(args: argparse.Namespace) -> int:
             f"train: {len(train)} rows, seed {args.seed})"
         )
 
-    predictors = {name: PREDICTORS[name] for name in requested}
-    reports = evaluate(rows, predictors)
+    # Board models (maia2) read row.fen and may need torch — surface those failures as
+    # a clean message rather than a traceback. ValueError = dataset built without
+    # --with-fen; Maia2NotInstalled = no torch/checkpoint.
+    from chess_equity.maia2 import Maia2NotInstalled
+
+    try:
+        reports = evaluate(rows, predictors)
+    except (ValueError, Maia2NotInstalled) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     report = format_report(reports, title=title)
     if args.out:
         from pathlib import Path
@@ -525,7 +536,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
     val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
-    val.add_argument("--models", default="baseline", help="comma-separated predictor names")
+    val.add_argument(
+        "--models",
+        default="baseline",
+        help="comma-separated predictors: baseline, baseline+clock, or the board model "
+        "maia2 (needs a --with-fen dataset, and `pip install maia2` for real numbers)",
+    )
     val.add_argument("--out", help="write the Markdown report here (default: stdout)")
     val.add_argument(
         "--holdout",
