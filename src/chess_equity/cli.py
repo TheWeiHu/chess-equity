@@ -636,7 +636,10 @@ def _run_validate(args: argparse.Namespace) -> int:
     # point-only gate.
     if args.gate:
         verdicts = gate_verdicts(
-            reports, baseline_name=baseline_name, comparisons=comparisons
+            reports,
+            baseline_name=baseline_name,
+            comparisons=comparisons,
+            min_n=args.min_n,
         )
         if not verdicts:
             print(
@@ -645,6 +648,17 @@ def _run_validate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 3
+        # Underpowered (task 0132): the held-out sample is below the n floor, so a PASS
+        # would be untrustworthy. Distinct exit code 4 (INCONCLUSIVE) so CI / the loop can
+        # tell "couldn't conclude" apart from PASS (0) and FAIL (2).
+        if verdicts[0].underpowered:
+            print(
+                f"GATE: INCONCLUSIVE — held-out n={verdicts[0].held_out_n} is below the "
+                f"n>={args.min_n} floor; a tiny-n win is not proof (pass --min-n 0 to "
+                "override)",
+                file=sys.stderr,
+            )
+            return 4
         gated = bool(comparisons)
         criterion = (
             "log-loss AND Brier with a significant (CI-clears-zero) log-loss win"
@@ -955,6 +969,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
+    # The underpowered-sample floor's default (task 0132) — imported here so the help text
+    # shows the real number without pulling the heavy validate package at startup.
+    from chess_equity.validate.harness import MIN_GATE_N
     val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     val.add_argument(
         "--models",
@@ -1011,7 +1028,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="make the thesis gate machine-checkable (task 0115): exit 0 only if every "
         "rating-conditioned predictor beats `baseline` on log-loss AND Brier, exit 2 if "
-        "any FAILS (exit 3 if no challenger to gate). For CI / the autonomous loop",
+        "any FAILS, exit 3 if no challenger to gate, exit 4 if INCONCLUSIVE (held-out n "
+        "below --min-n; task 0132). For CI / the autonomous loop",
+    )
+    val.add_argument(
+        "--min-n",
+        type=int,
+        default=MIN_GATE_N,
+        help="underpowered-sample floor for the gate (task 0132): when the held-out n is "
+        f"below this, --gate reads INCONCLUSIVE (exit 4) instead of PASS so a lucky tiny-n "
+        f"win can't read green (default {MIN_GATE_N}; 0 disables the guard)",
     )
     val.add_argument(
         "--calibration",
