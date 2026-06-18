@@ -98,68 +98,7 @@ main {
   padding: 14px;
   box-shadow: var(--shadow);
 }
-.board {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  width: 100%;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.sq {
-  /* Squareness comes from the square ITSELF (its height tracks its 1/8-of-board
-     width), so it never depends on grid row sizing, content height, or re-layout.
-     `inline-size` containment (NOT `size`) lets us size the glyph in cqi units
-     without the both-axis-containment collapse bug that broke this after moves. */
-  aspect-ratio: 1 / 1;
-  container-type: inline-size;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  overflow: hidden;
-}
-.sq.light { background: var(--sq-light); }
-.sq.dark { background: var(--sq-dark); }
-.sq.hl::before {
-  content: ""; position: absolute; inset: 0; background: var(--sq-hl);
-}
-.sq.check::after {
-  content: ""; position: absolute; inset: 0;
-  background: radial-gradient(circle, rgba(196,74,61,.85) 0%, rgba(196,74,61,0) 72%);
-}
-.sq .piece {
-  position: relative;
-  /* sized to the square's width (cqi = 1% of the square's inline size) so the glyph
-     always fits and scales with the board, with stable inline-size containment.
-     The vw clamp is a fallback for browsers without container-query units. */
-  font-size: clamp(18px, 6vw, 46px);
-  font-size: 76cqi;
-  line-height: 1;
-  z-index: 1;
-  user-select: none;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .28));
-}
-/* White: white fill with a solid dark outline so it reads on light squares.
-   Black: dark fill with a thin light outline for definition on dark squares. */
-.sq .piece.white {
-  color: #f8f7f3;
-  -webkit-text-stroke: 1.6px #2b2f37;
-  text-stroke: 1.6px #2b2f37;
-}
-.sq .piece.black {
-  color: #24282f;
-  -webkit-text-stroke: 1px #14171d;
-  text-stroke: 1px #14171d;
-}
-/* coordinate labels in the board corners */
-.sq .coord {
-  position: absolute; font-size: 10px; font-weight: 700; opacity: .65; z-index: 2;
-}
-.sq .coord.file { right: 3px; bottom: 1px; }
-.sq .coord.rank { left: 3px; top: 1px; }
-.sq.light .coord { color: var(--sq-dark); }
-.sq.dark .coord { color: var(--sq-light); }
+/* .board / .sq / .piece / coords / highlights are shared via board.css */
 
 /* ---- controls ---- */
 .controls {
@@ -281,21 +220,7 @@ main {
 .tagline a { color: var(--accent); text-decoration: none; font-weight: 600; }
 .tagline a:hover { text-decoration: underline; }
 .board-frame { position: relative; }
-.sq { cursor: default; }
-.board .sq[data-name] .piece { cursor: pointer; }
-.sq.sel::before { content: ""; position: absolute; inset: 0; background: rgba(80, 160, 110, .45); }
-/* legal-destination markers: a dot on an empty square, a ring on a capture */
-.sq.dest::after {
-  content: ""; position: absolute; left: 50%; top: 50%; width: 28%; height: 28%;
-  transform: translate(-50%, -50%); border-radius: 50%;
-  background: rgba(34, 40, 47, .32); z-index: 1;
-}
-.sq.dest.capture::after {
-  width: 88%; height: 88%; background: transparent;
-  border: 4px solid rgba(34, 40, 47, .32); box-sizing: border-box;
-}
-.sq.dest { cursor: pointer; }
-.board.busy { opacity: .6; pointer-events: none; }
+/* .sq.sel / .dest / .capture / .board.busy interactive overlays are shared via board.css */
 .promo {
   position: absolute; inset: 14px; display: flex; align-items: center; justify-content: center;
   gap: .5rem; background: rgba(20, 24, 34, .82); border-radius: 6px; z-index: 5;

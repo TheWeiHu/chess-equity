@@ -7,7 +7,7 @@
   --black-eq: #3a3f47;
   --good: #6cc070;
   --bad: #e0585b;
-  --accent: #f2c14e;
+  --accent: #5aa86f;   /* green — matches the shell + live demo for one cohesive look */
 }
 
 * { box-sizing: border-box; }
@@ -34,26 +34,10 @@ main {
   align-items: flex-start;
 }
 
-.board-col { flex: 0 0 auto; }
+.board-col { flex: 0 0 auto; width: 360px; }
 .bars-col { flex: 1 1 24rem; min-width: 20rem; max-width: 34rem; }
 
-/* ---- board ---- */
-.board {
-  width: 360px;
-  height: 360px;
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr);
-  border: 2px solid #000;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.sq { display: flex; align-items: center; justify-content: center; font-size: 30px; line-height: 1; }
-.sq.light { background: #b9c4d0; }
-.sq.dark { background: #6d7a89; }
-.sq .piece.white { color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,0.6); }
-.sq .piece.black { color: #14161a; text-shadow: 0 1px 0 rgba(255,255,255,0.25); }
-
+/* board styling (.board/.sq/.piece/coords) is shared via board.css */
 .game-picker { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; width: 360px; color: var(--muted); }
 .game-picker select {
   flex: 1; background: var(--panel); color: var(--ink); border: 1px solid #2c3038;
@@ -146,5 +130,4 @@ footer .caveat { border-left: 2px solid var(--muted); padding-left: 0.6rem; opac
   font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem;
   font-variant-numeric: tabular-nums; text-align: center;
 }
-.board.mini { width: 160px; height: 160px; border-width: 1px; }
-.board.mini .sq { font-size: 14px; }
+/* .board.mini sizing is in board.css */

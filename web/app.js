@@ -8,10 +8,7 @@
 (function () {
   "use strict";
 
-  var PIECES = {
-    K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
-    k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
-  };
+  // Board rendering (piece glyphs + squares) is shared with the live demo via board.js.
 
   // ---- pure helpers --------------------------------------------------------
 
@@ -91,35 +88,11 @@
   function $(id) { return document.getElementById(id); }
 
   // ---- board ---------------------------------------------------------------
+  // Review board (non-interactive) via the shared renderer. The main board gets edge
+  // coordinates; the floating mini-preview (boardEl passed) stays clean.
 
   function renderBoard(fen, boardEl) {
-    var rows = fen.split(" ")[0].split("/");
-    var board = boardEl || $("board");
-    board.innerHTML = "";
-    for (var r = 0; r < 8; r++) {
-      var file = 0;
-      var chars = rows[r].split("");
-      for (var c = 0; c < chars.length; c++) {
-        var ch = chars[c];
-        if (/\d/.test(ch)) {
-          for (var k = 0; k < parseInt(ch, 10); k++) addSquare(board, r, file++, null);
-        } else {
-          addSquare(board, r, file++, ch);
-        }
-      }
-    }
-  }
-
-  function addSquare(board, rank, file, piece) {
-    var sq = document.createElement("div");
-    sq.className = "sq " + ((rank + file) % 2 === 0 ? "light" : "dark");
-    if (piece) {
-      var span = document.createElement("span");
-      span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
-      span.textContent = PIECES[piece];
-      sq.appendChild(span);
-    }
-    board.appendChild(sq);
+    ChessBoard.render(boardEl || $("board"), fen, { coords: !boardEl });
   }
 
   // ---- hover board preview -------------------------------------------------

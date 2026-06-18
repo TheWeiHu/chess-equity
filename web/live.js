@@ -8,8 +8,7 @@
 (function () {
   "use strict";
 
-  var PIECES = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟",
-                 k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+  // Board rendering (piece glyphs + squares) is shared with the guided demo via board.js.
   var FILES = "abcdefgh";
   var MATE_CP = 10000;
 
@@ -20,74 +19,32 @@
 
   function $(id) { return document.getElementById(id); }
 
-  function parseGrid(fen) {
-    return fen.split(" ")[0].split("/").map(function (row) {
-      var line = [];
-      row.split("").forEach(function (ch) {
-        if (/\d/.test(ch)) { for (var k = 0; k < +ch; k++) line.push(null); }
-        else line.push(ch);
-      });
-      return line;
-    });
-  }
-
-  function sqName(r, c) { return FILES[c] + (8 - r); }
-
   // ---- rendering -----------------------------------------------------------
 
   function render() {
     if (!state.fen) return;   // nothing to draw until the first /api/play resolves
-    var grid = parseGrid(state.fen);
-    var dests = state.sel ? (state.legal[state.sel] || []) : [];
-    var checkRC = null;
+    var grid = ChessBoard.parseFen(state.fen).grid;
+    // King-in-check square: the server flags state._check; find the side-to-move's king.
+    var check = null;
     if (state._check) {
       var king = state.turn === "white" ? "K" : "k";
-      for (var r = 0; r < 8 && !checkRC; r++)
+      for (var r = 0; r < 8 && !check; r++)
         for (var c = 0; c < 8; c++)
-          if (grid[r][c] === king) checkRC = sqName(r, c);
+          if (grid[r][c] === king) check = ChessBoard.sqName(r, c);
     }
-
-    var board = $("board");
-    board.innerHTML = "";
-    for (var d = 0; d < 8; d++) {
-      for (var e = 0; e < 8; e++) {
-        var rr = state.flipped ? 7 - d : d;
-        var cc = state.flipped ? 7 - e : e;
-        var name = sqName(rr, cc);
-        var piece = grid[rr][cc];
-        var sq = document.createElement("div");
-        sq.className = "sq " + ((rr + cc) % 2 === 0 ? "light" : "dark");
-        if (state.last && (name === state.last.from || name === state.last.to)) sq.classList.add("hl");
-        if (name === state.sel) sq.classList.add("sel");
-        if (checkRC === name) sq.classList.add("check");
-        if (dests.indexOf(name) >= 0) { sq.classList.add("dest"); if (piece) sq.classList.add("capture"); }
-        if (piece) {
-          var span = document.createElement("span");
-          span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
-          span.textContent = PIECES[piece];
-          if (state.legal[name]) {            // only pieces with legal moves are draggable
-            span.draggable = true;
-            span.addEventListener("dragstart", onDragStart);
-          }
-          sq.appendChild(span);
-        }
-        if (d === 7) sq.appendChild(coord("file", FILES[cc]));
-        if (e === 0) sq.appendChild(coord("rank", String(8 - rr)));
-        sq.dataset.name = name;
-        sq.addEventListener("click", onSquare);
-        sq.addEventListener("dragover", function (ev) { ev.preventDefault(); });
-        sq.addEventListener("drop", onDrop);
-        board.appendChild(sq);
-      }
-    }
-    board.classList.toggle("busy", state.busy);
-  }
-
-  function coord(kind, text) {
-    var s = document.createElement("span");
-    s.className = "coord " + kind;
-    s.textContent = text;
-    return s;
+    ChessBoard.render($("board"), state.fen, {
+      flipped: state.flipped,
+      coords: true,
+      highlight: state.last,                                   // {from, to} of the last move
+      selected: state.sel,
+      dests: state.sel ? (state.legal[state.sel] || []) : [],
+      check: check,
+      onSquare: onSquare,                                      // (name, ev)
+      draggable: function (name) { return !!state.legal[name]; },
+      onDragStart: onDragStart,                                // (name, ev)
+      onDrop: onDrop,                                          // (name, ev)
+    });
+    $("board").classList.toggle("busy", state.busy);
   }
 
   function renderBars(resp) {
@@ -185,7 +142,7 @@
 
   // Play from -> to, detecting a pawn promotion (which pops the picker first).
   function attemptMove(from, to) {
-    var grid = parseGrid(state.fen);
+    var grid = ChessBoard.parseFen(state.fen).grid;
     var piece = grid[8 - parseInt(from[1], 10)][FILES.indexOf(from[0])];
     var toRank = parseInt(to[1], 10);
     var uci = from + to;
@@ -193,9 +150,8 @@
     play({ uci: uci, record: true });
   }
 
-  function onSquare(ev) {
+  function onSquare(name) {
     if (state.busy) return;
-    var name = ev.currentTarget.dataset.name;
     // Completing a move (click-to-move)?
     if (state.sel && (state.legal[state.sel] || []).indexOf(name) >= 0) { attemptMove(state.sel, name); return; }
     // Otherwise select a piece that has legal moves.
@@ -203,19 +159,16 @@
     render();
   }
 
-  function onDragStart(ev) {
+  function onDragStart(name, ev) {
     if (state.busy) { ev.preventDefault(); return; }
-    var from = ev.target.parentElement.dataset.name;
-    state.sel = from;
-    paintDrag(from);
-    if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", from); }
+    state.sel = name;
+    paintDrag(name);
+    if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", name); }
     ev.target.addEventListener("dragend", onDragEnd, { once: true });
   }
 
-  function onDrop(ev) {
-    ev.preventDefault();
-    var to = ev.currentTarget.dataset.name;
-    if (state.sel && (state.legal[state.sel] || []).indexOf(to) >= 0) attemptMove(state.sel, to);
+  function onDrop(name) {
+    if (state.sel && (state.legal[state.sel] || []).indexOf(name) >= 0) attemptMove(state.sel, name);
     else render();   // illegal target — clear the drag marks
   }
 
