@@ -901,6 +901,10 @@ GATE_CHECK_PASS = 0
 GATE_CHECK_FAIL = 2
 GATE_CHECK_ERROR = 3
 
+# Default verdict.json for a bare `gate-check` (task 0143): the headline report's mirror,
+# so CI / a README badge can assert the thesis gate with no arguments at all.
+GATE_CHECK_DEFAULT_VERDICT = "reports/validation_headline.verdict.json"
+
 
 def _run_gate_check(args: argparse.Namespace) -> int:
     """Consume a gate verdict.json (task 0136): exit 0 iff its top-level ``pass`` is true.
@@ -1227,8 +1231,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     gc.add_argument(
         "verdict",
+        nargs="?",
+        default=GATE_CHECK_DEFAULT_VERDICT,
         help="path to the verdict.json written beside a `validate --out` / `headline` "
-        "report (e.g. reports/validation_headline.verdict.json)",
+        f"report; defaults to {GATE_CHECK_DEFAULT_VERDICT} so a bare `gate-check` asserts "
+        "the headline gate",
     )
 
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")

@@ -13,7 +13,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from chess_equity.cli import GATE_CHECK_ERROR, GATE_CHECK_FAIL, GATE_CHECK_PASS, main
+from chess_equity.cli import (
+    GATE_CHECK_DEFAULT_VERDICT,
+    GATE_CHECK_ERROR,
+    GATE_CHECK_FAIL,
+    GATE_CHECK_PASS,
+    main,
+)
 from chess_equity.validate.harness import GATE_VERDICT_SCHEMA
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +60,25 @@ def test_gate_check_exit_code_agrees_with_gate(tmp_path):
     gate_rc = _validate(out, "--models", "baseline,wdl-a", "--gate", "--min-n", "0")
     check_rc = main(["gate-check", str(_verdict_path(out))])
     assert gate_rc == 0 and check_rc == GATE_CHECK_PASS
+
+
+def test_gate_check_defaults_to_headline_verdict(tmp_path, monkeypatch):
+    # A bare `gate-check` (no path arg) reads reports/validation_headline.verdict.json,
+    # relative to cwd, so CI can assert the headline gate with zero arguments (task 0143).
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "reports" / "validation_headline.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _validate(out, "--models", "baseline,wdl-a", "--min-n", "0")
+    assert _verdict_path(out) == tmp_path / GATE_CHECK_DEFAULT_VERDICT
+    rc = main(["gate-check"])
+    assert rc == GATE_CHECK_PASS
+
+
+def test_gate_check_default_errors_when_headline_absent(tmp_path, monkeypatch):
+    # No headline report yet → bare `gate-check` fails loudly (missing file), never silent pass.
+    monkeypatch.chdir(tmp_path)
+    rc = main(["gate-check"])
+    assert rc == GATE_CHECK_ERROR
 
 
 def test_gate_check_errors_on_missing_file(tmp_path):
