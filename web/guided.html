@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chess-equity — the rating-conditioned eval bar</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<!--
+  Web demo for task 0010. A static page (no backend): it loads a precomputed
+  demo-game.json and renders, side by side, the classic centipawn bar and the
+  rating-conditioned EQUITY bar. Drag the rating sliders and watch equity move
+  while the centipawn bar does not — the whole point.
+
+  Serve it with any static server, e.g. from the repo root:
+    python3 -m http.server -d web 8000   # then open http://localhost:8000
+-->
+<body>
+  <header>
+    <h1>chess-equity</h1>
+    <p class="tagline">A win bar that knows <em>who</em> is playing. Drag a rating
+      slider — the <strong>equity</strong> bar moves; the classic
+      <strong>centipawn</strong> bar can't.</p>
+  </header>
+
+  <main>
+    <section class="board-col">
+      <div class="game-picker">
+        <label for="game-select">Game</label>
+        <select id="game-select" aria-label="choose demo game"></select>
+      </div>
+      <div id="board" class="board" aria-label="chess board"></div>
+      <div class="controls">
+        <button id="prev" type="button" aria-label="previous move">‹ Prev</button>
+        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="move scrubber" />
+        <button id="next" type="button" aria-label="next move">Next ›</button>
+      </div>
+      <div id="move-caption" class="move-caption"></div>
+    </section>
+
+    <section class="bars-col">
+      <div class="ratings">
+        <label>White rating <output id="white-elo-out">1500</output>
+          <input id="white-elo" type="range" step="1" value="1" aria-label="White rating" />
+        </label>
+        <label>Black rating <output id="black-elo-out">1500</output>
+          <input id="black-elo" type="range" step="1" value="1" aria-label="Black rating" />
+        </label>
+      </div>
+
+      <div class="bar-block">
+        <div class="bar-label">Equity — rating-conditioned
+          <span class="readout" id="equity-readout">50%</span></div>
+        <div class="bar equity-bar"><div class="fill" id="equity-fill"></div></div>
+      </div>
+
+      <div class="bar-block">
+        <div class="bar-label">Classic centipawn eval
+          <span class="readout" id="cp-readout">+0.0</span></div>
+        <div class="bar cp-bar"><div class="fill" id="cp-fill"></div></div>
+      </div>
+
+      <p id="divergence" class="divergence" hidden></p>
+
+      <figure class="chart-block">
+        <figcaption>Across the game — White win%
+          <span class="legend"><span class="key eq">equity</span>
+            <span class="key cp">centipawn bar</span></span>
+        </figcaption>
+        <svg id="chart" class="chart" viewBox="0 0 480 160" role="img"
+             aria-label="equity vs centipawn win-percent across the game"></svg>
+      </figure>
+
+      <ol id="moves" class="moves" aria-label="move list"></ol>
+    </section>
+  </main>
+
+  <footer>
+    <p>Equity in <code>demo-game.json</code> is real <a href="https://github.com/CSSLab/maia2">Maia-2</a>
+      output — rating-conditioned win-equity from its value head (see the file's
+      <code>_comment</code>); regenerate with <code>python web/build_demo.py --all --model maia2</code>.</p>
+    <p class="caveat">Note: this is Maia-2's <em>practical</em> win-probability, not a
+      calibrated even-at-startpos eval — its value head reads ~41% for White at the
+      opening rather than 50%, so the bar starts slightly below even. Read it as
+      <em>how the game is trending for this matchup</em>, not as an absolute 50%-is-equal scale.</p>
+    <p>Import a real game: <code>python web/import_game.py &lt;lichess-url&gt;</code>,
+      then open <code>index.html?game=imported-game.json</code> — real ratings
+      auto-fill and the classic bar reuses Lichess' own evals.</p>
+  </footer>
+
+  <!-- Floating board preview: populated on hover of a chart dot (task 0078). -->
+  <div id="board-preview" class="board-preview" hidden aria-hidden="true">
+    <div id="preview-caption" class="preview-caption"></div>
+    <div id="preview-board" class="board mini"></div>
+  </div>
+
+  <script src="app.js"></script>
+  <!-- When embedded in the unified shell (index.html) via ?embed=1: hide our own
+       header (the shell supplies one) and report height so the iframe can auto-size. -->
+  <script>
+    (function () {
+      if (new URLSearchParams(location.search).get("embed") !== "1") return;
+      var h = document.querySelector("header");
+      if (h) h.style.display = "none";
+      function post() { parent.postMessage({ chessEquityHeight: document.body.scrollHeight }, "*"); }
+      window.addEventListener("load", post);
+      new MutationObserver(post).observe(document.body, { subtree: true, childList: true, attributes: true });
+      setInterval(post, 800);
+    })();
+  </script>
+</body>
+</html>

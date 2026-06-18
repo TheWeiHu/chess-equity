@@ -91,5 +91,18 @@
   </footer>
 
   <script src="live.js"></script>
+  <!-- Embedded in the unified shell (index.html) via ?embed=1: hide our own header
+       (the shell supplies one) and report height so the iframe can auto-size. -->
+  <script>
+    (function () {
+      if (new URLSearchParams(location.search).get("embed") !== "1") return;
+      var h = document.querySelector("header");
+      if (h) h.style.display = "none";
+      function post() { parent.postMessage({ chessEquityHeight: document.body.scrollHeight }, "*"); }
+      window.addEventListener("load", post);
+      new MutationObserver(post).observe(document.body, { subtree: true, childList: true, attributes: true });
+      setInterval(post, 800);
+    })();
+  </script>
 </body>
 </html>

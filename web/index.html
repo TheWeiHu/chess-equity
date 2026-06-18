@@ -4,96 +4,86 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>chess-equity — the rating-conditioned eval bar</title>
-  <link rel="stylesheet" href="app.css" />
+  <style>
+    /* Unified demo shell. Two demos live behind tabs, each in its own iframe so the
+       pages keep their own scripts/styles with no collisions:
+         • Guided  — guided.html: precomputed famous games, static (works on Pages).
+         • Live    — live.html:   move your own pieces, scored live by the backend
+                                   (needs `uv run python web/server.py`). */
+    :root { --bg:#12141a; --ink:#e8eaed; --muted:#9aa0a6; --accent:#5aa86f; --line:#262a31; --surface:#1a1d24; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+           font:16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif; }
+    header { padding: 1.6rem clamp(1rem, 4vw, 2.5rem) 0.6rem; }
+    header h1 { margin:0; font-size: clamp(1.7rem, 4vw, 2.4rem); font-weight: 800; letter-spacing:-.02em; }
+    header h1 .accent { color: var(--accent); }
+    header .tagline { margin:.35rem 0 0; max-width: 62ch; color: var(--muted); }
+    header .tagline strong { color: var(--ink); }
+    .tabs { display:flex; gap:.4rem; padding: .9rem clamp(1rem, 4vw, 2.5rem) 0; border-bottom: 1px solid var(--line); }
+    .tab { appearance:none; border:1px solid var(--line); border-bottom:none; background:transparent; color:var(--muted);
+           font:inherit; font-weight:700; padding:.6rem 1.1rem; border-radius:10px 10px 0 0; cursor:pointer; }
+    .tab:hover { color: var(--ink); }
+    .tab.active { background: var(--surface); color: var(--ink); border-color: var(--line); position:relative; top:1px; }
+    .tab .hint { font-weight: 500; font-size:.78rem; color: var(--muted); margin-left:.4rem; }
+    .stage { background: var(--surface); }
+    iframe { display:block; width:100%; border:0; min-height: 760px; background: transparent; }
+    .note { color: var(--muted); font-size:.85rem; padding:.6rem clamp(1rem,4vw,2.5rem); }
+    .note code { background:#23262e; padding:.05rem .35rem; border-radius:5px; }
+  </style>
 </head>
-<!--
-  Web demo for task 0010. A static page (no backend): it loads a precomputed
-  demo-game.json and renders, side by side, the classic centipawn bar and the
-  rating-conditioned EQUITY bar. Drag the rating sliders and watch equity move
-  while the centipawn bar does not — the whole point.
-
-  Serve it with any static server, e.g. from the repo root:
-    python3 -m http.server -d web 8000   # then open http://localhost:8000
--->
 <body>
   <header>
-    <h1>chess-equity</h1>
-    <p class="tagline">A win bar that knows <em>who</em> is playing. Drag a rating
-      slider — the <strong>equity</strong> bar moves; the classic
-      <strong>centipawn</strong> bar can't.</p>
+    <h1>chess&#8202;<span class="accent">equity</span></h1>
+    <p class="tagline">A win bar that knows <em>who</em> is playing. Drag a rating slider —
+      the <strong>equity</strong> bar moves; the classic <strong>centipawn</strong> bar can't.</p>
   </header>
 
-  <main>
-    <section class="board-col">
-      <div class="game-picker">
-        <label for="game-select">Game</label>
-        <select id="game-select" aria-label="choose demo game"></select>
-      </div>
-      <div id="board" class="board" aria-label="chess board"></div>
-      <div class="controls">
-        <button id="prev" type="button" aria-label="previous move">‹ Prev</button>
-        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="move scrubber" />
-        <button id="next" type="button" aria-label="next move">Next ›</button>
-      </div>
-      <div id="move-caption" class="move-caption"></div>
-    </section>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" id="tab-guided" data-src="guided.html" role="tab">📖 Guided games
+      <span class="hint">precomputed · famous mates</span></button>
+    <button class="tab" id="tab-live" data-src="live.html" role="tab">🔴 Live board
+      <span class="hint" id="live-hint">move your own pieces</span></button>
+  </nav>
 
-    <section class="bars-col">
-      <div class="ratings">
-        <label>White rating <output id="white-elo-out">1500</output>
-          <input id="white-elo" type="range" step="1" value="1" aria-label="White rating" />
-        </label>
-        <label>Black rating <output id="black-elo-out">1500</output>
-          <input id="black-elo" type="range" step="1" value="1" aria-label="Black rating" />
-        </label>
-      </div>
-
-      <div class="bar-block">
-        <div class="bar-label">Equity — rating-conditioned
-          <span class="readout" id="equity-readout">50%</span></div>
-        <div class="bar equity-bar"><div class="fill" id="equity-fill"></div></div>
-      </div>
-
-      <div class="bar-block">
-        <div class="bar-label">Classic centipawn eval
-          <span class="readout" id="cp-readout">+0.0</span></div>
-        <div class="bar cp-bar"><div class="fill" id="cp-fill"></div></div>
-      </div>
-
-      <p id="divergence" class="divergence" hidden></p>
-
-      <figure class="chart-block">
-        <figcaption>Across the game — White win%
-          <span class="legend"><span class="key eq">equity</span>
-            <span class="key cp">centipawn bar</span></span>
-        </figcaption>
-        <svg id="chart" class="chart" viewBox="0 0 480 160" role="img"
-             aria-label="equity vs centipawn win-percent across the game"></svg>
-      </figure>
-
-      <ol id="moves" class="moves" aria-label="move list"></ol>
-    </section>
-  </main>
-
-  <footer>
-    <p>Equity in <code>demo-game.json</code> is real <a href="https://github.com/CSSLab/maia2">Maia-2</a>
-      output — rating-conditioned win-equity from its value head (see the file's
-      <code>_comment</code>); regenerate with <code>python web/build_demo.py --all --model maia2</code>.</p>
-    <p class="caveat">Note: this is Maia-2's <em>practical</em> win-probability, not a
-      calibrated even-at-startpos eval — its value head reads ~41% for White at the
-      opening rather than 50%, so the bar starts slightly below even. Read it as
-      <em>how the game is trending for this matchup</em>, not as an absolute 50%-is-equal scale.</p>
-    <p>Import a real game: <code>python web/import_game.py &lt;lichess-url&gt;</code>,
-      then open <code>index.html?game=imported-game.json</code> — real ratings
-      auto-fill and the classic bar reuses Lichess' own evals.</p>
-  </footer>
-
-  <!-- Floating board preview: populated on hover of a chart dot (task 0078). -->
-  <div id="board-preview" class="board-preview" hidden aria-hidden="true">
-    <div id="preview-caption" class="preview-caption"></div>
-    <div id="preview-board" class="board mini"></div>
+  <div class="stage">
+    <iframe id="demo" title="chess-equity demo" src="about:blank"></iframe>
   </div>
+  <p class="note" id="live-note" hidden>The live board needs the backend —
+    run <code>uv run python web/server.py</code> and reload.</p>
 
-  <script src="app.js"></script>
+  <script>
+    (function () {
+      var iframe = document.getElementById("demo");
+      var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+      // Carry a ?game=<file> deep-link straight into the guided demo.
+      var raw = new URLSearchParams(location.search).get("game");
+      var gameQ = (raw && /^[A-Za-z0-9._-]+\.json$/.test(raw) && raw.indexOf("..") === -1)
+        ? "&game=" + encodeURIComponent(raw) : "";
+
+      function show(tab) {
+        tabs.forEach(function (t) { t.classList.toggle("active", t === tab); });
+        var extra = tab.id === "tab-guided" ? gameQ : "";
+        iframe.src = tab.dataset.src + "?embed=1" + extra;
+      }
+      tabs.forEach(function (t) { t.addEventListener("click", function () { show(t); }); });
+
+      // Auto-size the iframe to its content (each embedded page posts its height).
+      window.addEventListener("message", function (e) {
+        if (e.data && typeof e.data.chessEquityHeight === "number") {
+          iframe.style.height = Math.max(640, e.data.chessEquityHeight + 24) + "px";
+        }
+      });
+
+      // Probe the backend so the Live tab is honest about needing the server.
+      fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+        .then(function () { /* any response (even an error JSON) means the backend is up */ })
+        .catch(function () {
+          document.getElementById("live-hint").textContent = "needs the local server";
+          document.getElementById("live-note").hidden = false;
+        });
+
+      show(document.getElementById("tab-guided"));  // default to the guided demo
+    })();
+  </script>
 </body>
 </html>

@@ -1,21 +1,23 @@
 /* app.css — chess-equity web demo. Vanilla CSS, no deps, no build step. */
 
 :root {
-  --bg: #f4f1ea;
-  --surface: #ffffff;
-  --ink: #20242c;
-  --muted: #6c727e;
-  --line: #e3ddd1;
-  --accent: #2f7d57;      /* equity / good */
-  --accent-soft: #e4f1ea;
-  --cp: #6b7280;          /* centipawn / rating-blind */
-  --bad: #c44a3d;
-  --good: #2f7d57;
-  --warn: #b8762a;
-  --sq-light: #ebecd0;
+  /* Dark palette — matches the unified shell (index.html) + the guided demo so the
+     two tabs share one look. */
+  --bg: #12141a;
+  --surface: #1a1d24;
+  --ink: #e8eaed;
+  --muted: #9aa0a6;
+  --line: #262a31;
+  --accent: #5aa86f;      /* equity / good */
+  --accent-soft: #1e3a2c;
+  --cp: #8a90a0;          /* centipawn / rating-blind */
+  --bad: #e0585b;
+  --good: #5aa86f;
+  --warn: #d6a24a;
+  --sq-light: #ebecd0;    /* the green board stays — reads fine on dark */
   --sq-dark: #6f9b62;
   --sq-hl: rgba(245, 222, 76, 0.62);
-  --shadow: 0 1px 2px rgba(20, 24, 34, 0.06), 0 4px 16px rgba(20, 24, 34, 0.06);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.35);
   --radius: 14px;
   font-synthesis: none;
 }
@@ -171,7 +173,7 @@ main {
   padding: .42rem .7rem; cursor: pointer;
   transition: background .12s, border-color .12s;
 }
-.controls button:hover { background: #f0ede6; border-color: #cfc7b8; }
+.controls button:hover { background: #23262e; border-color: #39404a; }
 .controls button:active { transform: translateY(1px); }
 .controls .flip { margin-left: auto; }
 .controls #scrub { flex: 1; min-width: 60px; accent-color: var(--accent); }
@@ -251,7 +253,7 @@ main {
 
 .divergence {
   margin: .4rem 0 0; padding: .6rem .75rem; border-radius: 9px;
-  background: #fbf3e6; border: 1px solid #f0dcb8; color: #6b4f24; font-size: .88rem;
+  background: #2a2418; border: 1px solid #4a3a1c; color: #d6b88a; font-size: .88rem;
 }
 
 /* ---- chart ---- */
@@ -311,17 +313,18 @@ main {
 .fen-row input {
   flex: 1; font: .82rem ui-monospace, SFMono-Regular, Menlo, monospace;
   padding: .45rem .55rem; border: 1px solid var(--line); border-radius: 8px; color: var(--ink);
+  background: #14161b;
 }
 .fen-row button {
   font: inherit; font-weight: 600; padding: .45rem .8rem; cursor: pointer;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
 }
-.fen-row button:hover { background: #f0ede6; }
+.fen-row button:hover { background: #23262e; }
 .fen-err { margin: .4rem 0 0; color: var(--bad); font-size: .85rem; }
 
 /* ---- footer ---- */
 footer { padding: 1.4rem 0 3rem; color: var(--muted); font-size: .9rem; border-top: 1px solid var(--line); margin-top: 1rem; }
 footer p { max-width: 78ch; }
 footer strong { color: var(--ink); }
-footer code { background: #ece7dd; padding: .05rem .35rem; border-radius: 5px; font-size: .85em; }
+footer code { background: #23262e; padding: .05rem .35rem; border-radius: 5px; font-size: .85em; }
 .muted { color: var(--muted); }
