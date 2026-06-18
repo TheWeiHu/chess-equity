@@ -264,12 +264,32 @@ def clock_band(row: PositionRow) -> str:
     return "comfortable(60s+)"
 
 
+def rating_gap_band(row: PositionRow) -> str:
+    """Coarse band on the *absolute rating gap* between the two players (task 0144).
+
+    The thesis conditions on BOTH ratings, so the rating-conditioned model's edge over
+    the rating-blind centipawn baseline should be largest exactly where the two players
+    are most mismatched: the cp-only Win% can't tell a 2400-vs-1500 game (the strong side
+    converts) from a 1500-vs-1500 one. :func:`rating_band` slices by the *average* skill
+    level; this slices the orthogonal axis — ``|white_elo - black_elo|`` — so the
+    head-to-head section can show the win concentrating in the high-gap band. Bands mirror
+    the other slicers' ``<lo`` / range / ``hi+`` shape.
+    """
+    gap = abs(row.white_elo - row.black_elo)
+    if gap < 100:
+        return "<100"
+    if gap < 300:
+        return "100-299"
+    return "300+"
+
+
 # The slicings reported alongside the overall number.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
     "high_rating": high_rating_band,
     "phase": lambda row: row.phase,
     "clock": clock_band,
+    "rating_gap": rating_gap_band,
 }
 
 

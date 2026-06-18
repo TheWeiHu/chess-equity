@@ -62,11 +62,52 @@ Does each rating-conditioned predictor beat the rating-blind `baseline` on held-
 | wdl-a | low(<60s)  | 1 | 0.1719 | 0.0249 | 0.1579 |
 | wdl-a | no-clock  | 1 | 0.7027 | 0.0047 | 0.0689 |
 
+## By rating_gap
+
+| predictor | rating_gap | n | log-loss | Brier | ECE |
+|---|---|--:|--:|--:|--:|
+| baseline | <100  | 15 | 0.5794 | 0.1060 | 0.2183 |
+| baseline+clock | <100  | 15 | 0.5867 | 0.1072 | 0.1570 |
+| wdl-a | <100  | 15 | 0.5409 | 0.0795 | 0.2361 |
+
+## Reliability curve (is the equity bar an honest probability?)
+
+For each predicted-probability bin: mean predicted vs **observed** White expected-score, the bin's row count, and the gap (obs − pred). A calibrated predictor has `gap ≈ 0` in every bin; the count-weighted mean `|gap|` is the ECE.
+
+### baseline  (n=15, ECE=0.2183)
+
+| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |
+|--:|--:|--:|--:|--:|
+| 0.00 | 0.000 | 0.000 | 1 | -0.000 |
+| 0.40 | 0.459 | 0.000 | 2 | -0.459 |
+| 0.50 | 0.513 | 0.727 | 11 | +0.214 |
+| 0.90 | 1.000 | 1.000 | 1 | +0.000 |
+
+### baseline+clock  (n=15, ECE=0.1570)
+
+| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |
+|--:|--:|--:|--:|--:|
+| 0.00 | 0.087 | 0.000 | 1 | -0.087 |
+| 0.40 | 0.459 | 0.250 | 2 | -0.209 |
+| 0.50 | 0.514 | 0.682 | 11 | +0.168 |
+| 0.90 | 0.999 | 1.000 | 1 | +0.001 |
+
+### wdl-a  (n=15, ECE=0.2361)
+
+| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |
+|--:|--:|--:|--:|--:|
+| 0.10 | 0.158 | 0.000 | 1 | -0.158 |
+| 0.30 | 0.370 | 0.000 | 2 | -0.370 |
+| 0.40 | 0.424 | 0.500 | 6 | +0.076 |
+| 0.50 | 0.590 | 1.000 | 5 | +0.410 |
+| 0.80 | 0.857 | 1.000 | 1 | +0.143 |
+
+
 ## Head-to-head: where equity wins (baseline vs wdl-a)
 
 Δ log-loss = `baseline` − `wdl-a` on the same rows; **Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first.
 Overall Δ: +0.0385
-**Worst slice:** `clock` `low(<60s)` (n=1) Δ=-0.1719 — the baseline wins here. Equity wins on 4/8 slices.
+**Worst slice:** `clock` `low(<60s)` (n=1) Δ=-0.1719 — the baseline wins here. Equity wins on 5/9 slices.
 
 | slice | value | n | baseline log-loss | model log-loss | Δ |
 |---|---|--:|--:|--:|--:|
@@ -74,6 +115,7 @@ Overall Δ: +0.0385
 | high_rating | <2000 | 9 | 0.5034 | 0.4316 | +0.0718 |
 | clock | comfortable(60s+) | 13 | 0.6152 | 0.5568 | +0.0583 |
 | phase | opening | 15 | 0.5794 | 0.5409 | +0.0385 |
+| rating_gap | <100 | 15 | 0.5794 | 0.5409 | +0.0385 |
 | clock | no-clock | 1 | 0.6935 | 0.7027 | -0.0092 |
 | rating | 2000-2399 | 6 | 0.6934 | 0.7048 | -0.0114 |
 | high_rating | 2000-2199 | 6 | 0.6934 | 0.7048 | -0.0114 |
@@ -100,3 +142,18 @@ Bin-resampling bootstrap (2000 resamples) on ECE (**lower = better calibrated**)
 | baseline+clock | 0.1570 | [0.0363, 0.2934] | -0.0613 | [-0.1939, +0.0147] | inconclusive |
 | wdl-a | 0.2361 | [0.1541, 0.3168] | +0.0178 | [-0.0304, +0.0658] | inconclusive |
 
+## Head-to-head significance: per-slice CIs (baseline vs wdl-a)
+
+Paired bootstrap (2000 resamples) on the per-row log-loss delta *within each slice*. Δ = `baseline` − `wdl-a` (**Δ > 0 = equity wins**); `equity` means the whole 95% CI clears zero, so the band-level win is real and not small-n noise. Slices below n=30 read `small-n` (too few rows for a trustworthy CI). Sorted by Δ, biggest win first.
+
+| slice | value | n | Δ log-loss | 95% CI | verdict |
+|---|---|--:|--:|:--:|:--:|
+| rating | 1200-1599 | 9 | +0.0718 | n<30 | inconclusive |
+| high_rating | <2000 | 9 | +0.0718 | n<30 | inconclusive |
+| clock | comfortable(60s+) | 13 | +0.0583 | n<30 | inconclusive |
+| phase | opening | 15 | +0.0385 | n<30 | inconclusive |
+| rating_gap | <100 | 15 | +0.0385 | n<30 | inconclusive |
+| clock | no-clock | 1 | -0.0092 | n<30 | inconclusive |
+| rating | 2000-2399 | 6 | -0.0114 | n<30 | inconclusive |
+| high_rating | 2000-2199 | 6 | -0.0114 | n<30 | inconclusive |
+| clock | low(<60s) | 1 | -0.1719 | n<30 | inconclusive |

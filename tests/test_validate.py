@@ -20,6 +20,7 @@ from chess_equity.validate.harness import (
     format_report,
     gate_verdicts,
     rating_band,
+    rating_gap_band,
 )
 from chess_equity.validate.metrics import (
     brier_score,
@@ -103,6 +104,51 @@ def test_rating_band():
     assert rating_band(_row(we=1000, be=1000)) == "<1200"
     assert rating_band(_row(we=1500, be=1500)) == "1200-1599"
     assert rating_band(_row(we=2500, be=2500)) == "2400+"
+
+
+def test_rating_gap_band():
+    # Banded on |white_elo - black_elo|, symmetric in player order (task 0144).
+    assert rating_gap_band(_row(we=1500, be=1500)) == "<100"
+    assert rating_gap_band(_row(we=1550, be=1500)) == "<100"  # gap 50, boundary-exclusive
+    assert rating_gap_band(_row(we=1700, be=1500)) == "100-299"  # gap 200
+    assert rating_gap_band(_row(we=1500, be=1700)) == "100-299"  # symmetric
+    assert rating_gap_band(_row(we=2400, be=1500)) == "300+"  # gap 900, the mismatch band
+
+
+def test_rating_gap_slice_in_report_and_head_to_head():
+    # A wdl-a-style stand-in that beats the cp baseline most in the high-gap band: it
+    # nails the mismatched games (strong side converts) where the rating-blind baseline,
+    # seeing only cp=0, predicts a coin flip. The report must surface a `rating_gap` slice
+    # and the head-to-head section must rank that band as an equity win.
+    rows = (
+        [_row(cp=0, we=1500, be=1500, result=0.5)] * 20  # balanced: even game, baseline ok
+        + [_row(cp=0, we=2400, be=1500, result=1.0)] * 20  # mismatch: strong White wins
+        + [_row(cp=0, we=1500, be=2400, result=0.0)] * 20  # mismatch: strong Black wins
+    )
+
+    def rating_aware(row):
+        # Sees the gap the baseline is blind to: lean toward the higher-rated side.
+        if row.white_elo - row.black_elo >= 300:
+            return 0.9
+        if row.black_elo - row.white_elo >= 300:
+            return 0.1
+        return 0.5
+
+    reports = evaluate(rows, {"baseline": baseline_cp, "wdl-a": rating_aware})
+    base = next(r for r in reports if r.name == "baseline")
+    assert "rating_gap" in base.slices
+    assert set(base.slices["rating_gap"]) == {"<100", "300+"}
+
+    text = format_report(reports)
+    assert "By rating_gap" in text
+    # The head-to-head table ranks the high-gap band as a (top) equity win.
+    from chess_equity.validate.harness import head_to_head_deltas
+
+    h2h = head_to_head_deltas(reports)
+    assert h2h is not None
+    gap_slices = {d.value: d for d in h2h.slices if d.slicer == "rating_gap"}
+    assert gap_slices["300+"].delta > 0  # equity wins in the mismatched band
+    assert gap_slices["300+"].delta > gap_slices["<100"].delta
 
 
 # --- harness end to end --------------------------------------------------------
