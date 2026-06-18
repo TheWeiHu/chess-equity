@@ -36,6 +36,7 @@
           <label for="game-select">Load game</label>
           <select id="game-select" aria-label="load a famous game"></select>
           <button id="paste-pgn" type="button">Paste PGN</button>
+          <button id="setup-fen" type="button">Set up FEN</button>
           <button id="new" type="button">New game</button>
         </div>
         <div class="board-frame">
@@ -113,6 +114,23 @@
       <div class="modal-actions">
         <button id="pgn-cancel" type="button">Cancel</button>
         <button id="pgn-load" type="button" class="primary">Load game</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- set-up-position dialog (opened by the "Set up FEN" button) -->
+  <div id="fen-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="fen-title">
+      <div class="modal-head" id="fen-title">Set up a position from FEN</div>
+      <p class="modal-sub">Paste a FEN like
+        <code>rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1</code>. The board starts
+        from that position and you can play legal moves from there.</p>
+      <textarea id="fen-text" rows="2" spellcheck="false"
+                placeholder="r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"></textarea>
+      <p id="fen-error" class="pgn-error" hidden></p>
+      <div class="modal-actions">
+        <button id="fen-cancel" type="button">Cancel</button>
+        <button id="fen-load" type="button" class="primary">Set up</button>
       </div>
     </div>
   </div>

@@ -157,5 +157,21 @@ check("releasing the slider re-charts the rest of the game exactly once", () => 
     "settle should chart the remaining plies once, got " + playPosts);
 });
 
+// --- set up from FEN: free play from any position (task 0085) ---
+
+check("setting up a FEN position starts a fresh one-node free-play line", () => {
+  live.setGame(fakeGame());            // start from a loaded 6-ply game
+  playPosts = 0;
+  const fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+  // the analysed response /api/play returns for a bare FEN (no uci)
+  live.setPosition({ fen: fen, turn: "white", legal: {}, cp: 0, equity_white: 50, game_over: false });
+  assert.strictEqual(live.state.line.length, 1, "a custom position is a single start node");
+  assert.strictEqual(live.state.ply, 0, "cursor sits on the custom position");
+  assert.strictEqual(live.state.line[0].fen, fen, "the node holds the supplied FEN");
+  assert.strictEqual(live.state.meta, null, "custom setup is free play (no loaded-game meta)");
+  assert.ok(live.hasFresh(live.state.line[0]), "the supplied eval is reused, not refetched");
+  assert.strictEqual(playPosts, 0, "setup reuses the supplied eval — zero /api/play calls, got " + playPosts);
+});
+
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("ok - live eval cache");
