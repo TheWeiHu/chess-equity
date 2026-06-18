@@ -47,7 +47,7 @@
  * with a soft dark edge (text-shadow, not a heavy text-stroke), Black uses the solid
  * glyph in near-black. High-contrast and crisp on the green board at any size. */
 .sq .piece {
-  --pf: 1;                              /* per-glyph size normaliser (set per type below) */
+  --pf: 1;                              /* per-glyph size normaliser */
   position: relative;
   font-size: clamp(16px, 6vw, 46px);   /* fallback for browsers without container units */
   font-size: calc(82cqi * var(--pf));
@@ -55,10 +55,16 @@
   z-index: 1;
   user-select: none;
 }
-/* the font draws these glyphs a size off the others — scale them back to a common size
-   (measured: king ≈ 0.88×, knight ≈ 1.08× the rest, so bump the king and trim the knight) */
-.sq .piece.t-k { --pf: 1.13; }
-.sq .piece.t-n { --pf: 0.92; }
+/* The OS symbol font draws the six chess glyphs at uneven sizes, and differently per
+   platform (the king is small in headless Chromium, big on macOS). board.js measures the
+   actual glyphs at runtime and sets --pf-<type> so they all render the same height here.
+   Default 1 = natural size if measurement is unavailable. */
+.sq .piece.t-k { --pf: var(--pf-k, 1); }
+.sq .piece.t-q { --pf: var(--pf-q, 1); }
+.sq .piece.t-r { --pf: var(--pf-r, 1); }
+.sq .piece.t-b { --pf: var(--pf-b, 1); }
+.sq .piece.t-n { --pf: var(--pf-n, 1); }
+.sq .piece.t-p { --pf: var(--pf-p, 1); }
 .sq .piece.white {
   color: #f6f7f3;
   text-shadow: 0 0 1.4px #3a3d45, 0 0 1.4px #3a3d45, 0 1px 1.2px rgba(0, 0, 0, .28);
