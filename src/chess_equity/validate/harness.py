@@ -26,6 +26,7 @@ from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
+from chess_equity.validate.failure_modes import failure_mode
 from chess_equity.validate.bootstrap import (
     DeltaCI,
     EceCI,
@@ -221,12 +222,16 @@ def clock_band(row: PositionRow) -> str:
     return "comfortable(60s+)"
 
 
-# The slicings reported alongside the overall number.
+# The slicings reported alongside the overall number. ``failure_mode`` is the most
+# direct proof of the 0003 thesis: it reports equity-vs-baseline ON the two named
+# failure modes (absurd-refutation, hard-0.00) curated in baseline/failure_modes.json
+# — see :mod:`chess_equity.validate.failure_modes`.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
     "high_rating": high_rating_band,
     "phase": lambda row: row.phase,
     "clock": clock_band,
+    "failure_mode": failure_mode,
 }
 
 
