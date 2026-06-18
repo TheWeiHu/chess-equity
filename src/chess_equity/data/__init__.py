@@ -12,6 +12,7 @@ See ``chess-equity data build --help`` for the CLI front door.
 
 from chess_equity.data.build import (
     build_dataset,
+    dataset_source_month,
     load_dataframe,
     load_rows,
     month_url,
@@ -22,6 +23,7 @@ from chess_equity.data.schema import PositionRow
 __all__ = [
     "PositionRow",
     "build_dataset",
+    "dataset_source_month",
     "load_rows",
     "load_dataframe",
     "open_pgn",

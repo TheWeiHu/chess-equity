@@ -412,6 +412,11 @@ def _run_data(args: argparse.Namespace) -> int:
             return 1
         print(f"\nfetched {dump}", file=sys.stderr)
         pgn = str(dump)
+    # Stamp the source month so the 0112 leakage guard auto-detects overlap (0116):
+    # the declared --month, else inferred from the PGN filename (e.g. a Lichess dump).
+    from chess_equity.validate.leakage import infer_month_from_path
+
+    source_month = args.month or infer_month_from_path(pgn)
     try:
         out = build_dataset(
             pgn,
@@ -420,6 +425,7 @@ def _run_data(args: argparse.Namespace) -> int:
             fmt=args.format,
             include_fen=args.with_fen,
             partition=args.partition,
+            month=source_month,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -459,7 +465,10 @@ def _run_validate(args: argparse.Namespace) -> int:
 
     # Leakage guard (task 0112): if the eval dataset's source month is a model's own
     # training month, its scores are memorization, not held-out evidence. The month is
-    # declared via --eval-month or inferred from the dataset path; --strict refuses.
+    # declared via --eval-month, else read from the dataset's build-time provenance
+    # sidecar (task 0116 — authoritative, survives a rename), else inferred from the
+    # dataset path as a last resort; --strict refuses.
+    from chess_equity.data.build import dataset_source_month
     from chess_equity.validate.leakage import (
         detect_leakage,
         format_leakage_warning,
@@ -468,7 +477,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         model_fit_months,
     )
 
-    eval_month = args.eval_month or infer_month_from_path(args.data)
+    eval_month = (
+        args.eval_month
+        or dataset_source_month(args.data)
+        or infer_month_from_path(args.data)
+    )
     leaks = detect_leakage(eval_month, model_fit_months(requested))
     if leaks:
         print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)

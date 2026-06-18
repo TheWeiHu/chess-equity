@@ -18,11 +18,22 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import json
+import re
 from pathlib import Path
 from typing import IO, Iterable, Iterator, List, Optional, Sequence
 
 from chess_equity.data.pgn import iter_rows
 from chess_equity.data.schema import PositionRow, columns as schema_columns, rating_bucket
+
+# Provenance sidecar: ``<dataset>.meta.json`` (for a file) or ``<dir>/_dataset_meta.json``
+# (for a partitioned tree) records the Lichess source month a dataset was built from, so
+# the 0112 leakage guard can detect eval-vs-training-month overlap WITHOUT the caller
+# passing ``--eval-month`` and even if the dataset file was hand-renamed (task 0116).
+SOURCE_MONTH_KEY = "source_month"
+_PARTITION_META_NAME = "_dataset_meta.json"
+# A standalone ``YYYY-MM`` month (19xx/20xx, real 01–12), matched whole.
+_MONTH_RE = re.compile(r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])")
 
 # Alias so :func:`load_rows` can take a ``rating_bucket=`` selector arg without the
 # parameter shadowing the schema helper of the same name.
@@ -128,6 +139,7 @@ def build_dataset(
     name: str = "dataset",
     include_fen: bool = False,
     partition: bool = False,
+    month: Optional[str] = None,
 ) -> Path:
     """Parse ``pgn_path`` into ``out_dir/<name>.<fmt>`` and return the written path.
 
@@ -140,6 +152,10 @@ def build_dataset(
     ``out_dir/<name>/tc_bucket=…/rating_bucket=…/part.<fmt>`` (and that dir is
     returned) so 0004/0009 can read only the rating/time-control slices they need;
     :func:`load_rows` reads such a directory transparently.
+
+    ``month`` (``YYYY-MM``) stamps the dataset's Lichess source month into a provenance
+    sidecar so the 0112 leakage guard auto-detects eval-vs-training overlap without the
+    caller passing ``--eval-month`` (task 0116). ``ValueError`` on a malformed month.
     """
     if fmt not in ("csv", "parquet"):
         raise ValueError(f"unknown format {fmt!r} (expected 'csv' or 'parquet')")
@@ -152,13 +168,49 @@ def build_dataset(
             target = out_path / name
             target.mkdir(parents=True, exist_ok=True)
             _write_partitioned(rows, target, cols, fmt)
-            return target
-        target = out_path / f"{name}.{fmt}"
-        if fmt == "csv":
-            _write_csv(rows, target, cols)
         else:
-            _write_parquet(rows, target, cols)
+            target = out_path / f"{name}.{fmt}"
+            if fmt == "csv":
+                _write_csv(rows, target, cols)
+            else:
+                _write_parquet(rows, target, cols)
+    if month is not None:
+        _write_source_month(target, month)
     return target
+
+
+def _meta_path_for(target: Path) -> Path:
+    """The provenance sidecar path for a dataset file or partitioned directory."""
+    if target.is_dir():
+        return target / _PARTITION_META_NAME
+    return target.with_name(target.name + ".meta.json")
+
+
+def _write_source_month(target: Path, month: str) -> None:
+    """Stamp ``month`` into ``target``'s provenance sidecar; reject a malformed month."""
+    if not _MONTH_RE.fullmatch(month):
+        raise ValueError(f"month {month!r} is not a YYYY-MM Lichess month")
+    _meta_path_for(target).write_text(
+        json.dumps({SOURCE_MONTH_KEY: month}) + "\n", encoding="utf-8"
+    )
+
+
+def dataset_source_month(path: str) -> Optional[str]:
+    """The Lichess source month stamped into a dataset's sidecar, or ``None``.
+
+    The authoritative provenance the 0112 leakage guard prefers over a path-inferred
+    month: it survives a renamed dataset file because it lives in the sidecar written at
+    build time (task 0116). ``None`` when the dataset predates stamping, was built
+    without a ``month``, or the sidecar is missing/unreadable.
+    """
+    meta = _meta_path_for(Path(path))
+    if not meta.is_file():
+        return None
+    try:
+        value = json.loads(meta.read_text(encoding="utf-8")).get(SOURCE_MONTH_KEY)
+    except (OSError, ValueError):
+        return None
+    return str(value) if value else None
 
 
 def _coerce_row(record: dict) -> PositionRow:
