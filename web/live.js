@@ -16,6 +16,11 @@
   var FILES = "abcdefgh";
   var MATE_CP = 10000;
   var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  // The first two full moves are opening book — Maia-2 equity there is noise that
+  // swings wildly for no real reason, so we don't show it (cp bar stays; it's fine).
+  // Plies: 0 = start, 1..4 = White/Black move 1 and 2. Equity shows from move 3 (ply 5).
+  var BOOK_PLIES = 4;
+  function inBook(p) { return p <= BOOK_PLIES; }
 
   var state = {
     line: [{ fen: START, san: "(start)", last: null, resp: null }],
@@ -80,8 +85,12 @@
     var eq = [], cp = [], dots = [];
     state.line.forEach(function (nd, i) {
       if (!hasFresh(nd)) return;
-      var e = nd.resp.equity_white, c = cpToWhite(nd.resp.cp) * 100;
-      eq.push(xFor(i) + "," + yFor(e)); cp.push(xFor(i) + "," + yFor(c));
+      var c = cpToWhite(nd.resp.cp) * 100;
+      cp.push(xFor(i) + "," + yFor(c));
+      // skip equity inside the opening book — it's noise we don't plot
+      if (inBook(i)) return;
+      var e = nd.resp.equity_white;
+      eq.push(xFor(i) + "," + yFor(e));
       dots.push({ i: i, x: xFor(i), y: yFor(e), e: e, c: c, san: nd.san });
     });
     svg.innerHTML = "";
@@ -139,14 +148,17 @@
       return;
     }
     var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
-    eqFill.style.width = eq + "%";
-    $("equity-readout").textContent = Math.round(eq) + "% White";
+    var book = inBook(state.ply);
+    // Opening book: equity is meaningless this early, so park the bar at even and say "Book".
+    eqFill.style.width = (book ? 50 : eq) + "%";
+    $("equity-readout").textContent = book ? "Book" : Math.round(eq) + "% White";
+    $("equity-readout").classList.toggle("book", book);
     cpFill.style.width = cpW + "%";
     $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
       ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
     $("best").textContent = r.best_san ? "Stockfish prefers " + r.best_san : "";
     var gap = eq - cpW, div = $("divergence");
-    if (!r.game_over && Math.abs(gap) >= 15) {
+    if (!book && !r.game_over && Math.abs(gap) >= 15) {
       div.hidden = false;
       div.textContent = "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
         Math.round(Math.abs(gap)) + " pts over the centipawn bar — at these ratings the " +
