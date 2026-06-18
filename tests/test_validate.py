@@ -494,9 +494,34 @@ def test_format_report_includes_head_to_head_section():
     md = format_report(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
     assert "## Head-to-head: where equity wins" in md
     assert "Δ > 0 means equity wins" in md
+    # The worst-case slice verdict is surfaced inline (task 0121).
+    assert "**Worst slice:**" in md
+    assert "Equity wins on" in md
     # Single-predictor reports omit the section.
     solo = format_report(evaluate(rows, {"baseline": baseline_cp}))
     assert "Head-to-head" not in solo
+
+
+def test_worst_slice_verdict_names_worst_and_counts_wins():
+    from chess_equity.validate.harness import head_to_head_deltas, worst_slice_verdict
+
+    # An oracle model wins every slice, so the worst slice is still an equity win and the
+    # count is M/M.
+    rows = [
+        _row(cp=0, we=1000, be=1000, phase="opening", result=1.0),
+        _row(cp=0, we=2500, be=2500, phase="endgame", result=0.0),
+    ]
+    h2h = head_to_head_deltas(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
+    assert h2h is not None
+    line = worst_slice_verdict(h2h)
+    # Names the worst slice (the last, lowest-Δ entry) and reports wins/total.
+    worst = h2h.slices[-1]
+    assert f"`{worst.slicer}` `{worst.value}`" in line
+    assert f"Δ={worst.delta:+.4f}" in line
+    total = len(h2h.slices)
+    assert f"Equity wins on {total}/{total} slices." in line
+    # All Δ > 0 here, so the verdict says equity still wins everywhere.
+    assert "equity still wins every slice" in line
 
 
 def test_head_to_head_on_committed_sample():
