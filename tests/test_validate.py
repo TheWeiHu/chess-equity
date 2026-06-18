@@ -276,6 +276,40 @@ def test_format_verdict_renders_ci_and_significance_criterion():
     assert "-> **PASS**" in plain
 
 
+def test_format_verdict_shows_percent_reduction_for_passing_predictor():
+    # The headline effect size (task 0133): a passing predictor's line states the percent
+    # reduction in log-loss (and Brier) vs the baseline, computed from the absolute deltas.
+    from chess_equity.validate.harness import format_verdict
+
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731 — perfect predictor PASSES
+    reports = evaluate(rows, {"baseline": baseline_cp, "oracle": oracle})
+    by_name = {r.name: r for r in reports}
+
+    v = gate_verdicts(reports)[0]
+    assert v.passed is True
+    # Expected reduction = (baseline - model) / baseline * 100, on the overall scores.
+    bl = by_name["baseline"].overall
+    ml = by_name["oracle"].overall
+    exp_ll = (bl.log_loss - ml.log_loss) / bl.log_loss * 100.0
+    exp_br = (bl.brier - ml.brier) / bl.brier * 100.0
+
+    block = "\n".join(format_verdict(gate_verdicts(reports)))
+    assert f"cuts log-loss {exp_ll:.1f}% (Brier {exp_br:.1f}%) vs baseline" in block
+
+
+def test_format_verdict_omits_percent_reduction_for_failing_predictor():
+    # A failing predictor gets no "cuts log-loss …%" headline — the number would be
+    # negative/misleading, so it's reserved for predictors that actually win.
+    from chess_equity.validate.harness import format_verdict
+
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0)]
+    worse = lambda r: 1.0 - baseline_cp(r)  # noqa: E731 — strictly worse than baseline
+    block = "\n".join(format_verdict(gate_verdicts(evaluate(rows, {"baseline": baseline_cp, "worse": worse}))))
+    assert "-> **FAIL**" in block
+    assert "cuts log-loss" not in block
+
+
 def test_gate_cli_significance_flips_sample_to_fail(tmp_path, capsys):
     # End-to-end: with --bootstrap > 0 the --gate exit code is significance-aware, so the
     # marginal 15-row sample win (point-better, CI straddles zero) exits 2, not 0.

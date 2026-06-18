@@ -530,6 +530,10 @@ class Verdict:
     then requires *both* a point win on log-loss and Brier **and** ``significant`` being
     true. ``headline_ci`` is the delta CI that drove the significance call, kept for the
     report to render inline.
+
+    ``baseline_log_loss`` / ``baseline_brier`` are the baseline's overall scores, kept so
+    the report can express each delta as a percent reduction relative to the baseline
+    (task 0133) — the one human-legible number that sells the thesis.
     """
 
     name: str
@@ -539,6 +543,8 @@ class Verdict:
     significant: Optional[bool] = None
     headline_metric: Optional[str] = None
     headline_ci: Optional[DeltaCI] = None
+    baseline_log_loss: Optional[float] = None
+    baseline_brier: Optional[float] = None
 
 
 def gate_verdicts(
@@ -595,13 +601,33 @@ def gate_verdicts(
                 significant=significant,
                 headline_metric=headline_metric if comparisons is not None else None,
                 headline_ci=headline_ci,
+                baseline_log_loss=baseline.overall.log_loss,
+                baseline_brier=baseline.overall.brier,
             )
         )
     return verdicts
 
 
+def _percent_reduction(delta: Optional[float], baseline: Optional[float]) -> Optional[float]:
+    """Percent reduction of a (model − baseline) ``delta`` relative to ``baseline``.
+
+    A *negative* delta is an improvement (lower log-loss/Brier is better), so the
+    reduction is ``-delta / baseline * 100`` — positive when the model beats the baseline.
+    Returns ``None`` if either value is missing or the baseline is non-positive (no
+    meaningful percentage to report).
+    """
+    if delta is None or baseline is None or baseline <= 0:
+        return None
+    return -delta / baseline * 100.0
+
+
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
-    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069)."""
+    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069).
+
+    For each *passing* predictor, the line also states the percent reduction in log-loss
+    (and Brier) relative to the baseline (task 0133) — the human-legible "equity cuts
+    log-loss by X%" headline that sells the thesis, alongside the absolute deltas + CI.
+    """
     out: List[str] = ["## Gate verdict", ""]
     if not verdicts:
         out.append(
@@ -641,6 +667,12 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
             # Gated run but no CI for this predictor — surface the missing evidence.
             line += f"; {v.headline_metric} CI unavailable"
         line += f" -> **{status}**"
+        if v.passed:
+            # The thesis-selling headline: how much does equity cut the loss, in percent?
+            ll_pct = _percent_reduction(v.log_loss_delta, v.baseline_log_loss)
+            br_pct = _percent_reduction(v.brier_delta, v.baseline_brier)
+            if ll_pct is not None and br_pct is not None:
+                line += f" — cuts log-loss {ll_pct:.1f}% (Brier {br_pct:.1f}%) vs {baseline_name}"
         out.append(line)
     out.append("")
     return out
