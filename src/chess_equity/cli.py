@@ -367,7 +367,28 @@ def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
     return 0
 
 
+def _run_data_stamp(args: argparse.Namespace) -> int:
+    """Backfill the source-month sidecar on an already-built dataset (task 0127)."""
+    from pathlib import Path
+
+    from chess_equity.data.source_month import write_source_month
+
+    if not Path(args.path).exists():
+        print(f"error: dataset not found: {args.path}", file=sys.stderr)
+        return 1
+    try:
+        side = write_source_month(args.path, args.month)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"stamped {args.month} -> {side}")
+    return 0
+
+
 def _run_data(args: argparse.Namespace) -> int:
+    if args.data_command == "stamp":
+        return _run_data_stamp(args)
+
     # Imported lazily so the common ``eval`` path never pays for the data deps.
     from chess_equity.data.build import build_dataset, month_url
 
@@ -425,6 +446,9 @@ def _run_data(args: argparse.Namespace) -> int:
             fmt=args.format,
             include_fen=args.with_fen,
             partition=args.partition,
+            # Stamp the source month when the dump came from --month, so the leakage
+            # guard can read it back from the sidecar (task 0127).
+            source_month=args.month,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -463,9 +487,19 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    # The dataset's own source month, read from its sidecar (task 0127): the recorded
+    # truth of which Lichess month --data was drawn from. It is what the leakage guard
+    # uses to default --eval-month (so the operator can't silently get it wrong), and is
+    # surfaced in the report title.
+    from chess_equity.data.source_month import read_source_month
+
+    data_month = read_source_month(args.data)
+
     # Leakage guard (task 0112): if the eval dataset's source month is a model's own
-    # training month, its scores are memorization, not held-out evidence. The month is
-    # declared via --eval-month or inferred from the dataset path; --strict refuses.
+    # training month, its scores are memorization, not held-out evidence. Eval-month
+    # precedence: explicit --eval-month, else the dataset's stamped source month (task
+    # 0127), else inferred from the dataset path; --strict refuses. Resolved once so the
+    # detection and the report's warning block agree.
     from chess_equity.validate.leakage import (
         detect_leakage,
         format_leakage_warning,
@@ -474,7 +508,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         model_fit_months,
     )
 
-    eval_month = getattr(args, "eval_month", None) or infer_month_from_path(args.data)
+    eval_month = (
+        getattr(args, "eval_month", None)
+        or data_month
+        or infer_month_from_path(args.data)
+    )
     leaks = detect_leakage(eval_month, model_fit_months(requested))
     if leaks:
         print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)
@@ -487,6 +525,9 @@ def _run_validate(args: argparse.Namespace) -> int:
             return 2
 
     title = f"Validation report — {args.data}"
+    if data_month:
+        title += f" (data month: {data_month})"
+
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
 
@@ -1049,6 +1090,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="cache dir for downloaded --month dumps (default: ~/.cache/chess-equity/dumps)",
     )
+
+    stamp = data_sub.add_parser(
+        "stamp",
+        help="backfill the source-month sidecar on an existing dataset (task 0127)",
+    )
+    stamp.add_argument("path", help="path to a built dataset (csv/parquet file or partitioned dir)")
+    stamp.add_argument("month", help="the YYYY-MM Lichess month the dataset was drawn from")
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
     # The underpowered-sample floor's default (task 0132) — imported here so the help text
