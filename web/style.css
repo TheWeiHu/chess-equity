@@ -68,12 +68,12 @@ body {
 }
 .game-picker select:hover { border-color: var(--accent); }
 .game-picker label { white-space: nowrap; font-size: .86rem; }
-.game-picker #new, .game-picker #paste-pgn {
+.game-picker #new, .game-picker #paste-pgn, .game-picker #setup-fen {
   white-space: nowrap; font: inherit; font-weight: 600; color: var(--ink);
   background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
   padding: .42rem .7rem; cursor: pointer;
 }
-.game-picker #new:hover, .game-picker #paste-pgn:hover { background: #eef1f5; border-color: var(--accent); }
+.game-picker #new:hover, .game-picker #paste-pgn:hover, .game-picker #setup-fen:hover { background: #eef1f5; border-color: var(--accent); }
 
 /* ---- one-screen layout: board + rail (equal height) fill the viewport; the
    win%-over-time chart is pinned beneath them and always visible (no scroll) ---- */
@@ -342,12 +342,12 @@ input[type=range]::-moz-range-thumb {
 .modal-head { font-weight: 700; font-size: 1.15rem; letter-spacing: -.01em; }
 .modal-sub { margin: .3rem 0 .8rem; color: var(--muted); font-size: .88rem; line-height: 1.45; }
 .modal-sub code { background: var(--accent-soft); color: #1f6b49; padding: .05rem .3rem; border-radius: 4px; font-size: .85em; }
-#pgn-text {
+#pgn-text, #fen-text {
   width: 100%; resize: vertical; font: .9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
   padding: .7rem .8rem;
 }
-#pgn-text:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+#pgn-text:focus, #fen-text:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .pgn-error { margin: .6rem 0 0; color: var(--bad); font-size: .86rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1rem; }
 .modal-actions button {

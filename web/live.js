@@ -447,6 +447,39 @@
   }
   function pgnErr(msg) { var e = $("pgn-error"); e.textContent = msg; e.hidden = false; }
 
+  // ---- set-up-from-FEN dialog ----------------------------------------------
+  // Start free play from an ARBITRARY position. `/api/play` with a bare FEN (no uci)
+  // validates it and returns the legal map + both bars, so the browser still needs no
+  // chess rules — the server is the source of legality, same as a played move.
+  function openFen() {
+    $("fen-error").hidden = true;
+    $("fen-modal").hidden = false;
+    var t = $("fen-text"); t.focus(); t.select();
+  }
+  function closeFen() { $("fen-modal").hidden = true; }
+  function loadFen() {
+    var text = $("fen-text").value.trim();
+    if (!text) { fenErr("Paste a FEN string first."); return; }
+    var btn = $("fen-load"); btn.disabled = true;
+    postPlay({ fen: text }, function (j, ok) {
+      btn.disabled = false;
+      if (!ok) { fenErr(j.error || "Could not read that FEN."); return; }
+      $("game-select").value = "";    // a custom position isn't a library entry
+      closeFen();
+      setPosition(j);
+    });
+  }
+  function fenErr(msg) { var e = $("fen-error"); e.textContent = msg; e.hidden = false; }
+
+  // A single analysed position becomes a fresh one-node line — free play from here on,
+  // exactly like "New game" but from a position you chose.
+  function setPosition(j) {
+    j._we = state.we; j._be = state.be;
+    state.line = [{ fen: j.fen, san: "(start)", last: null, resp: j }];
+    state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
+    goPly(0); startFill();
+  }
+
   function postGet(url, cb) {
     fetch(url).then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
       .then(function (rj) { cb(rj[1], rj[0]); })
@@ -465,10 +498,14 @@
     $("pgn-cancel").addEventListener("click", closePgn);
     $("pgn-load").addEventListener("click", loadPgn);
     $("pgn-modal").addEventListener("click", function (e) { if (e.target === $("pgn-modal")) closePgn(); });
+    $("setup-fen").addEventListener("click", openFen);
+    $("fen-cancel").addEventListener("click", closeFen);
+    $("fen-load").addEventListener("click", loadFen);
+    $("fen-modal").addEventListener("click", function (e) { if (e.target === $("fen-modal")) closeFen(); });
     document.addEventListener("keydown", function (e) {
-      var pgnOpen = !$("pgn-modal").hidden;
-      if (e.key === "Escape" && pgnOpen) { closePgn(); return; }
-      if (pgnOpen) return;   // don't scrub the board while typing PGN
+      var pgnOpen = !$("pgn-modal").hidden, fenOpen = !$("fen-modal").hidden;
+      if (e.key === "Escape" && (pgnOpen || fenOpen)) { closePgn(); closeFen(); return; }
+      if (pgnOpen || fenOpen) return;   // don't scrub the board while a modal is open
       if (e.key === "ArrowLeft") goPly(state.ply - 1);
       else if (e.key === "ArrowRight") goPly(state.ply + 1);
       else if (e.key === "Home") goPly(0);
@@ -525,7 +562,7 @@
   // /api/play calls (task 0123). Not used by the page itself.
   window.ChessEquityLive = {
     state: state, goPly: goPly, setGame: setGame, ensureEval: ensureEval,
-    startFill: startFill, hasFresh: hasFresh, moveTicks: moveTicks,
+    setPosition: setPosition, hasFresh: hasFresh, startFill: startFill, moveTicks: moveTicks,
     // one rating-slider drag tick: re-score the current ply only (no full re-chart)
     ratingInput: function (we, be) { state.we = we; state.be = be; ensureEval(state.ply); },
     // the drag settling (change event): re-chart the whole game once
