@@ -76,36 +76,39 @@
 
   function renderChart() {
     var svg = $("chart"); if (!svg) return;
-    var n = state.line.length, W = 480, H = 150, padX = 12, padY = 12;
+    var n = state.line.length, W = 480, H = 150, padX = 10, padY = 12;
     var innerW = W - 2 * padX, innerH = H - 2 * padY;
-    var mid = padY + innerH / 2;                       // the 50% (even) line
+    var mid = padY + innerH / 2;                       // the 50/50 line — bars diverge here
     function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }
-    function yFor(p) { return padY + (1 - p / 100) * innerH; }   // p in 0..100 → pixel
-    // two thin bars per ply, diverging from the midline: up = White ahead, down = Black.
+    function yFor(v) { return padY + (1 - v / 100) * innerH; }   // White win% → pixel
     var slot = n <= 1 ? innerW : innerW / (n - 1);
-    var bw = Math.max(1, Math.min(7, slot * 0.38));
+    // each MOVE is a tight pair: equity (green) just left of centre, centipawn (grey) just
+    // right — beside each other, with a clear gap to the next move's pair.
+    var bw = Math.max(1.4, Math.min(6, slot * 0.32)), gap = Math.max(0.6, bw * 0.3);
     svg.innerHTML = "";
-    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
-    function bar(x, v, cls) {
+    // a soft highlighted box behind the CURRENT move's pair — the clean "you are here"
+    var hx = xFor(state.ply), boxW = Math.max(bw * 2 + gap + 5, slot * 0.74);
+    svg.appendChild(svgEl("rect", { x: hx - boxW / 2, y: padY - 2, width: boxW, height: innerH + 4, rx: 3, class: "chart-now" }));
+    // bars emanate UP (White ahead) or DOWN (Black ahead) from the 50/50 line
+    function bar(x, v, cls) {                          // v in 0..100 (White win%)
       var y = yFor(v), top = Math.min(mid, y), h = Math.max(1, Math.abs(mid - y));
-      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.5, bw / 2), class: cls }));
+      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.2, bw / 2), class: cls }));
     }
     state.line.forEach(function (nd, i) {
       if (!hasFresh(nd)) return;
       var cx = xFor(i);
-      var cpv = cpToWhite(nd.resp.cp) * 100;
-      bar(cx + 0.4, cpv, "bar-cp");                    // centipawn (grey), right of centre
-      if (!inBook(i)) bar(cx - bw - 0.4, nd.resp.equity_white, "bar-eq");  // equity (green), left
+      if (!inBook(i)) bar(cx - bw - gap / 2, nd.resp.equity_white, "bar-eq");  // Maia equity
+      bar(cx + gap / 2, cpToWhite(nd.resp.cp) * 100, "bar-cp");                // Stockfish
     });
-    // cursor + generous transparent click target for the current/any ply
-    var cur = xFor(state.ply);
-    svg.appendChild(svgEl("line", { x1: cur, y1: padY, x2: cur, y2: H - padY, class: "chart-cursor" }));
+    // the 50/50 line, drawn ON TOP so it reads as a clear axis the pairs hang off
+    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
+    // generous transparent click target + tooltip per move
     state.line.forEach(function (nd, i) {
       var hit = svgEl("rect", { x: xFor(i) - slot / 2, y: padY, width: Math.max(slot, 2), height: innerH, fill: "transparent", style: "cursor:pointer" });
       var t = svgEl("title", {});
       var cpv = hasFresh(nd) ? Math.round(cpToWhite(nd.resp.cp) * 100) : "…";
       var eqv = hasFresh(nd) && !inBook(i) ? Math.round(nd.resp.equity_white) + "%" : (inBook(i) ? "book" : "…");
-      t.textContent = (i === 0 ? "start" : nd.san) + " — equity " + eqv + " · centipawn " + cpv + "%";
+      t.textContent = (i === 0 ? "start" : nd.san) + " — Maia " + eqv + " · Stockfish " + cpv + "%";
       hit.appendChild(t);
       hit.addEventListener("click", function () { goPly(i); });
       svg.appendChild(hit);
@@ -142,11 +145,26 @@
     $("scrub").value = state.ply;
   }
 
+  // The grouped-scores card heading: which position the two bars are reading.
+  function headText() {
+    if (state.ply === 0) return "Starting position";
+    var s = node().san;
+    return s ? "After " + s : "Move " + state.ply;
+  }
+  // Fill the "why the bars differ" card. It is always populated (never an empty box):
+  // the green "differ" state when the two reads disagree, a muted state otherwise.
+  function setDiff(kind, text) {
+    var div = $("divergence");
+    div.className = "divergence" + (kind === "differ" ? "" : " agree");
+    div.textContent = text;
+  }
+
   function renderBars() {
+    var sh = $("scores-head"); if (sh) sh.textContent = headText();
     var r = node().resp;
     if (!r) {
       $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
-      $("divergence").hidden = true;
+      setDiff("agree", "Evaluating this position…");
       return;
     }
     var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
@@ -158,13 +176,19 @@
     $("cp-fill").style.width = cpW + "%";
     $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
       ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
-    var gap = eq - cpW, div = $("divergence");
-    if (!book && !r.game_over && Math.abs(gap) >= 15) {
-      div.hidden = false;
-      div.textContent = "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
+    var gap = eq - cpW;
+    if (book) {
+      setDiff("agree", "Opening book — equity stays parked until the position leaves theory.");
+    } else if (r.game_over) {
+      setDiff("agree", "The game is decided here.");
+    } else if (Math.abs(gap) >= 15) {
+      setDiff("differ", "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
         Math.round(Math.abs(gap)) + " pts over the centipawn bar — at these ratings the " +
-        "realistic result differs from perfect play.";
-    } else { div.hidden = true; }
+        "realistic result differs from perfect play.");
+    } else {
+      setDiff("agree", "Equity and the engine agree here — the rating-conditioned read " +
+        "tracks near-perfect play.");
+    }
   }
 
   function renderStatus() {
@@ -326,10 +350,12 @@
     var old = frame.querySelector(".promo"); if (old) old.remove();
     var menu = document.createElement("div");
     menu.className = "promo";
-    [["q", "♛"], ["r", "♜"], ["b", "♝"], ["n", "♞"]].forEach(function (p) {
+    ["q", "r", "b", "n"].forEach(function (p) {
       var b = document.createElement("button");
-      b.textContent = p[1];
-      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p[0]); });
+      // same clean glyph set as the board, so the picker matches the experience
+      b.innerHTML = '<span class="piece black">' + window.ChessBoard.glyph(p) + '</span>';
+      b.setAttribute("aria-label", { q: "queen", r: "rook", b: "bishop", n: "knight" }[p]);
+      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p); });
       menu.appendChild(b);
     });
     frame.appendChild(menu);
@@ -344,19 +370,52 @@
     goPly(0); startFill();
   }
 
+  // Load a {name, white, black, year, moves:[{fen,san,uci}]} game into the board —
+  // shared by the famous-game library (/api/game) and pasted PGN (/api/pgn).
+  function setGame(g) {
+    state.line = g.moves.map(function (m) {
+      return { fen: m.fen, san: m.san, resp: null,
+        last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
+    });
+    state.branched = false;
+    state.ply = 0; state.sel = null;
+    state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
+    goPly(0); startFill();
+  }
+
   function loadGame(id) {
     postGet("/api/game?id=" + encodeURIComponent(id), function (g, ok) {
       if (!ok) { showErr(g.error || "could not load game"); return; }
-      state.line = g.moves.map(function (m) {
-        return { fen: m.fen, san: m.san, resp: null,
-          last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
-      });
-      state.branched = false;
-      state.ply = 0; state.sel = null;
-      state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
-      goPly(0); startFill();
+      setGame(g);
     });
   }
+
+  // ---- paste-PGN dialog -----------------------------------------------------
+  function openPgn() {
+    $("pgn-error").hidden = true;
+    $("pgn-modal").hidden = false;
+    var t = $("pgn-text"); t.focus(); t.select();
+  }
+  function closePgn() { $("pgn-modal").hidden = true; }
+  function loadPgn() {
+    var text = $("pgn-text").value.trim();
+    if (!text) { pgnErr("Paste some PGN movetext first."); return; }
+    var btn = $("pgn-load"); btn.disabled = true;
+    fetch("/api/pgn", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pgn: text })
+    })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) {
+        btn.disabled = false;
+        if (!rj[0]) { pgnErr(rj[1].error || "Could not parse that PGN."); return; }
+        $("game-select").value = "";    // a pasted game isn't a library entry
+        closePgn();
+        setGame(rj[1]);
+      })
+      .catch(function (e) { btn.disabled = false; pgnErr(String(e)); });
+  }
+  function pgnErr(msg) { var e = $("pgn-error"); e.textContent = msg; e.hidden = false; }
 
   function postGet(url, cb) {
     fetch(url).then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
@@ -372,7 +431,14 @@
     $("flip").addEventListener("click", function () { state.flipped = !state.flipped; render(); });
     $("scrub").addEventListener("input", function (e) { goPly(parseInt(e.target.value, 10)); });
     $("new").addEventListener("click", newGame);
+    $("paste-pgn").addEventListener("click", openPgn);
+    $("pgn-cancel").addEventListener("click", closePgn);
+    $("pgn-load").addEventListener("click", loadPgn);
+    $("pgn-modal").addEventListener("click", function (e) { if (e.target === $("pgn-modal")) closePgn(); });
     document.addEventListener("keydown", function (e) {
+      var pgnOpen = !$("pgn-modal").hidden;
+      if (e.key === "Escape" && pgnOpen) { closePgn(); return; }
+      if (pgnOpen) return;   // don't scrub the board while typing PGN
       if (e.key === "ArrowLeft") goPly(state.ply - 1);
       else if (e.key === "ArrowRight") goPly(state.ply + 1);
       else if (e.key === "Home") goPly(0);

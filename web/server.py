@@ -159,21 +159,59 @@ FAMOUS_BY_ID = {g["id"]: g for g in FAMOUS}
 _MOVES_CACHE: dict = {}
 
 
+def _moves_from_game(parsed) -> list:
+    """A parsed python-chess game → [{ply, san, uci, fen}] along its MAINLINE.
+
+    Only the mainline is walked, so PGN side-variations (the ``(14... Kf8 …)`` lines a
+    pasted game may contain) are ignored — the board steps through the game as played.
+    """
+    board = parsed.board()                      # respects a [FEN] setup header if present
+    out = [{"ply": 0, "san": "(start)", "uci": None, "fen": board.fen()}]
+    for i, mv in enumerate(parsed.mainline_moves(), 1):
+        san = board.san(mv)
+        board.push(mv)
+        out.append({"ply": i, "san": san, "uci": mv.uci(), "fen": board.fen()})
+    return out
+
+
 def game_moves(g: dict) -> list:
     """Parse a famous game's PGN into [{ply, san, uci, fen}] (start + one per ply)."""
     if g["id"] in _MOVES_CACHE:
         return _MOVES_CACHE[g["id"]]
     import chess.pgn
 
-    parsed = chess.pgn.read_game(io.StringIO(g["pgn"]))
-    board = parsed.board()
-    out = [{"ply": 0, "san": "(start)", "uci": None, "fen": board.fen()}]
-    for i, mv in enumerate(parsed.mainline_moves(), 1):
-        san = board.san(mv)
-        board.push(mv)
-        out.append({"ply": i, "san": san, "uci": mv.uci(), "fen": board.fen()})
+    out = _moves_from_game(chess.pgn.read_game(io.StringIO(g["pgn"])))
     _MOVES_CACHE[g["id"]] = out
     return out
+
+
+def parse_pgn(text: str) -> dict:
+    """Turn pasted PGN text into the same shape ``/api/game`` returns (name + moves).
+
+    Accepts headerless movetext (``1. e4 c5 …``) or a full PGN with tags. Variations are
+    dropped (mainline only). Raises ``ValueError`` on unparseable input or a game with no
+    moves, which the POST handler surfaces as a 400.
+    """
+    import chess.pgn
+
+    parsed = chess.pgn.read_game(io.StringIO((text or "").strip()))
+    if parsed is None:
+        raise ValueError("could not parse PGN — paste movetext like '1. e4 c5 2. Nf3 …'")
+    moves = _moves_from_game(parsed)
+    if len(moves) <= 1:
+        raise ValueError("no legal moves found in that PGN")
+
+    h = parsed.headers
+
+    def _tag(key):
+        v = (h.get(key) or "").strip()
+        return v if v and v != "?" else None
+
+    white, black = _tag("White"), _tag("Black")
+    name = _tag("Event") or (f"{white} vs {black}" if white and black else "Pasted game")
+    date = h.get("Date") or ""
+    year = int(date[:4]) if date[:4].isdigit() else None
+    return {"name": name, "white": white, "black": black, "year": year, "moves": moves}
 
 
 class App(SimpleHTTPRequestHandler):
@@ -219,17 +257,26 @@ class App(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path.rstrip("/") != "/api/play":
-            self._send_json({"error": "not found"}, 404)
+        path = self.path.rstrip("/")
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) or b"{}"
+        if path == "/api/play":
+            try:
+                self._send_json(play(json.loads(raw)))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 400)
+            except Exception as exc:  # surface engine/model failures cleanly
+                self._send_json({"error": f"{type(exc).__name__}: {exc}"}, 500)
             return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            self._send_json(play(payload))
-        except ValueError as exc:
-            self._send_json({"error": str(exc)}, 400)
-        except Exception as exc:  # surface engine/model failures cleanly
-            self._send_json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        if path == "/api/pgn":
+            try:
+                self._send_json(parse_pgn(json.loads(raw).get("pgn", "")))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._send_json({"error": f"{type(exc).__name__}: {exc}"}, 400)
+            return
+        self._send_json({"error": "not found"}, 404)
 
 
 def main() -> int:

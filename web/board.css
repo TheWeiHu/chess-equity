@@ -43,20 +43,36 @@
   background: radial-gradient(circle, rgba(196, 74, 61, .85) 0%, rgba(196, 74, 61, 0) 72%);
 }
 
-/* pieces: clean two-tone silhouettes — white = light fill + a thin dark edge, black =
- * solid dark fill. A light hairline stroke (not the old fat 1.6px one) keeps them crisp
- * and readable on the green board without the heavy, ornate look. */
+/* pieces: clean Unicode glyphs (board.js) — White uses the outline glyph filled light
+ * with a soft dark edge (text-shadow, not a heavy text-stroke), Black uses the solid
+ * glyph in near-black. High-contrast and crisp on the green board at any size. */
 .sq .piece {
+  --pf: 1;                              /* per-glyph size normaliser */
   position: relative;
-  font-size: clamp(16px, 6vw, 44px);   /* fallback for browsers without container units */
-  font-size: 70cqi;
+  font-size: clamp(16px, 6vw, 46px);   /* fallback for browsers without container units */
+  font-size: calc(82cqi * var(--pf));
   line-height: 1;
   z-index: 1;
   user-select: none;
-  filter: drop-shadow(0 1px 0.5px rgba(0, 0, 0, .16));
 }
-.sq .piece.white { color: #fbfbf8; -webkit-text-stroke: 0.7px #41434b; text-stroke: 0.7px #41434b; }
-.sq .piece.black { color: #2a2d35; -webkit-text-stroke: 0.4px #14161b; text-stroke: 0.4px #14161b; }
+/* The OS symbol font draws the six chess glyphs at uneven sizes, and differently per
+   platform (the king is small in headless Chromium, big on macOS). board.js measures the
+   actual glyphs at runtime and sets --pf-<type> so they all render the same height here.
+   Default 1 = natural size if measurement is unavailable. */
+.sq .piece.t-k { --pf: var(--pf-k, 1); }
+.sq .piece.t-q { --pf: var(--pf-q, 1); }
+.sq .piece.t-r { --pf: var(--pf-r, 1); }
+.sq .piece.t-b { --pf: var(--pf-b, 1); }
+.sq .piece.t-n { --pf: var(--pf-n, 1); }
+.sq .piece.t-p { --pf: var(--pf-p, 1); }
+.sq .piece.white {
+  color: #f6f7f3;
+  text-shadow: 0 0 1.4px #3a3d45, 0 0 1.4px #3a3d45, 0 1px 1.2px rgba(0, 0, 0, .28);
+}
+.sq .piece.black {
+  color: #2a2d35;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, .18);
+}
 
 /* edge coordinate labels */
 .sq .coord { position: absolute; font-size: 11px; font-weight: 700; opacity: .6; z-index: 2; }

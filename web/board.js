@@ -8,8 +8,51 @@
 (function () {
   "use strict";
 
+  // Clean Unicode chess glyphs: the SOLID set (U+265A-F) for BOTH colours so White and
+  // Black pieces are the exact same glyph (and thus the same size — the outline U+2654-9
+  // set has different metrics and rendered a size apart). CSS (.piece.white/.black in
+  // board.css) fills White light with a soft dark edge and Black solid dark.
   var PIECES = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟",
                  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+  // The glyph for any type — used by the promotion picker (rendered dark).
+  function glyph(type) { return PIECES[type.toLowerCase()]; }
+
+  // Per-glyph size normaliser. The OS symbol font draws the six chess glyphs at uneven
+  // sizes, and the sizes differ by platform (king small in headless Chromium, big on
+  // macOS) — so a hard-coded fix is wrong somewhere. Instead measure the actual glyphs in
+  // the browser's real font and emit --pf-<type> CSS vars that scale each to the median
+  // height, so all six render the same size on every machine.
+  function normalizePieceSizes() {
+    function run() {
+      try {
+        var fam = getComputedStyle(document.body).fontFamily || "sans-serif";
+        var ctx = document.createElement("canvas").getContext("2d");
+        ctx.font = "200px " + fam;
+        var types = ["k", "q", "r", "b", "n", "p"], h = {}, hs = [];
+        types.forEach(function (t) {
+          var m = ctx.measureText(PIECES[t]);
+          h[t] = (m.actualBoundingBoxAscent || 0) + (m.actualBoundingBoxDescent || 0);
+          if (h[t] > 0) hs.push(h[t]);
+        });
+        if (hs.length < 4) return;                       // measurement unavailable
+        hs.sort(function (a, b) { return a - b; });
+        var med = hs[hs.length >> 1];
+        var css = ":root{";
+        types.forEach(function (t) {
+          var f = h[t] > 0 ? med / h[t] : 1;
+          f = Math.max(0.78, Math.min(1.28, f));         // clamp so a weird font can't explode a glyph
+          css += "--pf-" + t + ":" + f.toFixed(3) + ";";
+        });
+        css += "}";
+        var s = document.getElementById("piece-scale") || document.createElement("style");
+        s.id = "piece-scale"; s.textContent = css;
+        if (!s.parentNode) document.head.appendChild(s);
+      } catch (e) { /* leave glyphs at their natural size */ }
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(run); else run();
+  }
+  normalizePieceSizes();
+
   var FILES = "abcdefgh";
 
   // Parse a FEN's placement field into an 8x8 grid (row 0 == rank 8, col 0 == file a).
@@ -71,7 +114,9 @@
         if (dests[name]) { sq.classList.add("dest"); if (piece) sq.classList.add("capture"); }
         if (piece) {
           var span = document.createElement("span");
-          span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
+          // t-<type> lets CSS normalise per-glyph size (the font draws ♚/♞ a size off)
+          span.className = "piece t-" + piece.toLowerCase() +
+            " " + (piece === piece.toUpperCase() ? "white" : "black");
           span.textContent = PIECES[piece];
           if (opts.draggable && opts.draggable(name)) {
             span.draggable = true;
@@ -97,5 +142,5 @@
   function bind(fn, name) { return function (ev) { fn(name, ev); }; }
   function bindPrevent(fn, name) { return function (ev) { ev.preventDefault(); fn(name, ev); }; }
 
-  window.ChessBoard = { parseFen: parseFen, render: render, sqName: sqName, FILES: FILES };
+  window.ChessBoard = { parseFen: parseFen, render: render, sqName: sqName, FILES: FILES, glyph: glyph };
 })();
