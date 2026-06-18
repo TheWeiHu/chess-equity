@@ -12,17 +12,22 @@ from dataclasses import dataclass
 from math import exp
 from typing import Optional
 
-# Lichess's published rating-blind Win% logistic, fit on ~2300-rated games.
-# Win% = 50 + 50 * (2 / (1 + exp(-LICHESS_K * cp)) - 1)
-# This is the rating-BLIND baseline our whole thesis aims to beat (see task 0009).
+# Lichess's published rating-blind Win% logistic — the EXACT constant and formula
+# Lichess ships, not an approximation. ``Win% = 50 + 50 * (2 / (1 + exp(-LICHESS_K * cp)) - 1)``.
+# Source: lichess-org/lila, ``rawWinningChances`` (ui/ceval / modules/analyse): the
+# multiplier is ``-0.00368208`` applied to centipawns (equivalently ``-0.368208`` per
+# pawn), fit on ~2300-rated games. This is the rating-BLIND baseline the whole thesis
+# aims to beat (task 0009), so the gate's comparator is the real Lichess curve, not a
+# strawman; the pinned anchors in test_types lock this constant in place.
 LICHESS_K = 0.00368208
 
 
 def lichess_win_percent(cp: float) -> float:
-    """Lichess's rating-blind win percentage for a centipawn eval, in [0, 100].
+    """Lichess's exact rating-blind win percentage for a centipawn eval, in [0, 100].
 
-    Rating-blind by construction — it ignores who is playing. We reproduce it as the
-    baseline to beat, not as the product. ``cp`` is from the side-to-move's POV.
+    The literal published Lichess logistic (constant :data:`LICHESS_K`), reproduced as
+    the baseline to beat — not as the product. Rating-blind by construction: it ignores
+    who is playing. ``cp`` is from the side-to-move's POV.
     """
     return 50.0 + 50.0 * (2.0 / (1.0 + exp(-LICHESS_K * cp)) - 1.0)
 

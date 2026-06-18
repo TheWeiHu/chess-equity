@@ -585,6 +585,11 @@ def format_report(reports: Sequence[PredictorReport], *, title: str = "Validatio
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
     out.append("**Lower is better** for all three (log-loss, Brier, ECE).")
+    out.append(
+        "The `baseline` is Lichess's **exact** published rating-blind cp→Win% logistic "
+        "(`50 + 50·(2/(1+exp(-0.00368208·cp))−1)`, lila `rawWinningChances`), so every "
+        "delta below is measured against the real curve the thesis must beat — not a strawman."
+    )
     out.append("")
     out.extend(format_verdict(gate_verdicts(reports)))
     out.append("## Overall")

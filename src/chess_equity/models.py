@@ -56,8 +56,11 @@ class MaterialEngine(ObjectiveEngine):
 def _wdl_from_cp(cp: float) -> WDL:
     """Map a centipawn eval to a placeholder WDL (side-to-move POV).
 
-    Draw mass is highest near equality and decays with |cp|; win/loss split so the
-    scalar equity matches Lichess's logistic. This is a stand-in shape, not a fit.
+    The SCALAR equity here is Lichess's exact published Win% (:func:`lichess_win_percent`),
+    not an approximation. Only the *decomposition* into win/draw/loss is a stand-in shape,
+    not a fit: draw mass is highest near equality and decays with |cp|, and win/loss are
+    split so the scalar equity is preserved. (The validation gate scores the scalar
+    directly, so its baseline is the real Lichess curve regardless of this draw split.)
     """
     equity = lichess_win_percent(cp) / 100.0  # P(win) + 0.5*P(draw), in [0, 1]
     p_draw = 0.5 * exp(-abs(cp) / 300.0)
