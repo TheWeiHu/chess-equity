@@ -573,11 +573,27 @@ def _run_validate(args: argparse.Namespace) -> int:
             report = report + "\n" + format_head_to_head_cis(h2h_ci)
 
     if args.out:
+        import json
         from pathlib import Path
 
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(report + "\n", encoding="utf-8")
+        from chess_equity.validate.harness import gate_verdict_payload
+
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report + "\n", encoding="utf-8")
         print(f"wrote {args.out}")
+        # Machine-readable mirror of the report's "## Gate verdict" block (task 0135): a
+        # sibling verdict.json so CI / a README badge / a dashboard can assert the proof
+        # without re-parsing markdown. Built from the same gate_verdicts call, so its `pass`
+        # agrees with the prose verdict and the --gate exit code. None = no challenger to
+        # gate, so no sibling is written (mirrors the --gate misuse exit code).
+        payload = gate_verdict_payload(
+            reports, baseline_name=baseline_name, comparisons=comparisons
+        )
+        if payload is not None:
+            verdict_path = out_path.with_name(out_path.stem + ".verdict.json")
+            verdict_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            print(f"wrote {verdict_path}")
     else:
         print(report)
 

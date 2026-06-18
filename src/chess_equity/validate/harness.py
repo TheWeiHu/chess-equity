@@ -676,6 +676,64 @@ def _percent_reduction(delta: Optional[float], baseline: Optional[float]) -> Opt
     return -delta / baseline * 100.0
 
 
+# Version tag on the verdict.json schema (task 0135) so a consumer (CI gate, README badge,
+# dashboard) can pin the shape it parses and fail loudly if the structure ever changes.
+GATE_VERDICT_SCHEMA = "chess-equity-gate/v1"
+
+
+def gate_verdict_payload(
+    reports: Sequence[PredictorReport],
+    *,
+    baseline_name: str = BASELINE_NAME,
+    comparisons: Optional[Sequence[BaselineComparison]] = None,
+    headline_metric: str = HEADLINE_METRIC,
+) -> Optional[dict]:
+    """The machine-readable mirror of the ``## Gate verdict`` markdown block (task 0135).
+
+    Builds a JSON-serializable dict from the *same* :func:`gate_verdicts` call the report
+    renders, so the structured ``pass`` agrees with the prose verdict and the ``--gate``
+    exit code by construction. Per predictor: ``pass`` / ``significant`` (``None`` when the
+    run carried no paired-bootstrap CIs) / ``log_loss_delta`` / ``brier_delta`` /
+    ``pct_improvement`` (log-loss reduction vs baseline, %) / ``n``. The top level adds the
+    overall ``pass`` (every challenger passed), the baseline name, the headline metric, and
+    whether the gate was significance-gated.
+
+    Returns ``None`` when there is no baseline + challenger to gate (nothing to assert) —
+    the caller then writes no sibling file, mirroring the misuse exit code.
+    """
+    verdicts = gate_verdicts(
+        reports,
+        baseline_name=baseline_name,
+        comparisons=comparisons,
+        headline_metric=headline_metric,
+    )
+    if not verdicts:
+        return None
+    baseline = {r.name: r for r in reports}[baseline_name]
+    by_name = {r.name: r for r in reports}
+    predictors = [
+        {
+            "name": v.name,
+            "pass": v.passed,
+            "significant": v.significant,
+            "log_loss_delta": v.log_loss_delta,
+            "brier_delta": v.brier_delta,
+            "pct_improvement": _percent_reduction(v.log_loss_delta, baseline.overall.log_loss),
+            "n": by_name[v.name].overall.n,
+        }
+        for v in verdicts
+    ]
+    return {
+        "schema": GATE_VERDICT_SCHEMA,
+        "baseline": baseline_name,
+        "headline_metric": headline_metric,
+        "significance_gated": comparisons is not None,
+        "n": baseline.overall.n,
+        "pass": all(v.passed for v in verdicts),
+        "predictors": predictors,
+    }
+
+
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
     """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069).
 
