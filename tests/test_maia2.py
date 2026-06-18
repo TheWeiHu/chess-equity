@@ -95,6 +95,39 @@ def test_equity_is_rating_conditioned():
     )
 
 
+def test_equity_white_is_monotone_in_both_ratings():
+    """Regression for task 0125: raising BLACK's rating must never raise WHITE's equity.
+
+    Wei saw the live demo's White win% go *up* as he dragged Black's rating slider up
+    — backwards (a stronger opponent should lower White's odds). The real cause was a
+    localized non-monotonicity of Maia-2's *static* value head at low rating buckets,
+    not a code bug: our adapter's elo->side mapping and the White-POV conversion are
+    correct (verified across positions). This test pins that mapping so a future
+    swapped-elo or inverted-POV regression — the bug class Wei feared — is caught.
+
+    With a well-behaved (monotone) backend, the White-POV equity must be:
+      * non-INCREASING as black_elo rises (stronger opponent for White), and
+      * non-DECREASING as white_elo rises (stronger White),
+    on a fixed position, for BOTH white-to-move and black-to-move FENs (the black-turn
+    case exercises the side-to-move <-> White-POV flip, where a sign slip would surface).
+    """
+    model = Maia2Equity(make_backend())
+    white_turn = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    black_turn = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"
+    elos = [1100, 1300, 1500, 1700, 1900, 2100, 2300]
+    for fen in (white_turn, black_turn):
+        # Sweep Black's rating up with White fixed: White equity must not rise.
+        sweep_black = [model.evaluate(fen, 1500, be).equity_white for be in elos]
+        assert sweep_black == sorted(sweep_black, reverse=True), (
+            f"equity_white rose as black_elo increased on {fen!r}: {sweep_black}"
+        )
+        # Sweep White's rating up with Black fixed: White equity must not fall.
+        sweep_white = [model.evaluate(fen, we, 1500).equity_white for we in elos]
+        assert sweep_white == sorted(sweep_white), (
+            f"equity_white fell as white_elo increased on {fen!r}: {sweep_white}"
+        )
+
+
 def test_equity_white_pov_in_range():
     model = Maia2Equity(make_backend())
     eq = model.evaluate(START, 1500, 1500)
