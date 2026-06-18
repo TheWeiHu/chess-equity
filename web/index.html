@@ -35,6 +35,7 @@
         <div class="game-picker">
           <label for="game-select">Load game</label>
           <select id="game-select" aria-label="load a famous game"></select>
+          <button id="paste-pgn" type="button">Paste PGN</button>
           <button id="new" type="button">New game</button>
         </div>
         <div class="board-frame">
@@ -103,6 +104,22 @@
            aria-label="White win-percent per move: a grouped Maia equity and Stockfish centipawn bar pair for each move"></svg>
     </figure>
   </main>
+
+  <!-- paste-PGN dialog (opened by the "Paste PGN" button) -->
+  <div id="pgn-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pgn-title">
+      <div class="modal-head" id="pgn-title">Load a game from PGN</div>
+      <p class="modal-sub">Paste movetext like <code>1. e4 c5 2. Nf3 …</code>. Header tags and
+        side-variations are fine — the board follows the main line.</p>
+      <textarea id="pgn-text" rows="7" spellcheck="false"
+                placeholder="1. e4 c5 2. Nf3 e6 3. d4 cxd4 4. Nxd4 d6 5. Nc3 Nf6 …"></textarea>
+      <p id="pgn-error" class="pgn-error" hidden></p>
+      <div class="modal-actions">
+        <button id="pgn-cancel" type="button">Cancel</button>
+        <button id="pgn-load" type="button" class="primary">Load game</button>
+      </div>
+    </div>
+  </div>
 
   <script src="board.js"></script>
   <script src="live.js"></script>

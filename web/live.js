@@ -76,23 +76,23 @@
 
   function renderChart() {
     var svg = $("chart"); if (!svg) return;
-    var n = state.line.length, W = 480, H = 150, padX = 10, padY = 10;
+    var n = state.line.length, W = 480, H = 150, padX = 10, padY = 12;
     var innerW = W - 2 * padX, innerH = H - 2 * padY;
-    var base = H - padY;                               // bars grow up from the bottom
-    var mid = padY + innerH / 2;                       // the 50% reference line
+    var mid = padY + innerH / 2;                       // the 50/50 line — bars diverge here
     function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }
+    function yFor(v) { return padY + (1 - v / 100) * innerH; }   // White win% → pixel
     var slot = n <= 1 ? innerW : innerW / (n - 1);
-    // each MOVE is a tight pair: equity (green) just left of centre, centipawn (grey)
-    // just right, with a clear gap to the next move's pair.
-    var bw = Math.max(1.2, Math.min(6, slot * 0.30)), gap = Math.max(0.5, bw * 0.22);
+    // each MOVE is a tight pair: equity (green) just left of centre, centipawn (grey) just
+    // right — beside each other, with a clear gap to the next move's pair.
+    var bw = Math.max(1.4, Math.min(6, slot * 0.32)), gap = Math.max(0.6, bw * 0.3);
     svg.innerHTML = "";
     // a soft highlighted box behind the CURRENT move's pair — the clean "you are here"
     var hx = xFor(state.ply), boxW = Math.max(bw * 2 + gap + 5, slot * 0.74);
     svg.appendChild(svgEl("rect", { x: hx - boxW / 2, y: padY - 2, width: boxW, height: innerH + 4, rx: 3, class: "chart-now" }));
-    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
+    // bars emanate UP (White ahead) or DOWN (Black ahead) from the 50/50 line
     function bar(x, v, cls) {                          // v in 0..100 (White win%)
-      var h = Math.max(1.5, (v / 100) * innerH);
-      svg.appendChild(svgEl("rect", { x: x, y: base - h, width: bw, height: h, rx: Math.min(1.4, bw / 2), class: cls }));
+      var y = yFor(v), top = Math.min(mid, y), h = Math.max(1, Math.abs(mid - y));
+      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.2, bw / 2), class: cls }));
     }
     state.line.forEach(function (nd, i) {
       if (!hasFresh(nd)) return;
@@ -100,6 +100,8 @@
       if (!inBook(i)) bar(cx - bw - gap / 2, nd.resp.equity_white, "bar-eq");  // Maia equity
       bar(cx + gap / 2, cpToWhite(nd.resp.cp) * 100, "bar-cp");                // Stockfish
     });
+    // the 50/50 line, drawn ON TOP so it reads as a clear axis the pairs hang off
+    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
     // generous transparent click target + tooltip per move
     state.line.forEach(function (nd, i) {
       var hit = svgEl("rect", { x: xFor(i) - slot / 2, y: padY, width: Math.max(slot, 2), height: innerH, fill: "transparent", style: "cursor:pointer" });
@@ -368,19 +370,52 @@
     goPly(0); startFill();
   }
 
+  // Load a {name, white, black, year, moves:[{fen,san,uci}]} game into the board —
+  // shared by the famous-game library (/api/game) and pasted PGN (/api/pgn).
+  function setGame(g) {
+    state.line = g.moves.map(function (m) {
+      return { fen: m.fen, san: m.san, resp: null,
+        last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
+    });
+    state.branched = false;
+    state.ply = 0; state.sel = null;
+    state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
+    goPly(0); startFill();
+  }
+
   function loadGame(id) {
     postGet("/api/game?id=" + encodeURIComponent(id), function (g, ok) {
       if (!ok) { showErr(g.error || "could not load game"); return; }
-      state.line = g.moves.map(function (m) {
-        return { fen: m.fen, san: m.san, resp: null,
-          last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
-      });
-      state.branched = false;
-      state.ply = 0; state.sel = null;
-      state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
-      goPly(0); startFill();
+      setGame(g);
     });
   }
+
+  // ---- paste-PGN dialog -----------------------------------------------------
+  function openPgn() {
+    $("pgn-error").hidden = true;
+    $("pgn-modal").hidden = false;
+    var t = $("pgn-text"); t.focus(); t.select();
+  }
+  function closePgn() { $("pgn-modal").hidden = true; }
+  function loadPgn() {
+    var text = $("pgn-text").value.trim();
+    if (!text) { pgnErr("Paste some PGN movetext first."); return; }
+    var btn = $("pgn-load"); btn.disabled = true;
+    fetch("/api/pgn", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pgn: text })
+    })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) {
+        btn.disabled = false;
+        if (!rj[0]) { pgnErr(rj[1].error || "Could not parse that PGN."); return; }
+        $("game-select").value = "";    // a pasted game isn't a library entry
+        closePgn();
+        setGame(rj[1]);
+      })
+      .catch(function (e) { btn.disabled = false; pgnErr(String(e)); });
+  }
+  function pgnErr(msg) { var e = $("pgn-error"); e.textContent = msg; e.hidden = false; }
 
   function postGet(url, cb) {
     fetch(url).then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
@@ -396,7 +431,14 @@
     $("flip").addEventListener("click", function () { state.flipped = !state.flipped; render(); });
     $("scrub").addEventListener("input", function (e) { goPly(parseInt(e.target.value, 10)); });
     $("new").addEventListener("click", newGame);
+    $("paste-pgn").addEventListener("click", openPgn);
+    $("pgn-cancel").addEventListener("click", closePgn);
+    $("pgn-load").addEventListener("click", loadPgn);
+    $("pgn-modal").addEventListener("click", function (e) { if (e.target === $("pgn-modal")) closePgn(); });
     document.addEventListener("keydown", function (e) {
+      var pgnOpen = !$("pgn-modal").hidden;
+      if (e.key === "Escape" && pgnOpen) { closePgn(); return; }
+      if (pgnOpen) return;   // don't scrub the board while typing PGN
       if (e.key === "ArrowLeft") goPly(state.ply - 1);
       else if (e.key === "ArrowRight") goPly(state.ply + 1);
       else if (e.key === "Home") goPly(0);

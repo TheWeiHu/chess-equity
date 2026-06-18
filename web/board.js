@@ -8,13 +8,13 @@
 (function () {
   "use strict";
 
-  // Clean Unicode chess glyphs: the OUTLINE set (U+2654-9) for White and the SOLID set
-  // (U+265A-F) for Black. CSS (.piece.white/.black in board.css) fills White light with a
-  // soft dark edge and Black solid dark — crisp and recognizable on the green board,
-  // without the heavy text-stroke that read as "ornate".
-  var PIECES = { K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
+  // Clean Unicode chess glyphs: the SOLID set (U+265A-F) for BOTH colours so White and
+  // Black pieces are the exact same glyph (and thus the same size — the outline U+2654-9
+  // set has different metrics and rendered a size apart). CSS (.piece.white/.black in
+  // board.css) fills White light with a soft dark edge and Black solid dark.
+  var PIECES = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟",
                  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
-  // The solid (Black) glyph for any type — used by the promotion picker (always dark).
+  // The glyph for any type — used by the promotion picker (rendered dark).
   function glyph(type) { return PIECES[type.toLowerCase()]; }
   var FILES = "abcdefgh";
 
