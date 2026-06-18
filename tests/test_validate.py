@@ -180,6 +180,129 @@ def test_report_opens_with_gate_verdict():
     assert "-> **PASS**" in md
 
 
+# --- significance-aware gate (task 0069) ---------------------------------------
+#
+# The point-only gate (0058) PASSes on a bare negative delta, but "proves equity beats
+# centipawns" means a *significant* win. With paired-bootstrap CIs supplied, PASS now also
+# requires the headline-metric (log-loss) delta CI to clear zero.
+
+def _decisive_rows():
+    # All-decisive rows (no draws) where an oracle nails every result: every per-row
+    # log-loss delta is strictly negative, so the bootstrap CI clears zero (significant).
+    return [
+        _row(cp=250, result=1.0),
+        _row(cp=-250, result=0.0),
+        _row(cp=180, result=1.0),
+        _row(cp=-180, result=0.0),
+        _row(cp=300, result=1.0),
+        _row(cp=-300, result=0.0),
+    ]
+
+
+def test_significance_gate_passes_oracle():
+    # An oracle's log-loss delta CI clears zero, so the significance-aware gate still PASSes.
+    from chess_equity.validate.harness import HEADLINE_METRIC, compare_to_baseline
+
+    rows = _decisive_rows()
+    oracle = lambda r: r.result  # noqa: E731
+    predictors = {"baseline": baseline_cp, "oracle": oracle}
+    reports = evaluate(rows, predictors)
+    comps = compare_to_baseline(rows, predictors, n_resamples=500, seed=0)
+    verdicts = gate_verdicts(reports, comparisons=comps)
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.name == "oracle"
+    assert v.significant is True
+    assert v.headline_metric == HEADLINE_METRIC
+    assert v.headline_ci is not None and v.headline_ci.beats_baseline
+    assert v.passed is True
+
+
+def test_significance_gate_flips_marginal_point_win_to_fail():
+    # On the committed 15-row FEN sample wdl-a is point-better on BOTH metrics, so the
+    # point-only gate PASSes — but its log-loss CI straddles zero (see the 0060 pin test),
+    # so the significance-aware gate honestly FLIPS it to FAIL. No hardcoded numbers: we
+    # assert the verdict flips between the two gates, not the CI bounds.
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import build_predictors, compare_to_baseline
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    predictors = build_predictors(["baseline", "wdl-a"])
+    reports = evaluate(rows, predictors)
+
+    # Point-only gate (no CIs): a bare double point win -> PASS, significance unrecorded.
+    point_only = gate_verdicts(reports)[0]
+    assert point_only.name == "wdl-a"
+    assert point_only.log_loss_delta < 0 and point_only.brier_delta < 0
+    assert point_only.passed is True
+    assert point_only.significant is None
+
+    # Significance-aware gate: same point win, but the log-loss CI straddles zero -> FAIL.
+    comps = compare_to_baseline(rows, predictors, n_resamples=2000, seed=0)
+    gated = gate_verdicts(reports, comparisons=comps)[0]
+    assert gated.significant is False
+    assert gated.headline_ci is not None and not gated.headline_ci.beats_baseline
+    assert gated.passed is False
+
+
+def test_format_verdict_renders_ci_and_significance_criterion():
+    # The rendered gate block states the significance requirement and shows the headline
+    # CI inline with a "straddles zero" read for the marginal sample win.
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import (
+        build_predictors,
+        compare_to_baseline,
+        format_verdict,
+    )
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    predictors = build_predictors(["baseline", "wdl-a"])
+    reports = evaluate(rows, predictors)
+    comps = compare_to_baseline(rows, predictors, n_resamples=2000, seed=0)
+    block = "\n".join(format_verdict(gate_verdicts(reports, comparisons=comps)))
+    assert "CI clears zero" in block  # the criterion line
+    assert "log_loss 95% CI [" in block and "(CI straddles zero)" in block
+    assert "-> **FAIL**" in block
+
+    # Point-only rendering (no CIs supplied) keeps the pre-0069 wording and shows no CI.
+    plain = "\n".join(format_verdict(gate_verdicts(reports)))
+    assert "95% CI clears" not in plain and "log_loss 95% CI" not in plain
+    assert "-> **PASS**" in plain
+
+
+def test_gate_cli_significance_flips_sample_to_fail(tmp_path, capsys):
+    # End-to-end: with --bootstrap > 0 the --gate exit code is significance-aware, so the
+    # marginal 15-row sample win (point-better, CI straddles zero) exits 2, not 0.
+    from pathlib import Path
+
+    from chess_equity.cli import main
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rc = main(
+        [
+            "validate",
+            "--data",
+            str(sample),
+            "--models",
+            "baseline,wdl-a",
+            "--bootstrap",
+            "2000",
+            "--seed",
+            "0",
+            "--gate",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "GATE: FAIL" in err and "significant" in err
+
+
 def test_runs_on_committed_sample():
     from pathlib import Path
 

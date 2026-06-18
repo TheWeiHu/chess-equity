@@ -511,46 +511,97 @@ def high_rating_calibration(
 BASELINE_NAME = "baseline"
 
 
+# The metric whose paired-bootstrap CI must clear zero for a *significant* gate PASS
+# (task 0069). Log-loss is the thesis's headline metric (it drives the head-to-head
+# ranking and the "where equity wins" story), so significance is gated on it.
+HEADLINE_METRIC = "log_loss"
+
+
 @dataclass(frozen=True)
 class Verdict:
-    """One rating-conditioned predictor's gate result vs the baseline (task 0058).
+    """One rating-conditioned predictor's gate result vs the baseline (task 0058/0069).
 
     ``log_loss_delta`` / ``brier_delta`` are ``model - baseline`` on the held-out
     overall scores, so a *negative* delta is an improvement (lower is better).
+
+    ``significant`` records whether the headline-metric delta CI clears zero (task 0069),
+    when paired-bootstrap ``comparisons`` were supplied to :func:`gate_verdicts`. It is
+    ``None`` when no CIs were given — the point-only gate (pre-0069 behaviour). ``passed``
+    then requires *both* a point win on log-loss and Brier **and** ``significant`` being
+    true. ``headline_ci`` is the delta CI that drove the significance call, kept for the
+    report to render inline.
     """
 
     name: str
     log_loss_delta: float
     brier_delta: float
     passed: bool
+    significant: Optional[bool] = None
+    headline_metric: Optional[str] = None
+    headline_ci: Optional[DeltaCI] = None
 
 
 def gate_verdicts(
-    reports: Sequence[PredictorReport], *, baseline_name: str = BASELINE_NAME
+    reports: Sequence[PredictorReport],
+    *,
+    baseline_name: str = BASELINE_NAME,
+    comparisons: Optional[Sequence[BaselineComparison]] = None,
+    headline_metric: str = HEADLINE_METRIC,
 ) -> List[Verdict]:
     """The thesis gate (0009): does each non-baseline predictor beat the centipawn baseline?
 
     For every predictor that is not ``baseline_name``, compute the overall log-loss and
-    Brier deltas against the baseline. PASS iff the predictor is strictly lower on
-    **both** (a model that only wins on one metric is not an unambiguous win). Returns
-    an empty list if the run has no baseline predictor — there is nothing to gate against.
+    Brier deltas against the baseline. The point requirement is strictly lower on
+    **both** (a model that only wins on one metric is not an unambiguous win).
+
+    When ``comparisons`` (the paired-bootstrap delta CIs from :func:`compare_to_baseline`)
+    are supplied, the gate is *significance-aware* (task 0069): PASS additionally requires
+    the headline-metric (``headline_metric``, default log-loss) delta CI to clear zero —
+    a point delta whose CI straddles zero is not proof, so it reads FAIL. With no
+    ``comparisons`` the gate stays point-only (the pre-0069 behaviour), so callers that
+    can't afford a bootstrap degrade gracefully rather than silently passing on noise.
+
+    Returns an empty list if the run has no baseline predictor — nothing to gate against.
     """
     by_name = {r.name: r for r in reports}
     baseline = by_name.get(baseline_name)
     if baseline is None:
         return []
+    # model name -> {metric -> DeltaCI} for the supplied comparisons (if any).
+    ci_by_name: Dict[str, Dict[str, DeltaCI]] = {}
+    if comparisons is not None:
+        ci_by_name = {c.name: {ci.metric: ci for ci in c.cis} for c in comparisons}
     verdicts: List[Verdict] = []
     for r in reports:
         if r.name == baseline_name:
             continue
         ll = r.overall.log_loss - baseline.overall.log_loss
         br = r.overall.brier - baseline.overall.brier
-        verdicts.append(Verdict(r.name, ll, br, passed=ll < 0 and br < 0))
+        point_win = ll < 0 and br < 0
+        significant: Optional[bool] = None
+        headline_ci: Optional[DeltaCI] = None
+        if comparisons is not None:
+            headline_ci = ci_by_name.get(r.name, {}).get(headline_metric)
+            # No CI for the headline metric (shouldn't happen on a normal run) reads as
+            # not-significant — fail closed rather than pass on missing evidence.
+            significant = bool(headline_ci is not None and headline_ci.beats_baseline)
+        passed = point_win and (significant is None or significant)
+        verdicts.append(
+            Verdict(
+                r.name,
+                ll,
+                br,
+                passed=passed,
+                significant=significant,
+                headline_metric=headline_metric if comparisons is not None else None,
+                headline_ci=headline_ci,
+            )
+        )
     return verdicts
 
 
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
-    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058)."""
+    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069)."""
     out: List[str] = ["## Gate verdict", ""]
     if not verdicts:
         out.append(
@@ -558,18 +609,39 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
         )
         out.append("")
         return out
-    out.append(
-        f"Does each rating-conditioned predictor beat the rating-blind `{baseline_name}` "
-        "on held-out outcomes? **PASS** = strictly lower log-loss *and* Brier (deltas are "
-        "model − baseline; negative is better)."
-    )
+    # Whether this run carried paired-bootstrap CIs (task 0069) — the criterion line and
+    # each verdict line render the significance check only when it was actually applied.
+    gated = verdicts[0].headline_metric is not None
+    if gated:
+        metric = verdicts[0].headline_metric
+        out.append(
+            f"Does each rating-conditioned predictor beat the rating-blind `{baseline_name}` "
+            "on held-out outcomes? **PASS** = strictly lower log-loss *and* Brier (deltas "
+            f"are model − baseline; negative is better) **and** the {metric} 95% CI clears "
+            "zero — a delta whose CI straddles zero is not proof."
+        )
+    else:
+        out.append(
+            f"Does each rating-conditioned predictor beat the rating-blind `{baseline_name}` "
+            "on held-out outcomes? **PASS** = strictly lower log-loss *and* Brier (deltas are "
+            "model − baseline; negative is better)."
+        )
     out.append("")
     for v in verdicts:
         status = "PASS" if v.passed else "FAIL"
-        out.append(
+        line = (
             f"- **{v.name}** beats {baseline_name}: "
-            f"logloss {v.log_loss_delta:+.4f}, brier {v.brier_delta:+.4f} -> **{status}**"
+            f"logloss {v.log_loss_delta:+.4f}, brier {v.brier_delta:+.4f}"
         )
+        if v.headline_ci is not None:
+            ci = v.headline_ci
+            sig = "CI clears zero" if v.significant else "CI straddles zero"
+            line += f"; {v.headline_metric} 95% CI [{ci.lo:+.4f}, {ci.hi:+.4f}] ({sig})"
+        elif v.headline_metric is not None:
+            # Gated run but no CI for this predictor — surface the missing evidence.
+            line += f"; {v.headline_metric} CI unavailable"
+        line += f" -> **{status}**"
+        out.append(line)
     out.append("")
     return out
 
@@ -578,17 +650,25 @@ def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
 
 
-def format_report(reports: Sequence[PredictorReport], *, title: str = "Validation report") -> str:
+def format_report(
+    reports: Sequence[PredictorReport],
+    *,
+    title: str = "Validation report",
+    comparisons: Optional[Sequence[BaselineComparison]] = None,
+) -> str:
     """Render reports as a Markdown document (lower log-loss / Brier / ECE is better).
 
     The report opens with a PASS/FAIL gate verdict (task 0058) so the attended proof run
     yields an unambiguous answer instead of a table to eyeball, then the full metrics.
+    When ``comparisons`` (paired-bootstrap delta CIs) are supplied, the gate verdict is
+    significance-aware (task 0069): PASS requires the headline-metric CI to clear zero, and
+    each verdict line shows that CI inline. Omit them for the point-only gate.
     """
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
     out.append("**Lower is better** for all three (log-loss, Brier, ECE).")
     out.append("")
-    out.extend(format_verdict(gate_verdicts(reports)))
+    out.extend(format_verdict(gate_verdicts(reports, comparisons=comparisons)))
     out.append("## Overall")
     out.append("")
     out.append("| predictor | n | log-loss | Brier | ECE |")
