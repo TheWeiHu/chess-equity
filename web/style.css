@@ -20,8 +20,8 @@
   --sq-light: #ebecd0;    /* the green board stays — reads fine on dark */
   --sq-dark: #6f9b62;
   --sq-hl: rgba(245, 222, 76, 0.62);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.35);
-  --radius: 14px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.4);
+  --radius: 18px;
   font-synthesis: none;
 }
 
@@ -35,18 +35,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.wrap { width: min(1080px, 92vw); margin-inline: auto; }
+.wrap { width: min(1320px, 94vw); margin-inline: auto; }
 
 /* ---- header ---- */
-.site-header { padding: 2.2rem 0 1.2rem; }
+.site-header { padding: 2.6rem 0 1.2rem; }
 .site-header h1 {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 2.9rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: clamp(2.4rem, 5.5vw, 3.8rem);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 1;
 }
 .site-header h1 .accent { color: var(--accent); }
-.tagline { margin: 0.4rem 0 0; max-width: 56ch; color: var(--muted); font-size: 1.05rem; }
+.tagline { margin: 0.6rem 0 0; max-width: 60ch; color: var(--muted); font-size: 1.15rem; }
 .tagline strong { color: var(--ink); }
 
 /* ---- game picker (dropdown, guided demo) ---- */
@@ -60,28 +61,29 @@ body {
 /* ---- layout ---- */
 main {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr);
-  gap: 1.6rem;
+  /* the board column is the centerpiece — give it the larger share */
+  grid-template-columns: minmax(440px, 1.6fr) minmax(300px, 1fr);
+  gap: 2rem;
   align-items: start;
-  padding-bottom: 2rem;
+  padding-bottom: 2.5rem;
 }
-@media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+@media (max-width: 820px) { main { grid-template-columns: 1fr; } }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 1rem 1.1rem;
+  padding: 1.15rem 1.3rem;
   box-shadow: var(--shadow);
-  margin-bottom: 1rem;
+  margin-bottom: 1.1rem;
 }
 
-/* ---- board ---- */
+/* ---- board (the bold centerpiece) ---- */
 .board-frame {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px;
+  padding: 16px;
   box-shadow: var(--shadow);
 }
 /* .board / .sq / .piece / coords / highlights are shared via board.css */
@@ -150,26 +152,26 @@ main {
 .bar-block { margin: .2rem 0 1.05rem; }
 .bar-block:last-of-type { margin-bottom: .3rem; }
 .bar-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .35rem; }
-.bar-name { font-weight: 600; font-size: .95rem; }
-.bar-name .sub { font-weight: 500; color: var(--muted); font-size: .76rem; }
-.readout { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.05rem; }
-#equity-readout { font-size: 1.3rem; color: var(--accent); }
+.bar-name { font-weight: 700; font-size: 1rem; }
+.bar-name .sub { font-weight: 500; color: var(--muted); font-size: .78rem; }
+.readout { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.1rem; }
+#equity-readout { font-size: 1.7rem; color: var(--accent); letter-spacing: -.01em; }
 #cp-readout { color: var(--muted); }
 .bar {
-  position: relative; border-radius: 9px; overflow: hidden;
+  position: relative; border-radius: 12px; overflow: hidden;
   /* the track itself is Black's winning share */
   background: #23272f;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .28);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .35);
 }
-.equity-bar { height: 38px; }   /* the hero bar reads slightly larger */
-.cp-bar { height: 28px; }
+.equity-bar { height: 48px; }   /* the hero bar reads big and bold */
+.cp-bar { height: 32px; }
 .bar .fill {
   position: absolute; inset: 0 auto 0 0; width: 50%;
   transition: width .35s cubic-bezier(.4, .0, .2, 1);
   box-shadow: 1px 0 0 rgba(255, 255, 255, .6);   /* crisp leading edge */
 }
 /* equity = the win-probability hero, in the accent green; cp = muted grey */
-.equity-bar .fill { background: linear-gradient(90deg, #2f7d57, #46b481); }
+.equity-bar .fill { background: linear-gradient(90deg, #2f7d57, #4fc088); }
 .cp-bar .fill { background: linear-gradient(90deg, #868f9e, #b4bdc9); }
 .bar .mid {
   position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-1px);

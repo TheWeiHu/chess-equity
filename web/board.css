@@ -7,7 +7,7 @@
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   width: 100%;
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
 }
 .sq {
@@ -57,9 +57,9 @@
 .sq .piece.black { color: #24282f; -webkit-text-stroke: 1px #14171d;  text-stroke: 1px #14171d; }
 
 /* edge coordinate labels */
-.sq .coord { position: absolute; font-size: 10px; font-weight: 700; opacity: .65; z-index: 2; }
-.sq .coord.file { right: 3px; bottom: 1px; }
-.sq .coord.rank { left: 3px; top: 1px; }
+.sq .coord { position: absolute; font-size: 11px; font-weight: 700; opacity: .6; z-index: 2; }
+.sq .coord.file { right: 4px; bottom: 2px; }
+.sq .coord.rank { left: 4px; top: 2px; }
 .sq.light .coord { color: #6f9b62; }
 .sq.dark  .coord { color: #ebecd0; }
 
