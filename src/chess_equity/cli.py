@@ -185,7 +185,12 @@ def _eval_search_fen(model: MaiaSearchModel, fen: str, white_elo: int, black_elo
 def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
-        if args.pgn:
+        if getattr(args, "rating_sweep", None):
+            from chess_equity.validate.rating_sweep import parse_rungs, render_text, sweep
+
+            rungs = sweep(_apply_profiles(model, args), args.fen, parse_rungs(args.rating_sweep))
+            print(render_text(args.fen, rungs))
+        elif args.pgn:
             for line in _eval_pgn(_apply_profiles(model, args), args.pgn, args.white_elo, args.black_elo):
                 print(line)
         elif isinstance(model, MaiaRolloutModel):
@@ -879,6 +884,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
     ev.add_argument("--white-elo", type=int, default=1500)
     ev.add_argument("--black-elo", type=int, default=1500)
+    ev.add_argument(
+        "--rating-sweep",
+        metavar="R1,R2,...",
+        help="evaluate the same position at each equal-rating rung (both players) and "
+        "print White-POV equity per rung — shows the bar IS rating-conditioned",
+    )
     ev.add_argument(
         "--n", type=int, default=500, help="rollout count for --model maia-rollout"
     )
