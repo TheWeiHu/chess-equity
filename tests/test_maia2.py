@@ -150,9 +150,67 @@ def test_build_model_selects_maia2():
         build_model("nonsense")
 
 
-def test_cli_eval_maia2_reports_missing_install(monkeypatch, capsys):
+def test_cli_eval_maia2_reports_missing_install(monkeypatch, capsys, tmp_path):
     # Without maia2 installed, `eval --model maia2` must fail cleanly (exit 1), not crash.
     monkeypatch.setitem(sys.modules, "maia2", None)
+    # Isolate the on-disk cache to a fresh, nonexistent path so a populated host cache
+    # (~/.cache/chess-equity/maia2.pkl) can't satisfy the lookup and mask the missing
+    # backend -> the real backend is invoked and raises Maia2NotInstalled (rc 1).
+    monkeypatch.setattr(
+        "chess_equity.maia2.DEFAULT_CACHE_PATH", str(tmp_path / "none.pkl")
+    )
     rc = main(["eval", START, "--model", "maia2"])
     assert rc == 1
     assert "error" in capsys.readouterr().err.lower()
+
+
+def test_real_backend_converts_white_pov_to_side_to_move(monkeypatch):
+    """maia2's ``inference_each`` returns ``win_prob`` from WHITE's POV, but our Backend
+    contract is the side-to-move's equity. The real backend must convert, or every
+    black-to-move bar inverts. The fake backend can't catch this (it already speaks
+    side-to-move), so we inject a stand-in maia2 whose value head is fixed White-POV.
+    """
+    import types as pytypes
+
+    fake = pytypes.ModuleType("maia2")
+    fake.inference = pytypes.SimpleNamespace(
+        prepare=lambda: object(),
+        # 0.80 = White's win prob, the same value maia2 reports for either side to move.
+        inference_each=lambda model, prepared, fen, elo_self, elo_oppo: ({}, 0.80),
+    )
+    fake.model = pytypes.SimpleNamespace(from_pretrained=lambda type, device: object())
+    monkeypatch.setitem(sys.modules, "maia2", fake)
+
+    backend = RealMaia2Backend()
+    white_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    black_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"
+    # White to move: side-to-move == White, so win_prob passes through unchanged.
+    assert backend(white_fen, 1500, 1500)[1] == pytest.approx(0.80)
+    # Black to move: side-to-move == Black, so it must become 1 - 0.80.
+    assert backend(black_fen, 1500, 1500)[1] == pytest.approx(0.20)
+
+
+def _exploding_backend(fen, elo_self, elo_oppo):
+    """A backend that must never be reached — terminal positions skip the value head."""
+    raise AssertionError(f"value head called on terminal position {fen!r}")
+
+
+def test_evaluate_checkmate_is_a_decisive_loss_without_calling_the_net():
+    """Maia-2's value head crashes on a position with no legal moves; the wrapper must
+    resolve a checkmate directly (the side to move has lost) and never call the backend."""
+    model = Maia2Equity(backend=_exploding_backend)
+    # Fool's Mate: White is checkmated, White to move.
+    mate = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+    eq = model.evaluate(mate, 1500, 1500)
+    assert eq.source == "maia2"
+    assert eq.equity_white == pytest.approx(0.0)  # mated White has zero equity
+    assert eq.wdl.p_loss == pytest.approx(1.0)
+
+
+def test_evaluate_stalemate_is_a_draw_without_calling_the_net():
+    model = Maia2Equity(backend=_exploding_backend)
+    # Classic K+Q stalemate: Black to move, no legal moves, not in check.
+    stale = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
+    eq = model.evaluate(stale, 1500, 1500)
+    assert eq.equity_white == pytest.approx(50.0)
+    assert eq.wdl.p_draw == pytest.approx(1.0)

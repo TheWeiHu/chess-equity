@@ -20,3 +20,6 @@ uv.lock
 /data/*
 !/data/sample/
 .gstack/
+
+# Maia-2 checkpoint (~280MB) downloaded on first use of --model maia2.
+maia2_models/

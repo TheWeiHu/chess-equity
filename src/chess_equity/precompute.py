@@ -37,6 +37,11 @@ class PlyEquity:
     p_draw: float
     p_loss: float
     cp: Optional[float]
+    # True when the move that led here was *forced* — the prior position had exactly one
+    # legal reply, so the player had no choice. Equity still moves across a forced ply
+    # (the position genuinely changed), but that swing isn't the player's decision, so a
+    # UI can annotate it and grading can skip it. False at the start position (ply 0).
+    forced: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,7 @@ class PrecomputedGame:
 
 
 def _ply_equity(model: EquityModel, ply: int, san: Optional[str], board: chess.Board,
-                white_elo: int, black_elo: int) -> PlyEquity:
+                white_elo: int, black_elo: int, *, forced: bool = False) -> PlyEquity:
     eq = model.evaluate(board.fen(), white_elo, black_elo)
     return PlyEquity(
         ply=ply,
@@ -70,6 +75,7 @@ def _ply_equity(model: EquityModel, ply: int, san: Optional[str], board: chess.B
         p_draw=eq.wdl.p_draw,
         p_loss=eq.wdl.p_loss,
         cp=eq.cp,
+        forced=forced,
     )
 
 
@@ -98,8 +104,12 @@ def precompute_game(
     plies = [_ply_equity(cached, 0, None, board, white_elo, black_elo)]
     for ply, move in enumerate(game.mainline_moves(), start=1):
         san = board.san(move)
+        # Forced = the player to move had a single legal reply (count before the push).
+        forced = board.legal_moves.count() == 1
         board.push(move)
-        plies.append(_ply_equity(cached, ply, san, board, white_elo, black_elo))
+        plies.append(
+            _ply_equity(cached, ply, san, board, white_elo, black_elo, forced=forced)
+        )
     compute_ms = (time.perf_counter() - started) * 1000.0
 
     return PrecomputedGame(

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from chess_equity.data.schema import PositionRow
+from chess_equity.validate.bootstrap import EceCI, ece_bootstrap_ci
 from chess_equity.validate.harness import Predictor, Scores, _score, rating_band
 from chess_equity.validate.metrics import reliability_table
 
@@ -32,39 +33,78 @@ ReliabilityRow = Tuple[float, float, float, int]
 
 @dataclass(frozen=True)
 class BandCalibration:
-    """A predictor's calibration within one slice value (e.g. one rating band)."""
+    """A predictor's calibration within one slice value (e.g. one rating band).
+
+    ``ece_ci`` is the bin-resampling 95% CI on this band's ECE (task 0076), present only
+    when :func:`band_reliability` is called with ``bootstrap > 0``; ``None`` otherwise so
+    the bare point-ECE behaviour stays backward-compatible.
+    """
 
     band: str
     scores: Scores
     table: List[ReliabilityRow]
+    ece_ci: Optional[EceCI] = None
 
 
 def band_reliability(
     rows: Sequence[PositionRow],
     predictor: Predictor,
     *,
+    baseline: Optional[Predictor] = None,
     slicer: Callable[[PositionRow], str] = rating_band,
     bins: int = 10,
+    bootstrap: int = 0,
+    confidence: float = 0.95,
+    seed: int = 0,
 ) -> List[BandCalibration]:
     """Per-band scores + reliability table for ``predictor`` over ``rows``.
 
     Bands come back in sorted order. A band with ``scores.ece`` near 0 and a table
     hugging the diagonal (``mean_pred ~= mean_label``) is well calibrated; the
     baseline is expected to drift in the low-rating bands.
+
+    With ``bootstrap > 0`` each band also carries a bin-resampling ``confidence`` CI on
+    its ECE (task 0076) — the error bar a band-level "miscalibrated here" claim needs, so
+    a drift can be told from small-sample noise. Each band gets its own seed offset so the
+    CIs differ across bands yet stay byte-reproducible. ``bootstrap == 0`` leaves
+    ``ece_ci`` ``None`` (unchanged behaviour).
+
+    Pass a second ``baseline`` predictor (task 0089) to turn the single-predictor band
+    table into a **head-to-head**: each band's ``ece_ci`` then also carries the paired ECE
+    delta (this predictor minus the baseline, on the *same* resampled rows) and its CI, so
+    a "miscalibrated in band X" claim becomes "better/worse than the baseline here by Δ,
+    CI clears zero". The delta is only computed when ``bootstrap > 0`` (it needs the
+    resampling); ``baseline=None`` keeps the original single-predictor behaviour.
     """
     grouped: Dict[str, List[int]] = {}
     for i, row in enumerate(rows):
         grouped.setdefault(slicer(row), []).append(i)
     out: List[BandCalibration] = []
-    for band in sorted(grouped):
+    for band_i, band in enumerate(sorted(grouped)):
         idxs = grouped[band]
         preds = [predictor(rows[i]) for i in idxs]
         labels = [rows[i].result for i in idxs]
+        base_preds = [baseline(rows[i]) for i in idxs] if baseline is not None else None
+        ece_ci = (
+            ece_bootstrap_ci(
+                preds,
+                labels,
+                predictor=band,
+                baseline_preds=base_preds,
+                bins=bins,
+                n_resamples=bootstrap,
+                confidence=confidence,
+                seed=seed + band_i,
+            )
+            if bootstrap > 0
+            else None
+        )
         out.append(
             BandCalibration(
                 band=band,
                 scores=_score(preds, labels),
                 table=reliability_table(preds, labels, bins=bins),
+                ece_ci=ece_ci,
             )
         )
     return out
@@ -87,11 +127,52 @@ def format_calibration_report(
     out.append("")
     out.append("## ECE by rating band (lower = better calibrated)")
     out.append("")
-    out.append("| rating band | n | log-loss | Brier | ECE |")
-    out.append("|---|--:|--:|--:|--:|")
-    for b in bands:
-        s = b.scores
-        out.append(f"| {b.band} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |")
+    # Show the bin-resampling ECE CI column only when the bands carry one (task 0076);
+    # without it the table is the original point-ECE-only view.
+    with_ci = any(b.ece_ci is not None for b in bands)
+    # The head-to-head ECE-delta columns appear only when a second (baseline) predictor was
+    # threaded through band_reliability (task 0089), so the single-predictor view is unchanged.
+    with_delta = any(b.ece_ci is not None and b.ece_ci.delta is not None for b in bands)
+    if with_ci:
+        conf_pct = round(next(b.ece_ci.confidence for b in bands if b.ece_ci) * 100)
+        out.append(f"Error bars are a bin-resampling bootstrap {conf_pct}% CI on each band's ECE.")
+        if with_delta:
+            out.append("")
+            out.append(
+                f"`ECE Δ` is this predictor's ECE minus the baseline's on the *same* resampled "
+                "rows (negative = better calibrated than the baseline in that band); its "
+                f"{conf_pct}% CI clearing zero marks a *significant* per-band calibration win/loss "
+                "rather than sample noise."
+            )
+        out.append("")
+        header = f"| rating band | n | log-loss | Brier | ECE | ECE {conf_pct}% CI |"
+        sep = "|---|--:|--:|--:|--:|:--:|"
+        if with_delta:
+            header += f" ECE Δ (model−base) | ECE Δ {conf_pct}% CI |"
+            sep += "--:|:--:|"
+        out.append(header)
+        out.append(sep)
+        for b in bands:
+            s = b.scores
+            ci = b.ece_ci
+            ci_str = f"[{ci.lo:.4f}, {ci.hi:.4f}]" if ci is not None else "—"
+            row = (
+                f"| {b.band} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} | {ci_str} |"
+            )
+            if with_delta:
+                if ci is not None and ci.delta is not None:
+                    d_str = f"{ci.delta:+.4f}"
+                    dci_str = f"[{ci.delta_lo:+.4f}, {ci.delta_hi:+.4f}]"
+                else:
+                    d_str = dci_str = "—"
+                row += f" {d_str} | {dci_str} |"
+            out.append(row)
+    else:
+        out.append("| rating band | n | log-loss | Brier | ECE |")
+        out.append("|---|--:|--:|--:|--:|")
+        for b in bands:
+            s = b.scores
+            out.append(f"| {b.band} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |")
     out.append("")
     out.append("## Reliability curves (predicted vs observed White score)")
     for b in bands:

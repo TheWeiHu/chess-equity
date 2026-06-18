@@ -80,16 +80,25 @@ python3 overlay/serve.py                 # http://localhost:8777/
 headers are often blank or `?`); `--model maia2` swaps the placeholder baseline for the
 real rating-conditioned bar once its weights are installed (see `DEPENDENCIES.md`).
 
-> **Today's seam (read me).** Step 1 (`broadcast --round`) prints the feed as **JSON
-> Lines** — the internal event shape. Step 2's `/sse` replays an **overlay-shaped**
-> event *file* (`mock-game.json` by default). The one-command live bridge — a round
-> streamed straight into the overlay as SSE (a planned `broadcast … --serve-sse`) — is
-> **not wired yet**. Until it lands, either drive the overlay from the bundled `/sse`
-> replay (steps 2–3, demonstrable now), or capture a round to a `.json` event file and
-> serve it with `python3 overlay/serve.py --game <file>`. The serialization the bridge
-> needs already exists — `MoveEvent.to_overlay_event()` in
-> [`broadcast.py`](../src/chess_equity/broadcast.py) emits exactly the `position`
-> events `overlay.js` consumes (pinned by `tests/test_broadcast_overlay_contract.py`).
+> **One-command live bridge (task 0094).** `chess-equity broadcast --round <id>
+> --serve-sse 8777` streams the round straight into the overlay as Server-Sent-Events:
+> it serves the overlay's static files **and** an `/sse` endpoint on the one port, so
+> you just point an OBS browser source at `http://localhost:8777/?src=/sse` (the
+> [config page](#setup-page--no-hand-editing-query-params-task-0021) builds that URL for
+> you). No capture-to-file step. Works with `--pgn <file>` (a finished game replayed as
+> "live") and `--url <pgn>` too. Each connection gets a fresh replay/stream.
+>
+> **Tune in early (task 0099).** For a live `--round`/`--url`, you can start the overlay
+> *before the round begins*: the bridge keeps polling instead of giving up on the first
+> quiet poll, and sends a periodic SSE keep-alive comment so the connection survives the
+> wait — the bar populates as soon as the first move lands. A local `--pgn` replay is
+> finite and still ends when the game does.
+>
+> The events are `MoveEvent.to_overlay_event()` / `GameEvent.to_overlay()` — the same
+> serialization the JSON-Lines path uses (pinned by
+> `tests/test_broadcast_overlay_contract.py`). Without `--serve-sse`, `broadcast` still
+> prints those events as **JSON Lines** (the internal shape) for piping/inspection, and
+> `python3 overlay/serve.py --game <file>` still replays a saved overlay-event `.json`.
 
 ### Setup page — no hand-editing query params (task 0021)
 

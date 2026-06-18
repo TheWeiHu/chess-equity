@@ -69,6 +69,8 @@ uv run chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600
 uv run chess-equity eval --pgn game.pgn                     # annotate every move
 uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
 uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move equity
+uv run chess-equity eval --white-profile magnuscarlsen      # personalize to a Lichess player
+uv run chess-equity eval --white-profile "Alice@games.pgn"  # ...or profile offline from a PGN
 ```
 
 ```
@@ -85,11 +87,20 @@ into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a
 
 **Live:** https://theweihu.github.io/chess-equity/
 
-A static, dependency-free page that puts the equity bar next to the classic centipawn
-bar and lets you drag both players' rating sliders — *move a slider and the equity bar
-moves while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
+A static, dependency-free page that puts the equity bar next to a centipawn bar and
+lets you drag both players' rating sliders — *move a slider and the equity bar moves
+while the centipawn bar can't.* The bundled game is **Légal's Mate**: White's queen
 "sacrifice" tanks the material count while it is in fact a forced mate, so the move is
 **green on equity but red on centipawns**.
+
+The committed demo's equity bar is **real Maia-2** output (rating-conditioned win-equity
+from its value head), regenerated with `python web/build_demo.py --all --model maia2`. Its
+centipawn bar, by contrast, is a deliberately **shallow material count**, not the deep
+engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
+contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games;
+see [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md)).
+The project's actual *"equity beats centipawns"* claim is the validation gate below,
+which compares equity against the **real, rating-blind Stockfish** eval — not this demo.
 
 ```bash
 python3 -m http.server -d web 8000     # then open http://localhost:8000
@@ -108,7 +119,7 @@ Every model plugs in behind one `EquityModel` interface; pick with `--model`:
 |-----------|------------|
 | `baseline` *(default)* | Rating-blind Lichess Win% over the objective engine eval (material placeholder until Stockfish is the default). Zero heavy deps — the thing to beat. |
 | `maia2` | The real rating-conditioned bar: [Maia-2](https://github.com/CSSLab/maia2)'s value head, trained on real Lichess outcomes. `pip install maia2` (pulls torch; checkpoint downloads on first use). |
-| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. `chess-equity train` fits it. |
+| `wdl-a` | Transparent dependency-free regression: `P(W/D/L | cp, ratings, ply, tc)` with a `cp × skill` interaction. The shipped artifact is fit on **50k real Lichess positions** (`n_train=50000`); re-fit it with `chess-equity train`. |
 | `maia-rollout` | Slow ground-truth oracle: play the position out, both sides erring like their rating, average `--n` rollouts (with a 95% CI). |
 | `maia-search` | Maia-weighted expectimax to a fixed `--depth`/`--k`. |
 
@@ -138,6 +149,13 @@ A small fixture under `data/sample/` lets tests and demos run with no download �
 numbers are a smoke test, not evidence (real evidence needs a real dump).
 
 ### Does equity beat centipawns?
+
+"Beats centipawns" has a precise meaning here: a rating-conditioned predictor beats a
+**rating-blind OBJECTIVE eval** (real Stockfish) at predicting **actual human outcomes**
+— i.e. in *practical* terms. It is **not** a claim about out-tactic-ing a deep engine on
+forced lines: a deep engine is right about the board, but blind to *this* player against
+*that* one. (The web demo's material bar is a separate, shallow teaching foil — see
+[docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md).)
 
 The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
 a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind

@@ -8,6 +8,7 @@ Commands:
     chess-equity broadcast --round <id>            # live Lichess broadcast round
     chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
     chess-equity highlights --pgn game.pgn         # auto-detect drama/clutch moments
+    chess-equity personal --user <lichess-name>    # per-player phase profile + offsets
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
 
@@ -37,7 +38,7 @@ from chess_equity.broadcast import (
     UrlPgnFeed,
 )
 from chess_equity.grading import EquityGrader
-from chess_equity.models import LichessBaselineModel
+from chess_equity.models import LichessBaselineModel, placeholder_equity_warning
 from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
 from chess_equity.search import MaiaSearchModel
 from chess_equity.search import estimate_to_equity as search_estimate_to_equity
@@ -139,6 +140,27 @@ def build_model(
     )
 
 
+def _apply_profiles(model: EquityModel, args: argparse.Namespace) -> EquityModel:
+    """Wrap ``model`` in a :class:`PersonalEquityModel` if profiles were requested.
+
+    Reads ``--white-profile`` / ``--black-profile`` off ``args`` (each a Lichess
+    username, or ``player@file.pgn`` for an offline profile — see
+    :func:`chess_equity.personal.load_profile`). With neither set, returns ``model``
+    unchanged, so the band-average bar is unaffected.
+    """
+    white_spec = getattr(args, "white_profile", None)
+    black_spec = getattr(args, "black_profile", None)
+    if not white_spec and not black_spec:
+        return model
+    from chess_equity.personal import PersonalEquityModel, load_profile
+
+    max_games = getattr(args, "max_games", 50)
+    token = getattr(args, "token", None)
+    white = load_profile(white_spec, max_games=max_games, token=token) if white_spec else None
+    black = load_profile(black_spec, max_games=max_games, token=token) if black_spec else None
+    return PersonalEquityModel(model, white_profile=white, black_profile=black)
+
+
 def _eval_rollout_fen(model: MaiaRolloutModel, fen: str, white_elo: int, black_elo: int) -> str:
     """Bar + 95% CI line for the Monte Carlo rollout oracle (task 0007)."""
     est = model.estimate(fen, white_elo, black_elo)
@@ -164,14 +186,14 @@ def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
         if args.pgn:
-            for line in _eval_pgn(model, args.pgn, args.white_elo, args.black_elo):
+            for line in _eval_pgn(_apply_profiles(model, args), args.pgn, args.white_elo, args.black_elo):
                 print(line)
         elif isinstance(model, MaiaRolloutModel):
             print(_eval_rollout_fen(model, args.fen, args.white_elo, args.black_elo))
         elif isinstance(model, MaiaSearchModel):
             print(_eval_search_fen(model, args.fen, args.white_elo, args.black_elo))
         else:
-            print(_eval_fen(model, args.fen, args.white_elo, args.black_elo))
+            print(_eval_fen(_apply_profiles(model, args), args.fen, args.white_elo, args.black_elo))
     except (ValueError, OSError, RuntimeError) as exc:
         # RuntimeError covers Maia2NotInstalled (a model failing to load at use time).
         print(f"error: {exc}", file=sys.stderr)
@@ -190,23 +212,93 @@ def _run_grade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
-    """Drive broadcast ingestion, writing one JSON event per line to ``out``."""
+def _build_broadcast_feed(args: argparse.Namespace):
+    """Construct the broadcast feed from --pgn / --round / --url.
+
+    A fresh feed each call so the SSE path can give every overlay connection its own
+    replay/stream (``LocalPgnFeed`` in particular is stateful — it advances per poll).
+    """
     if args.pgn:
         with open(args.pgn, encoding="utf-8") as fh:
-            feed = LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
-    elif args.round:
-        feed = LichessRoundFeed(args.round, token=args.token)
-    elif args.url:
-        feed = UrlPgnFeed(args.url)
-    else:
-        raise ValueError("broadcast needs one of --pgn / --round / --url")
+            return LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
+    if args.round:
+        return LichessRoundFeed(args.round, token=args.token)
+    if args.url:
+        return UrlPgnFeed(args.url)
+    raise ValueError("broadcast needs one of --pgn / --round / --url")
 
+
+def _overlay_static_dir() -> Optional[str]:
+    """The repo's ``overlay/`` dir if present (so --serve-sse is a one-command overlay).
+
+    Resolved relative to this package's repo checkout; ``None`` when running from an
+    installed wheel without the overlay assets, in which case only ``/sse`` is served.
+    """
+    from pathlib import Path
+
+    candidate = Path(__file__).resolve().parents[2] / "overlay"
+    return str(candidate) if candidate.is_dir() else None
+
+
+def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
+    """Drive broadcast ingestion, writing one JSON event per line to ``out``.
+
+    With ``--serve-sse PORT`` the same overlay events are instead streamed over an
+    HTTP Server-Sent-Events endpoint the overlay can ``EventSource`` onto (task 0094),
+    collapsing the old capture-to-file → serve.py seam into one command.
+    """
+    model = _apply_profiles(model, args)
+
+    # Objective engine for the centipawn fallback when the model carries no cp (e.g.
+    # maia2 win-prob): keeps the overlay's classic ghost tick + human-edge divergence
+    # badge alive on a maia2 feed (task 0103). Only consulted for cp-less models, so
+    # warn=False — the model's own bar already warns when no engine is available.
+    from chess_equity.stockfish import resolve_objective_engine
+
+    cp_engine = resolve_objective_engine(depth=args.depth, warn=False)
+
+    if args.serve_sse is not None:
+        from chess_equity.broadcast import overlay_events, serve_sse
+
+        # A live round (--round/--url) may be tuned into before its first move: keep
+        # polling (no idle stop) and send keep-alive heartbeats so the connection
+        # survives the quiet wait. A local --pgn replay is finite, so it still
+        # terminates on idle (max_idle_polls=1, no heartbeat).
+        is_live = bool(args.round or args.url)
+
+        def make_events():
+            ingestor = BroadcastIngestor(
+                _build_broadcast_feed(args),
+                model,
+                white_elo=args.white_elo,
+                black_elo=args.black_elo,
+                clock_aware=args.clock_aware,
+                engine=cp_engine,
+            )
+            return overlay_events(
+                ingestor,
+                interval=args.interval,
+                max_polls=args.max_polls,
+                max_idle_polls=None if is_live else 1,
+                heartbeat=is_live,
+            )
+
+        serve_sse(
+            make_events,
+            port=args.serve_sse,
+            directory=_overlay_static_dir(),
+            log=lambda msg: print(msg, file=sys.stderr),
+        )
+        return 0
+
+    feed = _build_broadcast_feed(args)
     ingestor = BroadcastIngestor(
         feed,
         model,
         white_elo=args.white_elo,
         black_elo=args.black_elo,
+        clock_aware=args.clock_aware,
+        engine=cp_engine,
     )
 
     def emit(event: MoveEvent) -> None:
@@ -281,7 +373,29 @@ def _run_data(args: argparse.Namespace) -> int:
             return 1
         from urllib.error import URLError
 
-        from chess_equity.data.download import DEFAULT_DUMP_DIR, download_month
+        from chess_equity.data.download import (
+            APPROX_DUMP_SIZE_GB,
+            DEFAULT_DUMP_DIR,
+            data_extra_available,
+            download_month,
+        )
+
+        # Fail fast, before any network I/O: a month dump is a ~30 GB ``.zst`` that
+        # only the 'data' extra can read, so a missing extra should error in seconds,
+        # not after the download finishes (task 0071).
+        if not data_extra_available():
+            print(
+                "error: reading .zst month dumps needs the 'data' extra: "
+                "pip install 'chess-equity[data]'",
+                file=sys.stderr,
+            )
+            return 1
+        dump_dir = args.dump_dir or DEFAULT_DUMP_DIR
+        print(
+            f"note: the {args.month} dump is ~{APPROX_DUMP_SIZE_GB} GB compressed; "
+            f"streaming to {dump_dir} (resumable, cached between runs)",
+            file=sys.stderr,
+        )
 
         def _progress(done: int, total: Optional[int]) -> None:
             mb = done / 1e6
@@ -292,9 +406,7 @@ def _run_data(args: argparse.Namespace) -> int:
                 print(f"\rdownloading {month_url(args.month)}: {mb:.0f} MB", end="", file=sys.stderr)
 
         try:
-            dump = download_month(
-                args.month, dest_dir=args.dump_dir or DEFAULT_DUMP_DIR, progress=_progress
-            )
+            dump = download_month(args.month, dest_dir=dump_dir, progress=_progress)
         except (URLError, OSError, RuntimeError) as exc:
             print(f"\nerror: downloading {args.month} dump: {exc}", file=sys.stderr)
             return 1
@@ -322,9 +434,11 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.validate.harness import (
         PREDICTORS,
         build_predictors,
+        compare_ece_to_baseline,
         compare_to_baseline,
         evaluate,
         format_baseline_comparison,
+        format_ece_comparison,
         format_report,
     )
 
@@ -366,7 +480,7 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.maia2 import Maia2NotInstalled
 
     try:
-        reports = evaluate(rows, predictors)
+        reports = evaluate(rows, predictors, bins=args.ece_bins)
     except (ValueError, Maia2NotInstalled) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -388,6 +502,22 @@ def _run_validate(args: argparse.Namespace) -> int:
         if section:
             report = report + "\n" + section
 
+    # Calibration error bars: a bin-resampling CI on each predictor's ECE plus the ECE
+    # delta vs baseline (task 0072). ECE has no per-row term, so this is a separate
+    # bootstrap from the significance section above; same --bootstrap budget / seed.
+    if args.bootstrap > 0 and baseline_name in predictors:
+        ece_cis = compare_ece_to_baseline(
+            rows,
+            predictors,
+            baseline=baseline_name,
+            bins=args.ece_bins,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+        ece_section = format_ece_comparison(ece_cis)
+        if ece_section:
+            report = report + "\n" + ece_section
+
     if args.out:
         from pathlib import Path
 
@@ -404,7 +534,19 @@ def _run_validate(args: argparse.Namespace) -> int:
         from chess_equity.validate.calibration import band_reliability, format_calibration_report
 
         name = requested[0]
-        bands = band_reliability(rows, PREDICTORS[name])
+        # --bootstrap > 0 (the default) adds a bin-resampling ECE CI per band (task 0076)
+        # so the band-level calibration claims carry error bars; --bootstrap 0 turns it off.
+        # When the report's predictor isn't the baseline itself, thread the baseline in as a
+        # second predictor (task 0089) so each band also shows the paired ECE delta vs baseline.
+        cal_baseline = PREDICTORS[baseline_name] if name != baseline_name else None
+        bands = band_reliability(
+            rows,
+            PREDICTORS[name],
+            baseline=cal_baseline,
+            bins=args.ece_bins,
+            bootstrap=args.bootstrap,
+            seed=args.seed,
+        )
         cal = format_calibration_report(
             bands, predictor_name=name, title=f"Calibration by rating band — {args.data}"
         )
@@ -420,7 +562,7 @@ def _run_validate(args: argparse.Namespace) -> int:
         from chess_equity.validate.plots import MatplotlibNotInstalled, save_reliability_plot
 
         name = requested[0]
-        bands = band_reliability(rows, predictors[name])
+        bands = band_reliability(rows, predictors[name], bins=args.ece_bins)
         Path(args.plots).parent.mkdir(parents=True, exist_ok=True)
         try:
             save_reliability_plot(
@@ -444,7 +586,19 @@ def _run_precompute(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    model = CachingEquityModel(build_model(args.model, depth=args.depth), path=args.cache)
+    base_model = build_model(args.model, depth=args.depth)
+    # Be honest about what the bar is: the default 'baseline' is the rating-blind
+    # material/centipawn placeholder, not Maia-2 (task 0081). Warn so the web demo's
+    # equity isn't mistaken for the real rating-conditioned model.
+    warning = placeholder_equity_warning(base_model)
+    if warning:
+        print(warning, file=sys.stderr)
+    try:
+        personalized = _apply_profiles(base_model, args)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    model = CachingEquityModel(personalized, path=args.cache)
     try:
         result = precompute_game(
             model, pgn_text, white_elo=args.white_elo, black_elo=args.black_elo
@@ -494,6 +648,86 @@ def _run_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_personal(args: argparse.Namespace) -> int:
+    """Mine a player's profile and (optionally) show how it bends the equity bar."""
+    import io
+
+    from chess_equity.personal import (
+        PHASES,
+        PersonalEquityModel,
+        build_profile,
+        fetch_user_games,
+        phase_of,
+    )
+
+    try:
+        if args.pgn:
+            target = args.name or args.user
+            if not target:
+                raise ValueError("reading a profile from --pgn needs --name <player> (or --user)")
+            with open(args.pgn, encoding="utf-8") as fh:
+                profile = build_profile(fh, target, max_games=args.max_games)
+        elif args.user:
+            pgn = fetch_user_games(args.user, max_games=args.max_games, token=args.token)
+            profile = build_profile(io.StringIO(pgn), args.user, max_games=args.max_games)
+        else:
+            raise ValueError("personal needs --user <name> (live) or --pgn FILE (--name <player>)")
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    rows = []
+    for phase in PHASES:
+        stats = profile.phases.get(phase)
+        rows.append(
+            {
+                "phase": phase,
+                "moves": stats.n_moves if stats else 0,
+                "acpl": round(stats.avg_cp_loss, 1) if stats else 0.0,
+                "blunder_rate": round(stats.blunder_rate, 3) if stats else 0.0,
+                "elo_offset": round(profile.phase_offset(phase), 1),
+            }
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "username": profile.username,
+                    "rating": profile.rating,
+                    "games": profile.n_games,
+                    "moves": profile.total_moves,
+                    "overall_acpl": round(profile.overall_acpl, 1),
+                    "phases": rows,
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    print(f"profile: {profile.username}  (rating ~{profile.rating}, {profile.n_games} games, "
+          f"{profile.total_moves} moves, overall ACPL {profile.overall_acpl:.0f})")
+    print(f"  {'phase':11s} {'moves':>6s} {'ACPL':>7s} {'blunder%':>9s} {'Elo±':>7s}")
+    for r in rows:
+        print(f"  {r['phase']:11s} {r['moves']:6d} {r['acpl']:7.1f} "
+              f"{100 * r['blunder_rate']:8.1f}% {r['elo_offset']:+7.0f}")
+
+    if args.demo:
+        base = build_model("baseline")
+        nominal = profile.rating or 1500
+        # The profiled player sits at White; the demo shows band-average vs personalized
+        # equity for the FEN, exposing the phase-wise gap the offset introduces.
+        personal = PersonalEquityModel(base, white_profile=profile)
+        phase = phase_of(chess.Board(args.fen))
+        band = base.evaluate(args.fen, nominal, nominal)
+        mine = personal.evaluate(args.fen, nominal, nominal)
+        print()
+        print(f"demo ({phase}, both nominally {nominal}):")
+        print(f"  band-average  {render_eval(band)}")
+        print(f"  personalized  {render_eval(mine)}  (Elo offset {profile.phase_offset(phase):+.0f})")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -508,6 +742,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "maia2, the wdl-a regression, the maia-rollout Monte Carlo oracle, or "
                 "the maia-search expectimax (last two slow, non-interactive)"
             ),
+        )
+
+    def add_profile_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--white-profile",
+            help="personalize White: a Lichess username (mined live), or 'player@game.pgn' "
+            "to profile from a local PGN offline (task 0086)",
+        )
+        p.add_argument(
+            "--black-profile",
+            help="personalize Black: same forms as --white-profile",
         )
 
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
@@ -527,6 +772,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument(
         "--k", type=int, default=4, help="top Maia moves kept per node for --model maia-search"
     )
+    add_profile_args(ev)
     add_model_arg(ev)
 
     gr = sub.add_parser("grade", help="grade every move of a PGN by Δequity vs rating peers")
@@ -556,9 +802,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
     bc.add_argument(
+        "--clock-aware",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="warp the published equity by the side-to-move's time pressure when the feed "
+        "carries [%%clk] clocks (task 0097); --no-clock-aware emits the clock-blind bar",
+    )
+    bc.add_argument(
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
     )
+    bc.add_argument(
+        "--serve-sse",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="stream overlay events as Server-Sent-Events on this port instead of "
+        "printing JSON Lines — point an OBS browser source at "
+        "http://localhost:PORT/?src=/sse (task 0094)",
+    )
+    add_profile_args(bc)
     add_model_arg(bc)
 
     hl = sub.add_parser(
@@ -633,6 +896,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "metric delta (task 0060; 0 disables; needs `baseline` + another model)",
     )
     val.add_argument(
+        "--ece-bins",
+        type=int,
+        default=10,
+        metavar="N",
+        help="reliability-bin count for ECE and the calibration tables (default 10); "
+        "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
+    )
+    val.add_argument(
         "--calibration",
         help="also write a per-rating-band reliability report (task 0027) here",
     )
@@ -658,6 +929,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
     )
+    add_profile_args(pc)
     add_model_arg(pc)
 
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
@@ -666,6 +938,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     tr.add_argument("--iters", type=int, default=3000, help="gradient-descent iterations")
     tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
     tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
+
+    dr = sub.add_parser(
+        "doctor",
+        help="check the optional engines (Stockfish, Maia-2) are installed and working",
+    )
+    dr.add_argument(
+        "--engine",
+        action="append",
+        choices=["stockfish", "maia2"],
+        help="check only this engine (repeatable); default checks all. Use "
+        "`--engine stockfish` on a binary-only runner with no torch/Maia-2.",
+    )
+
+    pp = sub.add_parser(
+        "personal",
+        help="mine a player's per-phase quality profile and personalize the bar (task 0014)",
+    )
+    pp.add_argument("--user", help="Lichess username to mine over the network")
+    pp.add_argument("--pgn", help="local PGN file to profile from instead (offline)")
+    pp.add_argument("--name", help="which player in --pgn to profile (defaults to --user)")
+    pp.add_argument("--max-games", type=int, default=50, help="cap mined games (default 50)")
+    pp.add_argument("--token", default=None, help="Lichess API token (optional, raises rate limit)")
+    pp.add_argument("--json", action="store_true", help="emit the profile as JSON")
+    pp.add_argument(
+        "--demo",
+        action="store_true",
+        help="also show band-average vs personalized equity for --fen",
+    )
+    pp.add_argument("--fen", default=START_FEN, help="position for --demo (default: startpos)")
 
     args = parser.parse_args(argv)
 
@@ -693,6 +994,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_train(args)
     if args.command == "precompute":
         return _run_precompute(args)
+    if args.command == "doctor":
+        from chess_equity.doctor import doctor
+
+        return doctor(engines=args.engine)
+    if args.command == "personal":
+        return _run_personal(args)
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2
