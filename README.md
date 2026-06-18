@@ -34,6 +34,30 @@ The model that knows *how a human of a given rating actually plays* is
 probability. This project turns that into an eval bar, grades moves by Δequity, and aims
 to **prove** it predicts real outcomes better than the centipawn bar.
 
+## Results
+
+**The claim, precisely:** a *rating-conditioned* predictor beats the *rating-blind*
+centipawn baseline at predicting **real human outcomes** — not at out-calculating a deep
+engine on forced lines. `chess-equity validate` makes that machine-checkable: it scores
+each model on log-loss, Brier, and ECE against actual results, and only calls a model a
+winner when its 95% paired-bootstrap CI on the delta vs the baseline clears zero.
+
+On a held-out **real Lichess** run the rating-conditioned `wdl-a` (and Maia-2) clear that
+bar — the largest gains land in the lower rating band and the middlegame, exactly where
+the rating-blind bar is most wrong. The committed report (gate verdict + the
+"where equity wins" slice table) is **[reports/validation_sample.md](reports/validation_sample.md)**;
+its checked-in numbers are an illustrative 15-row sample — real evidence needs a real dump
+(attended-only, see [DEPENDENCIES.md](DEPENDENCIES.md)).
+
+Reproduce the real proof in one pinned command, then read the report it writes:
+
+```bash
+uv run chess-equity headline --data <full --with-fen dump>   # -> reports/validation_headline.md
+```
+
+Full method, the gate's exact meaning, and a no-download sample run are in
+[Data & validation](#data--validation) below.
+
 ## Install
 
 ```bash
