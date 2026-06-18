@@ -38,12 +38,17 @@ body {
   color: var(--ink);
   font: 16px/1.55 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* lock the app to the viewport so the chart-below-the-board is always visible */
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.wrap { width: min(1340px, 94vw); margin-inline: auto; }
+.wrap { width: min(1340px, 96vw); margin-inline: auto; }
 
 /* ---- header (centered wordmark) ---- */
-.site-header { padding: 1.4rem 0 1rem; text-align: center; }
+.site-header { flex: 0 0 auto; padding: .7rem 0 .5rem; text-align: center; }
 .site-header h1 {
   margin: 0;
   font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
@@ -70,45 +75,68 @@ body {
 }
 .game-picker #new:hover { background: #eef1f5; border-color: var(--accent); }
 
-/* ---- layout (design B3: cluster on top → lower-third strip → chart ribbon) ---- */
+/* ---- one-screen layout: board + rail (equal height) fill the viewport; the
+   win%-over-time chart is pinned beneath them and always visible (no scroll) ---- */
 main {
+  flex: 1 1 auto;
+  min-height: 0;                 /* let flex children shrink instead of overflowing */
   display: flex;
   flex-direction: column;
-  gap: 1.1rem;
-  align-items: center;
-  padding-bottom: 1.4rem;
+  gap: .9rem;
+  padding: 0 0 .8rem;
 }
-/* the star: board + move list, centered as one cluster */
+/* board (left) + eval rail (right): one equal-height row that grows to fill */
 .cluster {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  gap: 1.1rem;
-  align-items: stretch;
-  width: 100%;
+  gap: 1rem;
+  align-items: stretch;          /* board-col and rail get the SAME height */
   justify-content: center;
 }
-/* a plain block so the board-frame's margin-inline:auto centers normally (a flex column
-   here makes the auto margins shrink-wrap the board to zero width) */
-.board-col { flex: 0 1 560px; min-width: 0; }
-.moves-col { flex: 0 0 210px; display: flex; flex-direction: column; min-width: 0; }
+/* the left column is exactly the board's (square) width — budgeted by viewport height
+   (room for header + chart below) and width (room for the rail). The picker/controls
+   shrink to this width; the board card hugs the board with no empty white space. */
+.board-col {
+  flex: 0 0 auto; min-width: 0;
+  width: min(56vh, 46vw);
+  display: flex; flex-direction: column;
+}
+.board-frame { flex: 0 0 auto; }
+.board-frame .board { width: 100%; aspect-ratio: 1 / 1; }
+/* the eval rail: a fixed-width column the SAME height as the board-col */
+.rail {
+  flex: 0 0 340px; min-width: 0;
+  display: flex; flex-direction: column; gap: .8rem;
+}
+.rail > .card { margin-bottom: 0; }
+.rail .ratings, .rail .scores { flex: 0 0 auto; }
+/* the move list absorbs the remaining rail height and scrolls within it */
+.rail .moves-card {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+}
 .moves-head {
   font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  color: var(--muted); margin-bottom: .4rem;
+  color: var(--muted); margin-bottom: .4rem; flex: 0 0 auto;
 }
-/* the lower third: ratings | grouped scores | the aha — equal-height cards */
-.strip {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 0.9fr 1.4fr 1.1fr;
-  gap: 1.1rem;
-  align-items: stretch;
-}
-.strip > .card { margin-bottom: 0; }
-.ratings { display: flex; flex-direction: column; justify-content: center; }
-.diff-card { display: flex; flex-direction: column; justify-content: center; }
+/* compact the rail cards so the move list keeps real height in the fixed viewport */
+.rail { gap: .65rem; }
+.rail .card { padding: .8rem .95rem; }
+.rail .equity-bar { height: 30px; }
+.rail .cp-bar { height: 18px; }
+.rail .bar-block { margin: .15rem 0 .5rem; }
+.rail #equity-readout { font-size: 1.25rem; }
+.rail .scores-head { margin-bottom: .5rem; padding-bottom: .4rem; }
+.rail .divergence { padding: .6rem .75rem; font-size: .82rem; line-height: 1.4; }
+.rail .scores .divergence { margin-top: .55rem; }
+/* small screens: drop the viewport lock and stack everything, allow scroll */
 @media (max-width: 980px) {
+  body { height: auto; overflow: auto; }
   .cluster { flex-direction: column; align-items: center; }
-  .moves-col { flex: 1 1 auto; width: min(560px, 100%); }
-  .strip { grid-template-columns: 1fr; }
+  .board-col { width: min(70vh, 100%); }
+  .rail { flex: 1 1 auto; width: min(560px, 100%); }
+  .board-frame .board { height: auto; width: 100%; }
 }
 
 .card {
@@ -126,12 +154,10 @@ main {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 10px;
   box-shadow: var(--shadow);
-  /* keep the (square) board within the viewport so the whole page fits at 100% scale,
-     leaving room for the header, controls and status below it */
-  max-width: min(100%, 64vh);
-  margin-inline: auto;
+  /* sizing/centering is handled by the one-screen layout block above (the board fills
+     the leftover height as a centered square); no max-width cap here. */
 }
 /* .board / .sq / .piece / coords / highlights are shared via board.css */
 
@@ -178,7 +204,7 @@ input[type=range]::-moz-range-thumb {
   flex: 1;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: .4rem;
-  min-height: 8rem; max-height: min(58vh, 560px); overflow-y: auto;
+  min-height: 0; flex: 1 1 auto; overflow-y: auto;
   font-variant-numeric: tabular-nums;
 }
 .moves:empty::after {   /* no game loaded → a calm hint, not an empty box */
@@ -265,6 +291,7 @@ input[type=range]::-moz-range-thumb {
   background: #f3f5f8; border-color: var(--line); color: var(--muted);
 }
 .divergence.agree::before { content: "The two reads"; color: var(--muted); }
+.scores .divergence { margin-top: .7rem; }   /* sits below the two bars in the rail card */
 
 /* ---- live board interaction ---- */
 .board-frame { position: relative; }
@@ -293,13 +320,13 @@ input[type=range]::-moz-range-thumb {
 .key::before { content: ""; width: 10px; height: 10px; border-radius: 2px; }
 .key.eq::before { background: var(--accent); }
 .key.cp::before { background: var(--cp); }
-/* full-width footer ribbon — the game arc reads as a proper timeline, one grouped
-   Maia+Stockfish pair per move */
-.chart-row { width: 100%; margin-bottom: 0; padding: .7rem 1.15rem .85rem; }
+/* pinned beneath the board — fixed height, always visible, never scrolled off. One
+   grouped Maia+Stockfish pair per move across the whole game. */
+.chart-row { flex: 0 0 auto; width: 100%; margin-bottom: 0; padding: .55rem 1.1rem .65rem; }
 .chart-block figcaption .sub { color: #9aa4b6; font-weight: 500; }
 /* preserveAspectRatio="none" lets the per-move bar pairs stretch to full width at a fixed
    ribbon height (the chart is only rects + lines, so horizontal stretch doesn't distort) */
-.chart { width: 100%; height: clamp(78px, 12vh, 118px); margin-top: .45rem; display: block; }
+.chart { width: 100%; height: clamp(64px, 9vh, 96px); margin-top: .35rem; display: block; }
 .chart-mid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
 /* the soft "you are here" box behind the current move's pair */
 .chart-now { fill: rgba(47, 158, 110, .12); stroke: rgba(47, 158, 110, .34); stroke-width: 1; }

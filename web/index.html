@@ -14,11 +14,11 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <!--
-  Broadcast layout (design B3): the board + move list are the star up top; a "lower third"
-  strip beneath groups the two reads of the current position (Maia-2 equity + Stockfish
-  centipawn) together with the rating sliders and the "why the bars differ" note; a
-  full-width ribbon at the bottom traces White win% across the whole game, one grouped
-  Maia+Stockfish pair per move. Needs the backend:
+  One-screen layout: the page is locked to the viewport (no scroll). The board (left) and
+  the eval rail (right) are one equal-height row that flexes to fill; the "White win% over
+  the game" ribbon is pinned as a fixed strip beneath them, so it is ALWAYS visible. The
+  rail groups the two reads of the current position (Maia-2 equity + Stockfish centipawn),
+  the rating sliders, and the move list. Needs the backend:
       uv run python web/server.py     # then open http://localhost:8000/
 -->
 <body>
@@ -29,7 +29,7 @@
   </header>
 
   <main class="wrap">
-    <!-- the star: board + move list, centered as one cluster -->
+    <!-- board (left) + eval rail (right): one equal-height row that fills the viewport -->
     <section class="cluster">
       <div class="board-col">
         <div class="game-picker">
@@ -51,51 +51,48 @@
         <div id="status" class="move-caption"></div>
       </div>
 
-      <aside class="moves-col">
-        <div class="moves-head">Moves</div>
-        <div id="moves" class="moves" aria-label="move list"></div>
+      <aside class="rail">
+        <!-- hero: the two reads of THIS position, grouped, with the aha note -->
+        <div class="card bars scores">
+          <div class="scores-head" id="scores-head">This position</div>
+          <div class="bar-block">
+            <div class="bar-label">
+              <span class="bar-name">Equity <span class="sub">Maia-2 · rating-conditioned</span></span>
+              <span class="readout" id="equity-readout">—</span>
+            </div>
+            <div class="bar equity-bar"><div class="fill" id="equity-fill"></div><span class="mid"></span></div>
+          </div>
+          <div class="bar-block">
+            <div class="bar-label">
+              <span class="bar-name">Classic eval <span class="sub">Stockfish · rating-blind</span></span>
+              <span class="readout" id="cp-readout">—</span>
+            </div>
+            <div class="bar cp-bar"><div class="fill" id="cp-fill"></div><span class="mid"></span></div>
+          </div>
+          <p id="divergence" class="divergence"></p>
+        </div>
+
+        <div class="card ratings">
+          <div class="rating-row">
+            <label for="white-elo">White rating</label>
+            <output id="white-elo-out">1500</output>
+            <input id="white-elo" type="range" min="1100" max="2300" step="100" value="1500" />
+          </div>
+          <div class="rating-row">
+            <label for="black-elo">Black rating</label>
+            <output id="black-elo-out">1500</output>
+            <input id="black-elo" type="range" min="1100" max="2300" step="100" value="1500" />
+          </div>
+        </div>
+
+        <div class="card moves-card">
+          <div class="moves-head">Moves</div>
+          <div id="moves" class="moves" aria-label="move list"></div>
+        </div>
       </aside>
     </section>
 
-    <!-- the lower third: the two reads of THIS position, grouped, plus ratings + the aha -->
-    <section class="strip">
-      <div class="card ratings">
-        <div class="rating-row">
-          <label for="white-elo">White rating</label>
-          <output id="white-elo-out">1500</output>
-          <input id="white-elo" type="range" min="1100" max="2300" step="100" value="1500" />
-        </div>
-        <div class="rating-row">
-          <label for="black-elo">Black rating</label>
-          <output id="black-elo-out">1500</output>
-          <input id="black-elo" type="range" min="1100" max="2300" step="100" value="1500" />
-        </div>
-      </div>
-
-      <div class="card bars scores">
-        <div class="scores-head" id="scores-head">This position</div>
-        <div class="bar-block">
-          <div class="bar-label">
-            <span class="bar-name">Equity <span class="sub">Maia-2 · rating-conditioned</span></span>
-            <span class="readout" id="equity-readout">—</span>
-          </div>
-          <div class="bar equity-bar"><div class="fill" id="equity-fill"></div><span class="mid"></span></div>
-        </div>
-        <div class="bar-block">
-          <div class="bar-label">
-            <span class="bar-name">Classic eval <span class="sub">Stockfish · rating-blind</span></span>
-            <span class="readout" id="cp-readout">—</span>
-          </div>
-          <div class="bar cp-bar"><div class="fill" id="cp-fill"></div><span class="mid"></span></div>
-        </div>
-      </div>
-
-      <div class="card diff-card">
-        <p id="divergence" class="divergence"></p>
-      </div>
-    </section>
-
-    <!-- the footer ribbon: White win% across the whole game, one Maia+Stockfish pair per move -->
+    <!-- pinned beneath the board: White win% across the game, one Maia+Stockfish pair per move -->
     <figure class="card chart-row">
       <figcaption>White win&#37; over the game <span class="sub">· each move shows its Maia + Stockfish pair</span>
         <span class="legend"><span class="key eq">Maia equity</span>
