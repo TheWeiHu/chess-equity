@@ -130,6 +130,37 @@ def test_format_report_is_markdown():
     assert "## By rating" in md and "## By phase" in md
 
 
+def test_report_carries_reliability_curve_with_per_bin_counts():
+    # Task 0118: the validate report shows the binned empirical win-rate behind the
+    # scalar ECE, with per-bin counts — so a reader can see *why* a bar is (un)calibrated.
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    reports = evaluate(rows, {"baseline": baseline_cp})
+    # The overall reliability table is populated and is exactly the metrics-level table.
+    rep = reports[0]
+    assert rep.reliability == reliability_table(
+        [baseline_cp(r) for r in rows], [r.result for r in rows], bins=10
+    )
+    md = format_report(reports)
+    assert "## Reliability curve" in md
+    assert "mean obs" in md and "gap (obs−pred)" in md
+    # Per-bin counts sum to the overall n (every scored row lands in exactly one bin).
+    assert sum(count for *_rest, count in rep.reliability) == rep.overall.n
+
+
+def test_calibrated_predictor_scores_ece_near_zero_through_report():
+    # Task 0118: a perfectly-calibrated (but deliberately unsharp) predictor — it always
+    # says 0.3 for a group that empirically scores 0.3 — must read ECE ~ 0 in the report
+    # path. Calibration is not sharpness: a flat 0.3 on 3-win/7-loss rows is honest.
+    rows = [_row(result=1.0)] * 3 + [_row(result=0.0)] * 7
+    calibrated = lambda r: 0.3  # noqa: E731 — flat, matches the empirical 0.3 win-rate
+    rep = evaluate(rows, {"calibrated": calibrated})[0]
+    assert isclose(rep.overall.ece, 0.0, abs_tol=1e-9)
+    # The single populated bin's observed rate equals its predicted rate (gap 0).
+    assert len(rep.reliability) == 1
+    _bin_lo, mean_pred, mean_obs, count = rep.reliability[0]
+    assert count == 10 and isclose(mean_pred, 0.3) and isclose(mean_obs, 0.3)
+
+
 # --- gate verdict (task 0058) --------------------------------------------------
 
 def test_gate_verdict_reflects_computed_deltas():
@@ -274,6 +305,40 @@ def test_format_verdict_renders_ci_and_significance_criterion():
     plain = "\n".join(format_verdict(gate_verdicts(reports)))
     assert "95% CI clears" not in plain and "log_loss 95% CI" not in plain
     assert "-> **PASS**" in plain
+
+
+def test_format_verdict_shows_percent_reduction_for_passing_predictor():
+    # The headline effect size (task 0133): a passing predictor's line states the percent
+    # reduction in log-loss (and Brier) vs the baseline, computed from the absolute deltas.
+    from chess_equity.validate.harness import format_verdict
+
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0), _row(cp=0, result=0.5)]
+    oracle = lambda r: r.result  # noqa: E731 — perfect predictor PASSES
+    reports = evaluate(rows, {"baseline": baseline_cp, "oracle": oracle})
+    by_name = {r.name: r for r in reports}
+
+    v = gate_verdicts(reports)[0]
+    assert v.passed is True
+    # Expected reduction = (baseline - model) / baseline * 100, on the overall scores.
+    bl = by_name["baseline"].overall
+    ml = by_name["oracle"].overall
+    exp_ll = (bl.log_loss - ml.log_loss) / bl.log_loss * 100.0
+    exp_br = (bl.brier - ml.brier) / bl.brier * 100.0
+
+    block = "\n".join(format_verdict(gate_verdicts(reports)))
+    assert f"cuts log-loss {exp_ll:.1f}% (Brier {exp_br:.1f}%) vs baseline" in block
+
+
+def test_format_verdict_omits_percent_reduction_for_failing_predictor():
+    # A failing predictor gets no "cuts log-loss …%" headline — the number would be
+    # negative/misleading, so it's reserved for predictors that actually win.
+    from chess_equity.validate.harness import format_verdict
+
+    rows = [_row(cp=300, result=1.0), _row(cp=-300, result=0.0)]
+    worse = lambda r: 1.0 - baseline_cp(r)  # noqa: E731 — strictly worse than baseline
+    block = "\n".join(format_verdict(gate_verdicts(evaluate(rows, {"baseline": baseline_cp, "worse": worse}))))
+    assert "-> **FAIL**" in block
+    assert "cuts log-loss" not in block
 
 
 def test_gate_cli_significance_flips_sample_to_fail(tmp_path, capsys):

@@ -19,8 +19,8 @@ which reads each row's ``fen`` — present only when the dataset was built with
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
@@ -38,6 +38,7 @@ from chess_equity.validate.metrics import (
     brier_score,
     expected_calibration_error,
     log_loss,
+    reliability_table,
 )
 
 # A predictor: a position row -> predicted White expected-score in [0, 1].
@@ -251,13 +252,26 @@ def _score(preds: Sequence[float], labels: Sequence[float], *, bins: int = 10) -
     )
 
 
+# One reliability bucket: (bin_lo, mean_pred, mean_obs, count) — the binned empirical
+# White win-rate vs the predicted win-rate that backs the scalar ECE (task 0118).
+ReliabilityRow = Tuple[float, float, float, int]
+
+
 @dataclass(frozen=True)
 class PredictorReport:
-    """A predictor's overall scores plus per-slice breakdowns."""
+    """A predictor's overall scores plus per-slice breakdowns.
+
+    ``reliability`` is the overall reliability curve (task 0118): one
+    ``(bin_lo, mean_pred, mean_obs, count)`` per non-empty prediction bin, the binned
+    empirical win-rate that backs the scalar ``overall.ece`` — so the report can show
+    *why* a bar reading 70% is (or isn't) honest, not just the one-number ECE. Defaults
+    to empty so a hand-built report stays valid; :func:`evaluate` always fills it.
+    """
 
     name: str
     overall: Scores
     slices: Dict[str, Dict[str, Scores]]  # slicer name -> slice value -> scores
+    reliability: List[ReliabilityRow] = field(default_factory=list)
 
 
 def evaluate(
@@ -289,7 +303,12 @@ def evaluate(
                 for value, idxs in sorted(grouped.items())
             }
         reports.append(
-            PredictorReport(name=name, overall=_score(preds, labels, bins=bins), slices=slices)
+            PredictorReport(
+                name=name,
+                overall=_score(preds, labels, bins=bins),
+                slices=slices,
+                reliability=reliability_table(preds, labels, bins=bins),
+            )
         )
     return reports
 
@@ -546,6 +565,10 @@ class Verdict:
     reads INCONCLUSIVE rather than PASS/FAIL and ``passed`` is forced ``False`` — a
     tiny-n point win must not read green. ``held_out_n``/``min_n`` are kept so the report
     and exit-code paths can name the shortfall.
+
+    ``baseline_log_loss`` / ``baseline_brier`` are the baseline's overall scores, kept so
+    the report can express each delta as a percent reduction relative to the baseline
+    (task 0133) — the one human-legible number that sells the thesis.
     """
 
     name: str
@@ -558,6 +581,8 @@ class Verdict:
     underpowered: bool = False
     held_out_n: Optional[int] = None
     min_n: Optional[int] = None
+    baseline_log_loss: Optional[float] = None
+    baseline_brier: Optional[float] = None
 
 
 def gate_verdicts(
@@ -631,13 +656,33 @@ def gate_verdicts(
                 underpowered=underpowered,
                 held_out_n=held_out_n,
                 min_n=min_n,
+                baseline_log_loss=baseline.overall.log_loss,
+                baseline_brier=baseline.overall.brier,
             )
         )
     return verdicts
 
 
+def _percent_reduction(delta: Optional[float], baseline: Optional[float]) -> Optional[float]:
+    """Percent reduction of a (model − baseline) ``delta`` relative to ``baseline``.
+
+    A *negative* delta is an improvement (lower log-loss/Brier is better), so the
+    reduction is ``-delta / baseline * 100`` — positive when the model beats the baseline.
+    Returns ``None`` if either value is missing or the baseline is non-positive (no
+    meaningful percentage to report).
+    """
+    if delta is None or baseline is None or baseline <= 0:
+        return None
+    return -delta / baseline * 100.0
+
+
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
-    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069)."""
+    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069).
+
+    For each *passing* predictor, the line also states the percent reduction in log-loss
+    (and Brier) relative to the baseline (task 0133) — the human-legible "equity cuts
+    log-loss by X%" headline that sells the thesis, alongside the absolute deltas + CI.
+    """
     out: List[str] = ["## Gate verdict", ""]
     if not verdicts:
         out.append(
@@ -696,6 +741,12 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
             # Gated run but no CI for this predictor — surface the missing evidence.
             line += f"; {v.headline_metric} CI unavailable"
         line += f" -> **{status}**"
+        if v.passed:
+            # The thesis-selling headline: how much does equity cut the loss, in percent?
+            ll_pct = _percent_reduction(v.log_loss_delta, v.baseline_log_loss)
+            br_pct = _percent_reduction(v.brier_delta, v.baseline_brier)
+            if ll_pct is not None and br_pct is not None:
+                line += f" — cuts log-loss {ll_pct:.1f}% (Brier {br_pct:.1f}%) vs {baseline_name}"
         out.append(line)
     out.append("")
     return out
@@ -703,6 +754,36 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
 
 def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
+
+
+def format_reliability(reports: Sequence[PredictorReport]) -> str:
+    """Render each predictor's overall reliability curve as Markdown (task 0118).
+
+    One table per predictor: for each prediction bin, the mean predicted White
+    expected-score vs the **empirical** White win-rate observed in that bin, the per-bin
+    count, and their gap. This is what makes the scalar ECE honest to a reader — a bar
+    reading 70% is only a real P(win)+½P(draw) if the ``mean obs`` of the 0.70 bin is
+    ~0.70. A well-calibrated predictor hugs the diagonal (``gap ≈ 0``) in every bin.
+    """
+    out: List[str] = ["## Reliability curve (is the equity bar an honest probability?)", ""]
+    out.append(
+        "For each predicted-probability bin: mean predicted vs **observed** White "
+        "expected-score, the bin's row count, and the gap (obs − pred). A calibrated "
+        "predictor has `gap ≈ 0` in every bin; the count-weighted mean `|gap|` is the ECE."
+    )
+    for r in reports:
+        out.append("")
+        out.append(f"### {r.name}  (n={r.overall.n}, ECE={r.overall.ece:.4f})")
+        out.append("")
+        out.append("| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |")
+        out.append("|--:|--:|--:|--:|--:|")
+        for bin_lo, mean_pred, mean_obs, count in r.reliability:
+            out.append(
+                f"| {bin_lo:.2f} | {mean_pred:.3f} | {mean_obs:.3f} | {count} "
+                f"| {mean_obs - mean_pred:+.3f} |"
+            )
+    out.append("")
+    return "\n".join(out)
 
 
 def format_report(
@@ -739,6 +820,10 @@ def format_report(
         for r in reports:
             for value, s in r.slices[slicer_name].items():
                 out.append(f"| {r.name} | {value} " + _scores_row("", s)[2:])
+
+    if reports and any(r.reliability for r in reports):
+        out.append("")
+        out.append(format_reliability(reports))
 
     h2h = head_to_head_deltas(reports)
     if h2h is not None:
