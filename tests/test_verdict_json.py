@@ -27,10 +27,8 @@ SAMPLE = REPO_ROOT / "data" / "sample" / "dataset.csv"
 
 def _validate(out: Path, *extra) -> int:
     # --bootstrap 0 keeps these fast and deterministic; the verdict mirrors the point gate.
-    # --min-n 0 disables the underpowered guard (task 0132) so the 15-row sample exercises
-    # PASS/FAIL mechanics here instead of reading INCONCLUSIVE (exit 4) on tiny n.
     return main(
-        ["validate", "--data", str(SAMPLE), "--out", str(out), "--bootstrap", "0", "--min-n", "0", *extra]
+        ["validate", "--data", str(SAMPLE), "--out", str(out), "--bootstrap", "0", *extra]
     )
 
 
@@ -63,8 +61,11 @@ def test_verdict_json_schema_and_fields(tmp_path):
 
 def test_pass_agrees_with_markdown_and_exit_code(tmp_path):
     # wdl-a beats baseline on the committed sample → PASS everywhere.
+    # --min-n 0 turns off the underpowered-sample floor (task 0132): this tiny
+    # fixture is n<2000, so without the override the gate reads INCONCLUSIVE
+    # (exit 4) rather than exercising the PASS↔markdown↔exit-code agreement we pin here.
     out = tmp_path / "report.md"
-    rc = _validate(out, "--models", "baseline,wdl-a", "--gate")
+    rc = _validate(out, "--models", "baseline,wdl-a", "--gate", "--min-n", "0")
     payload = _verdict_beside(out)
     report = out.read_text(encoding="utf-8")
 
@@ -80,8 +81,9 @@ def test_pass_agrees_with_markdown_and_exit_code(tmp_path):
 
 def test_fail_agrees_with_markdown_and_exit_code(tmp_path):
     # baseline+clock is a no-op on the clock-blind sample → it cannot beat baseline → FAIL.
+    # --min-n 0 disables the underpowered floor (task 0132); see PASS test above.
     out = tmp_path / "report.md"
-    rc = _validate(out, "--models", "baseline,baseline+clock", "--gate")
+    rc = _validate(out, "--models", "baseline,baseline+clock", "--gate", "--min-n", "0")
     payload = _verdict_beside(out)
     report = out.read_text(encoding="utf-8")
 
