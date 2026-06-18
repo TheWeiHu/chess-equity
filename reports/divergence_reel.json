@@ -1,0 +1,175 @@
+{
+  "source": "chess-equity broadcast --pgn data/sample/divergence_reel.pgn (clock-aware; rating-blind material cp fallback)",
+  "threshold": 0.15,
+  "game": {
+    "type": "game",
+    "game_id": "https://lichess.org/divreel01",
+    "players": {
+      "white": {
+        "name": "alice",
+        "rating": 1730
+      },
+      "black": {
+        "name": "bob",
+        "rating": 1715
+      }
+    }
+  },
+  "divergences": [
+    {
+      "type": "position",
+      "ply": 24,
+      "move": {
+        "san": "Kh8"
+      },
+      "equity": 0.32243,
+      "cp": 300.0,
+      "clock": {
+        "white": 1.5,
+        "black": 9.0
+      },
+      "grade": {
+        "label": "brilliant",
+        "delta": 0.519266
+      },
+      "drama": {
+        "kind": "escape",
+        "magnitude": 1.0,
+        "headline": "Black claws back from a lost position with Kh8 (16%→68%)"
+      },
+      "cp_implied": 0.751126,
+      "divergence": {
+        "gap": -0.428696,
+        "abs_gap": 0.428696,
+        "fires": true,
+        "side": "black",
+        "magnitude": 0.857391,
+        "label": "human edge · black +43 vs engine"
+      }
+    },
+    {
+      "type": "position",
+      "ply": 22,
+      "move": {
+        "san": "Qe7"
+      },
+      "equity": 0.343338,
+      "cp": 300.0,
+      "clock": {
+        "white": 3.0,
+        "black": 15.0
+      },
+      "grade": {
+        "label": "brilliant",
+        "delta": 0.477158
+      },
+      "drama": {
+        "kind": "escape",
+        "magnitude": 1.0,
+        "headline": "Black claws back from a lost position with Qe7 (18%→66%)"
+      },
+      "cp_implied": 0.751126,
+      "divergence": {
+        "gap": -0.407788,
+        "abs_gap": 0.407788,
+        "fires": true,
+        "side": "black",
+        "magnitude": 0.815576,
+        "label": "human edge · black +41 vs engine"
+      }
+    },
+    {
+      "type": "position",
+      "ply": 20,
+      "move": {
+        "san": "h6"
+      },
+      "equity": 0.382144,
+      "cp": 300.0,
+      "clock": {
+        "white": 6.0,
+        "black": 23.0
+      },
+      "grade": {
+        "label": "brilliant",
+        "delta": 0.422114
+      },
+      "drama": {
+        "kind": "escape",
+        "magnitude": 1.0,
+        "headline": "Black claws back from a lost position with h6 (20%→62%)"
+      },
+      "cp_implied": 0.751126,
+      "divergence": {
+        "gap": -0.368982,
+        "abs_gap": 0.368982,
+        "fires": true,
+        "side": "black",
+        "magnitude": 0.737963,
+        "label": "human edge · black +37 vs engine"
+      }
+    },
+    {
+      "type": "position",
+      "ply": 18,
+      "move": {
+        "san": "Ba7"
+      },
+      "equity": 0.428203,
+      "cp": 300.0,
+      "clock": {
+        "white": 10.0,
+        "black": 31.0
+      },
+      "grade": {
+        "label": "brilliant",
+        "delta": 0.364998
+      },
+      "drama": {
+        "kind": "escape",
+        "magnitude": 0.912,
+        "headline": "Black claws back from a lost position with Ba7 (21%→57%)"
+      },
+      "cp_implied": 0.751126,
+      "divergence": {
+        "gap": -0.322923,
+        "abs_gap": 0.322923,
+        "fires": true,
+        "side": "black",
+        "magnitude": 0.645846,
+        "label": "human edge · black +32 vs engine"
+      }
+    },
+    {
+      "type": "position",
+      "ply": 16,
+      "move": {
+        "san": "a6"
+      },
+      "equity": 0.50379,
+      "cp": 300.0,
+      "clock": {
+        "white": 18.0,
+        "black": 38.0
+      },
+      "grade": {
+        "label": "brilliant",
+        "delta": 0.281784
+      },
+      "drama": {
+        "kind": "escape",
+        "magnitude": 0.704,
+        "headline": "Black claws back from a lost position with a6 (21%→50%)"
+      },
+      "cp_implied": 0.751126,
+      "divergence": {
+        "gap": -0.247336,
+        "abs_gap": 0.247336,
+        "fires": true,
+        "side": "black",
+        "magnitude": 0.494672,
+        "label": "human edge · black +25 vs engine"
+      }
+    }
+  ]
+}

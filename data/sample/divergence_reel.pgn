@@ -1,0 +1,12 @@
+[Event "Rated Bullet game"]
+[Site "https://lichess.org/divreel01"]
+[Date "2026.06.18"]
+[Round "-"]
+[White "alice"]
+[Black "bob"]
+[Result "*"]
+[WhiteElo "1730"]
+[BlackElo "1715"]
+[TimeControl "60+0"]
+
+1. e4 { [%clk 0:01:00] } 1... e5 { [%clk 0:01:00] } 2. Nf3 { [%clk 0:00:57] } 2... Nc6 { [%clk 0:00:59] } 3. Bc4 { [%clk 0:00:53] } 3... Bc5 { [%clk 0:00:58] } 4. d3 { [%clk 0:00:48] } 4... Nf6 { [%clk 0:00:56] } 5. O-O { [%clk 0:00:42] } 5... O-O { [%clk 0:00:53] } 6. h3 { [%clk 0:00:35] } 6... Ng4 { [%clk 0:00:49] } 7. hxg4 { [%clk 0:00:27] } 7... d6 { [%clk 0:00:44] } 8. c3 { [%clk 0:00:18] } 8... a6 { [%clk 0:00:38] } 9. b4 { [%clk 0:00:10] } 9... Ba7 { [%clk 0:00:31] } 10. a4 { [%clk 0:00:06] } 10... h6 { [%clk 0:00:23] } 11. Re1 { [%clk 0:00:03] } 11... Qe7 { [%clk 0:00:15] } 12. Nbd2 { [%clk 0:00:01.5] } 12... Kh8 { [%clk 0:00:09] } *
