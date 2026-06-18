@@ -37,7 +37,7 @@ against):
   shallow material count misreads but a deep engine does not pre-solve.
 
 Why the committed demo stays on ``material`` (and Stockfish is opt-in) is recorded in
-``docs/web-demo-objective-bar-decision.md`` (task 0082).
+the devbrain page ``web-demo-objective-bar-decision`` (task 0082).
 
 Run from the repo root:
 ``python web/build_demo.py [--model demo|maia2] [--cp-engine material|stockfish] [--depth N]``
