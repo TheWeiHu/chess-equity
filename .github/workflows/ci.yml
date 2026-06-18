@@ -27,3 +27,10 @@ jobs:
       # (web/ holds test_import_game.py — the Lichess game-import tooling).
       - name: Run tests
         run: pytest tests baseline overlay web -q
+      # The live demo's eval-cache logic (web/live.js) is gated by a dependency-free node
+      # test: scrubbing a charted game must make zero /api/play calls (task 0123).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run web JS tests
+        run: node web/test_live.js

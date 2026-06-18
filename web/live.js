@@ -447,11 +447,20 @@
     });
     function slider(id, outId, key) {
       var el = $(id);
+      // During a drag `input` fires on every tick. Re-scoring the CURRENT position is
+      // cheap (one eval, busy-guarded) so do it live for instant feedback — but re-charting
+      // the WHOLE game is expensive, so defer it to `change`, which fires once when the drag
+      // settles. Before this, every intermediate tick kicked off a fresh full-game re-eval
+      // (startFill), so dragging 1100→2300 recomputed the entire game a dozen times over
+      // for ratings the user never stopped at (task 0123).
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        ensureEval(state.ply);   // re-score the current position now…
-        startFill();             // …and re-chart the whole game at the new ratings
+        ensureEval(state.ply);   // live feedback for the current position only
+      });
+      el.addEventListener("change", function () {
+        state[key] = parseInt(el.value, 10);
+        startFill();             // re-chart the whole game once, at the settled ratings
       });
     }
     slider("white-elo", "white-elo-out", "we");
@@ -480,4 +489,18 @@
   loadLibrary();
   goPly(0);   // start position, evaluated live
   startFill();
+
+  // Test hook (web/test_live.js): drive scrub/eval/rating-change under DOM+fetch stubs
+  // to prove that re-visiting an already-scored ply at the current ratings makes zero
+  // /api/play calls (task 0123). Not used by the page itself.
+  window.ChessEquityLive = {
+    state: state, goPly: goPly, setGame: setGame, ensureEval: ensureEval,
+    startFill: startFill, hasFresh: hasFresh,
+    // one rating-slider drag tick: re-score the current ply only (no full re-chart)
+    ratingInput: function (we, be) { state.we = we; state.be = be; ensureEval(state.ply); },
+    // the drag settling (change event): re-chart the whole game once
+    ratingCommit: function () { startFill(); },
+    // a full settle (input + commit), as the slider behaves end-to-end
+    setRatings: function (we, be) { state.we = we; state.be = be; ensureEval(state.ply); startFill(); },
+  };
 })();
