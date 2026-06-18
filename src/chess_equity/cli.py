@@ -965,6 +965,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     add_profile_args(pc)
     add_model_arg(pc)
 
+    from chess_equity.validate.headline import HEADLINE_OUT, SMOKE_DATA
+
+    hd = sub.add_parser(
+        "headline",
+        help="run the pinned headline thesis comparison (baseline,wdl-a,maia2 -> "
+        f"{HEADLINE_OUT}; needs a --with-fen dataset for the maia2 leg)",
+    )
+    hd.add_argument(
+        "--data",
+        default=SMOKE_DATA,
+        help=f"path to a --with-fen dataset to score (default: {SMOKE_DATA}, the "
+        "committed dry-run sample; the real run points this at a full built dump)",
+    )
+    hd.add_argument("--out", default=HEADLINE_OUT, help=f"report path (default: {HEADLINE_OUT})")
+    hd.add_argument(
+        "--bootstrap", type=int, default=2000, metavar="N",
+        help="paired-bootstrap resamples for the significance CIs (0 disables)",
+    )
+    hd.add_argument("--seed", type=int, default=0, help="RNG seed for the bootstrap")
+
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
     tr.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     tr.add_argument("--out", help="artifact path (default: the packaged wdl_a.json)")
@@ -1023,6 +1043,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_data(args)
     if args.command == "validate":
         return _run_validate(args)
+    if args.command == "headline":
+        from chess_equity.validate.headline import run_headline
+
+        return run_headline(args.data, out=args.out, bootstrap=args.bootstrap, seed=args.seed)
     if args.command == "train":
         return _run_train(args)
     if args.command == "precompute":
