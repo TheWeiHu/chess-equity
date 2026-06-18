@@ -53,28 +53,37 @@ function fetchStub(url, opts) {
 }
 
 // ---- minimal DOM + ChessBoard --------------------------------------------------
+// Tracks appended children + clears them on innerHTML="" so tests can inspect what a
+// render actually drew (e.g. the move-number tick row, task 0080).
 function fakeEl() {
-  return {
-    style: {}, dataset: {}, value: "1500", textContent: "", innerHTML: "", hidden: false,
-    className: "", max: 0, disabled: false,
+  const el = {
+    style: {}, dataset: {}, value: "1500", textContent: "", hidden: false,
+    className: "", max: 0, disabled: false, children: [],
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     addEventListener() {}, removeEventListener() {},
-    appendChild(c) { return c; }, removeChild() {}, remove() {},
+    appendChild(c) { el.children.push(c); return c; }, removeChild() {}, remove() {},
     querySelector() { return null; }, querySelectorAll() { return []; },
     setAttribute() {}, getAttribute() { return null; }, scrollIntoView() {},
     getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; },
     focus() {}, select() {}, animate() {},
   };
+  Object.defineProperty(el, "innerHTML", {
+    get() { return el._html || ""; },
+    set(v) { el._html = v; if (!v) el.children.length = 0; },
+  });
+  return el;
 }
 const ChessBoard = {
   FILES: "abcdefgh",
   parseFen(fen) { return { grid: [], turn: (fen.split(" ")[1] || "w") }; },
   render() {}, sqName(r, c) { return "abcdefgh"[c] + (8 - r); }, glyph() { return ""; },
 };
+// Cache elements by id so a test sees the SAME element live.js rendered into (e.g. #chart-ticks).
+const elById = {};
 const sandbox = {
   window: { ChessBoard },
   document: {
-    getElementById() { return fakeEl(); },
+    getElementById(id) { return elById[id] || (elById[id] = fakeEl()); },
     createElement() { return fakeEl(); },
     createElementNS() { return fakeEl(); },
     querySelector() { return fakeEl(); },
@@ -171,6 +180,29 @@ check("setting up a FEN position starts a fresh one-node free-play line", () => 
   assert.strictEqual(live.state.meta, null, "custom setup is free play (no loaded-game meta)");
   assert.ok(live.hasFresh(live.state.line[0]), "the supplied eval is reused, not refetched");
   assert.strictEqual(playPosts, 0, "setup reuses the supplied eval — zero /api/play calls, got " + playPosts);
+});
+
+// --- x-axis move-number ticks scaled to game length (task 0080) ---
+
+check("a multi-move game renders move-number ticks scaled to its length", () => {
+  live.setGame(fakeGame());                        // start + 5 plies → full moves 1..3
+  const axis = sandbox.document.getElementById("chart-ticks");
+  assert.ok(axis.children.length >= 2,
+    "expected sparse move-number ticks on a multi-move game, got " + axis.children.length);
+  const labels = axis.children.map((c) => c.textContent);
+  assert.deepStrictEqual(labels, ["1", "2", "3"], "ticks should label moves 1..3, got " + labels);
+  // every tick is positioned along the x-axis as a percentage
+  assert.ok(axis.children.every((c) => /%$/.test(c.style.left)), "each tick must be placed by left%");
+});
+
+check("the tick model is sparse and game-length-scaled", () => {
+  assert.strictEqual(live.moveTicks(1).length, 0, "the start position alone has no move scale");
+  // (.join avoids cross-realm array compare: moveTicks runs inside the vm context)
+  assert.strictEqual(live.moveTicks(6).map((t) => t.label).join(","), "1,2,3");
+  // a long game stays sparse: at most ~8 ticks, last label = last full move
+  const many = live.moveTicks(81);                 // 80 plies → 40 full moves
+  assert.ok(many.length > 0 && many.length <= 8, "a long game must stay sparse, got " + many.length);
+  assert.strictEqual(many[many.length - 1].label, "40", "the last tick should reach the final move");
 });
 
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }

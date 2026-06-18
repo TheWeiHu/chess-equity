@@ -198,12 +198,17 @@ def fit(
     lr: float = 0.5,
     iters: int = 3000,
     l2: float = 1e-4,
+    source_month: Optional[str] = None,
 ) -> WdlRegression:
     """Fit a :class:`WdlRegression` by batch gradient descent on multinomial log-loss.
 
     Pure Python and deterministic (zero init, full-batch GD) so a training run is
     reproducible from the committed sample. The gradient of softmax cross-entropy is
     the clean ``(p_k - t_k) · x_j``; L2 keeps weights bounded on tiny datasets.
+
+    ``source_month`` (``YYYY-MM``) records the Lichess dump this model was fit on into
+    ``meta["fit_month"]`` so the 0112 leakage guard can refuse an eval set that *is* the
+    training month — without it the provenance silently goes stale (as it did once).
     """
     if not rows:
         raise ValueError("need at least one row to fit")
@@ -230,13 +235,15 @@ def fit(
             for j in range(N_FEATURES):
                 weights[k][j] -= lr * (grad[k][j] / n + l2 * weights[k][j])
 
-    meta = {
+    meta: Dict[str, object] = {
         "n_train": n,
         "iters": iters,
         "lr": lr,
         "l2": l2,
         "final_log_loss": _train_log_loss(weights, X, T),
     }
+    if source_month is not None:
+        meta["fit_month"] = source_month
     return WdlRegression(weights=weights, meta=meta)
 
 

@@ -74,6 +74,21 @@
   // an eval is "fresh" only if it was computed at the current pair of ratings
   function hasFresh(n) { return n.resp && n.resp._we === state.we && n.resp._be === state.be; }
 
+  // Sparse move-number ticks for the x-axis, scaled to the game length so a long game
+  // doesn't crowd the axis. node[0] is the start, plies 1.. are half-moves; ply p belongs
+  // to full move ceil(p/2). Returns at most ~8 evenly-spaced ticks, each {ply, label}.
+  function moveTicks(n) {
+    var lastPly = n - 1;
+    if (lastPly < 1) return [];                  // start position only → nothing to scale
+    var totalMoves = Math.ceil(lastPly / 2);
+    var step = Math.max(1, Math.ceil(totalMoves / 8));
+    var ticks = [];
+    for (var m = step; m <= totalMoves; m += step) {
+      ticks.push({ ply: Math.min(2 * m - 1, lastPly), label: String(m) });  // White's ply of move m
+    }
+    return ticks;
+  }
+
   function renderChart() {
     var svg = $("chart"); if (!svg) return;
     var n = state.line.length, W = 480, H = 150, padX = 10, padY = 12;
@@ -112,6 +127,21 @@
       hit.appendChild(t);
       hit.addEventListener("click", function () { goPly(i); });
       svg.appendChild(hit);
+    });
+    // x-axis scale: sparse move-number labels (HTML overlay, so they aren't distorted by
+    // the SVG's non-uniform stretch) plus a faint tick mark in the SVG at each one.
+    var ticks = moveTicks(n);
+    var axis = $("chart-ticks");
+    if (axis) axis.innerHTML = "";
+    ticks.forEach(function (tk) {
+      var x = xFor(tk.ply);
+      svg.appendChild(svgEl("line", { x1: x, y1: H - padY, x2: x, y2: H - padY + 5, class: "chart-tick-mark" }));
+      if (!axis) return;
+      var sp = document.createElement("span");
+      sp.className = "chart-tick";
+      sp.textContent = tk.label;
+      sp.style.left = (x / W * 100) + "%";
+      axis.appendChild(sp);
     });
   }
 
@@ -532,7 +562,7 @@
   // /api/play calls (task 0123). Not used by the page itself.
   window.ChessEquityLive = {
     state: state, goPly: goPly, setGame: setGame, ensureEval: ensureEval,
-    setPosition: setPosition, hasFresh: hasFresh, startFill: startFill,
+    setPosition: setPosition, hasFresh: hasFresh, startFill: startFill, moveTicks: moveTicks,
     // one rating-slider drag tick: re-score the current ply only (no full re-chart)
     ratingInput: function (we, be) { state.we = we; state.be = be; ensureEval(state.ply); },
     // the drag settling (change event): re-chart the whole game once

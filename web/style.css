@@ -382,5 +382,11 @@ input[type=range]::-moz-range-thumb {
 /* the soft "you are here" box behind the current move's pair */
 .chart-now { fill: rgba(47, 158, 110, .12); stroke: rgba(47, 158, 110, .34); stroke-width: 1; }
 .chart-cursor { stroke: #aab2c0; stroke-width: 1; stroke-dasharray: 2 3; }
+/* sparse move-number scale: faint marks in the SVG + an HTML label row beneath it (labels
+   live in HTML, not SVG <text>, so the chart's non-uniform stretch can't distort them) */
+.chart-tick-mark { stroke: #9aa4b6; stroke-width: 1; vector-effect: non-scaling-stroke; opacity: .55; }
+.chart-ticks { position: relative; width: 100%; height: .85rem; margin-top: 1px; }
+.chart-tick { position: absolute; transform: translateX(-50%); font-size: .66rem; line-height: 1;
+  color: var(--muted); font-variant-numeric: tabular-nums; user-select: none; white-space: nowrap; }
 .bar-eq { fill: var(--accent); }
 .bar-cp { fill: var(--cp); }
