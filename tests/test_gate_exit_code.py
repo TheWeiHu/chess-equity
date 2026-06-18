@@ -16,8 +16,11 @@ SAMPLE = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
 
 def _validate(*extra):
     # --bootstrap 0 keeps these fast; the gate reads the point verdict, not the CIs.
+    # --min-n 0 disables the underpowered guard (task 0132) so these PASS/FAIL-mechanics
+    # tests still exercise the verdict on the 15-row sample; the guard itself is covered
+    # in test_gate_underpowered.py.
     return main(
-        ["validate", "--data", str(SAMPLE), "--bootstrap", "0", *extra]
+        ["validate", "--data", str(SAMPLE), "--bootstrap", "0", "--min-n", "0", *extra]
     )
 
 

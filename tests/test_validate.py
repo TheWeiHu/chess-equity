@@ -279,6 +279,8 @@ def test_format_verdict_renders_ci_and_significance_criterion():
 def test_gate_cli_significance_flips_sample_to_fail(tmp_path, capsys):
     # End-to-end: with --bootstrap > 0 the --gate exit code is significance-aware, so the
     # marginal 15-row sample win (point-better, CI straddles zero) exits 2, not 0.
+    # --min-n 0 disables the underpowered guard (task 0132) so this still exercises the
+    # significance FAIL on the tiny sample (which the guard would otherwise read INCONCLUSIVE).
     from pathlib import Path
 
     from chess_equity.cli import main
@@ -294,6 +296,8 @@ def test_gate_cli_significance_flips_sample_to_fail(tmp_path, capsys):
             "--bootstrap",
             "2000",
             "--seed",
+            "0",
+            "--min-n",
             "0",
             "--gate",
         ]
