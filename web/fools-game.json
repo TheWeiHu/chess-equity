@@ -154,5 +154,135 @@
         "delta": 29.0
       }
     }
-  ]
+  ],
+  "drama": {
+    "1100-1100": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.635,
+        "headline": "Black finds Qh4# — a clutch move (+25 pts)"
+      }
+    ],
+    "1100-1500": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.672,
+        "headline": "Black finds Qh4# — a clutch move (+27 pts)"
+      }
+    ],
+    "1100-1900": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.71,
+        "headline": "Black finds Qh4# — a clutch move (+28 pts)"
+      }
+    ],
+    "1100-2300": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.747,
+        "headline": "Black finds Qh4# — a clutch move (+30 pts)"
+      }
+    ],
+    "1500-1100": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.688,
+        "headline": "Black finds Qh4# — a clutch move (+28 pts)"
+      }
+    ],
+    "1500-1500": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.725,
+        "headline": "Black finds Qh4# — a clutch move (+29 pts)"
+      }
+    ],
+    "1500-1900": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.762,
+        "headline": "Black finds Qh4# — a clutch move (+30 pts)"
+      }
+    ],
+    "1500-2300": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.8,
+        "headline": "Black finds Qh4# — a clutch move (+32 pts)"
+      }
+    ],
+    "1900-1100": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.69,
+        "headline": "Black finds Qh4# — a clutch move (+28 pts)"
+      }
+    ],
+    "1900-1500": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.728,
+        "headline": "Black finds Qh4# — a clutch move (+29 pts)"
+      }
+    ],
+    "1900-1900": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.765,
+        "headline": "Black finds Qh4# — a clutch move (+31 pts)"
+      }
+    ],
+    "1900-2300": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.802,
+        "headline": "Black finds Qh4# — a clutch move (+32 pts)"
+      }
+    ],
+    "2300-1100": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.668,
+        "headline": "Black finds Qh4# — a clutch move (+27 pts)"
+      }
+    ],
+    "2300-1500": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.705,
+        "headline": "Black finds Qh4# — a clutch move (+28 pts)"
+      }
+    ],
+    "2300-1900": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.743,
+        "headline": "Black finds Qh4# — a clutch move (+30 pts)"
+      }
+    ],
+    "2300-2300": [
+      {
+        "ply": 4,
+        "kind": "clutch",
+        "magnitude": 0.78,
+        "headline": "Black finds Qh4# — a clutch move (+31 pts)"
+      }
+    ]
+  }
 }

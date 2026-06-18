@@ -238,5 +238,103 @@
         "delta": 9.0
       }
     }
-  ]
+  ],
+  "drama": {
+    "1100-1500": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.232,
+        "headline": "White finds Qxf7# — a clutch move (+9 pts)"
+      }
+    ],
+    "1100-1900": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.307,
+        "headline": "White finds Qxf7# — a clutch move (+12 pts)"
+      }
+    ],
+    "1100-2300": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.382,
+        "headline": "White finds Qxf7# — a clutch move (+15 pts)"
+      }
+    ],
+    "1500-1500": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.225,
+        "headline": "White finds Qxf7# — a clutch move (+9 pts)"
+      }
+    ],
+    "1500-1900": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.3,
+        "headline": "White finds Qxf7# — a clutch move (+12 pts)"
+      }
+    ],
+    "1500-2300": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.375,
+        "headline": "White finds Qxf7# — a clutch move (+15 pts)"
+      }
+    ],
+    "1900-1500": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.218,
+        "headline": "White finds Qxf7# — a clutch move (+9 pts)"
+      }
+    ],
+    "1900-1900": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.293,
+        "headline": "White finds Qxf7# — a clutch move (+12 pts)"
+      }
+    ],
+    "1900-2300": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.368,
+        "headline": "White finds Qxf7# — a clutch move (+15 pts)"
+      }
+    ],
+    "2300-1500": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.21,
+        "headline": "White finds Qxf7# — a clutch move (+8 pts)"
+      }
+    ],
+    "2300-1900": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.285,
+        "headline": "White finds Qxf7# — a clutch move (+11 pts)"
+      }
+    ],
+    "2300-2300": [
+      {
+        "ply": 7,
+        "kind": "clutch",
+        "magnitude": 0.36,
+        "headline": "White finds Qxf7# — a clutch move (+14 pts)"
+      }
+    ]
+  }
 }

@@ -406,5 +406,39 @@
         "delta": 1.0
       }
     }
-  ]
+  ],
+  "drama": {
+    "1100-2300": [
+      {
+        "ply": 13,
+        "kind": "clutch",
+        "magnitude": 0.368,
+        "headline": "White finds Nd5# — a clutch move (+15 pts)"
+      }
+    ],
+    "1500-2300": [
+      {
+        "ply": 13,
+        "kind": "clutch",
+        "magnitude": 0.365,
+        "headline": "White finds Nd5# — a clutch move (+15 pts)"
+      }
+    ],
+    "1900-2300": [
+      {
+        "ply": 13,
+        "kind": "clutch",
+        "magnitude": 0.365,
+        "headline": "White finds Nd5# — a clutch move (+15 pts)"
+      }
+    ],
+    "2300-2300": [
+      {
+        "ply": 13,
+        "kind": "clutch",
+        "magnitude": 0.362,
+        "headline": "White finds Nd5# — a clutch move (+14 pts)"
+      }
+    ]
+  }
 }
