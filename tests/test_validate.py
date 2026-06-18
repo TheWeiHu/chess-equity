@@ -852,3 +852,114 @@ def test_validate_cli_ece_bins_changes_binning(tmp_path):
     # The default (10) is exercised elsewhere; here two different bin counts must move
     # the ECE column, proving --ece-bins threads all the way through.
     assert _ece(2) != _ece(5)
+
+
+# --- per-slice head-to-head significance CIs (task 0068) -----------------------
+
+def test_head_to_head_slice_cis_sign_and_floor():
+    """Per-slice paired-bootstrap CIs: convention, ranking, and the small-n floor."""
+    from chess_equity.validate.harness import head_to_head_slice_cis
+
+    # An oracle predicts the result perfectly, so it must win (Δ > 0) in every large
+    # enough slice; the floor keeps singletons from reading as significant.
+    rows = [_row(cp=0, we=1000, be=1000, phase="opening", result=1.0) for _ in range(40)]
+    rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(40)]
+    rows += [_row(cp=0, we=1500, be=1500, phase="middlegame", result=1.0)]  # singleton slice
+    preds = {"baseline": baseline_cp, "oracle": lambda r: r.result}
+    h2h = head_to_head_slice_cis(rows, preds, min_n=10, n_resamples=500, seed=0)
+    assert h2h is not None
+    assert h2h.baseline == "baseline" and h2h.model == "oracle"
+    assert h2h.metric == "log_loss" and h2h.min_n == 10
+    # Sorted biggest-equity-win first.
+    assert [d.delta for d in h2h.slices] == sorted((d.delta for d in h2h.slices), reverse=True)
+    by_key = {(d.slicer, d.value): d for d in h2h.slices}
+    # A big slice the oracle dominates: whole CI clears zero -> `equity`.
+    big = by_key[("phase", "opening")]
+    assert big.n == 40 and big.lo is not None and big.lo > 0.0 and big.verdict == "equity"
+    # The singleton middlegame slice is below the floor: no CI, never significant.
+    tiny = by_key[("phase", "middlegame")]
+    assert tiny.n == 1 and tiny.lo is None and tiny.hi is None
+    assert tiny.verdict == "inconclusive"
+
+
+def test_head_to_head_slice_cis_needs_baseline_and_challenger():
+    from chess_equity.validate.harness import head_to_head_slice_cis
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    # No challenger -> nothing to compare against.
+    assert head_to_head_slice_cis(rows, {"baseline": baseline_cp}) is None
+    # No predictor named "baseline" -> no reference.
+    assert head_to_head_slice_cis(rows, {"model": lambda r: r.result}) is None
+
+
+def test_head_to_head_slice_cis_deterministic_on_sample():
+    """A seeded run pins exact per-slice CIs on the committed FEN sample (task 0068)."""
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_slice_cis
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    preds = {
+        "baseline": PREDICTORS["baseline"],
+        "baseline+clock": PREDICTORS["baseline+clock"],
+        "wdl-a": PREDICTORS["wdl-a"],
+    }
+    # min_n=8: the larger slices (n>=9) get real CIs; n<=6 slices stay inconclusive.
+    h2h = head_to_head_slice_cis(rows, preds, min_n=8, n_resamples=2000, seed=0)
+    assert h2h is not None and h2h.model == "wdl-a"
+    by_key = {(d.slicer, d.value): d for d in h2h.slices}
+
+    # The clock 'comfortable' slice (n=13) is a pinned, significant equity win: the whole
+    # 95% CI sits above zero. These bounds are byte-reproducible under the seed.
+    comf = by_key[("clock", "comfortable(60s+)")]
+    assert comf.n == 13 and comf.verdict == "equity"
+    assert isclose(comf.delta, 0.058342, abs_tol=1e-5)
+    assert isclose(comf.lo, 0.0023495, abs_tol=1e-6)
+    assert isclose(comf.hi, 0.1061781, abs_tol=1e-6)
+
+    # A 6-row rating slice is below the floor: no CI, reads inconclusive (not spuriously
+    # significant), even though its point delta favours the baseline.
+    small = by_key[("rating", "2000-2399")]
+    assert small.n == 6 and small.lo is None and small.verdict == "inconclusive"
+    assert small.delta < 0.0  # baseline is better here, but we don't call it significant
+
+    # Determinism: a second seeded run yields identical CIs.
+    again = head_to_head_slice_cis(rows, preds, min_n=8, n_resamples=2000, seed=0)
+    assert [(d.lo, d.hi, d.verdict) for d in again.slices] == [
+        (d.lo, d.hi, d.verdict) for d in h2h.slices
+    ]
+
+
+def test_head_to_head_slice_cis_default_floor_guards_tiny_sample():
+    """The default floor (30) leaves the 15-row sample with no significant slice."""
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_slice_cis
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    preds = {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}
+    h2h = head_to_head_slice_cis(rows, preds, n_resamples=200, seed=0)
+    assert h2h is not None and h2h.min_n == 30
+    # Every slice is below the default floor on this tiny fixture -> all inconclusive,
+    # none gets a CI. The thesis can't be "proven" on 15 rows by accident.
+    assert all(d.lo is None and d.verdict == "inconclusive" for d in h2h.slices)
+
+
+def test_format_head_to_head_cis_table():
+    from chess_equity.validate.harness import format_head_to_head_cis, head_to_head_slice_cis
+
+    rows = [_row(cp=0, we=1000, be=1000, phase="opening", result=1.0) for _ in range(40)]
+    rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(40)]
+    h2h = head_to_head_slice_cis(
+        rows, {"baseline": baseline_cp, "oracle": lambda r: r.result},
+        min_n=10, n_resamples=300, seed=0,
+    )
+    md = format_head_to_head_cis(h2h)
+    assert "## Head-to-head significance: per-slice CIs (baseline vs oracle)" in md
+    assert "Δ > 0 = equity wins" in md
+    assert "| slice | value | n | Δ log-loss | 95% CI | verdict |" in md
+    assert "equity" in md
