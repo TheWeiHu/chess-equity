@@ -191,11 +191,13 @@ forced lines: a deep engine is right about the board, but blind to *this* player
 *that* one. (The web demo's material bar is a separate, shallow teaching foil.)
 
 The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
-a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
-baseline on log-loss *and* Brier?) followed by a **head-to-head "where equity wins"** table
-that ranks slices by the baseline-minus-model log-loss gap. On the sample, rating-conditioned
-equity (`wdl-a`) wins most in the lower rating band — exactly where the rating-blind bar is most
-wrong — though the 15-row numbers are illustrative only, not proof. Regenerate it with:
+a **Gate verdict** line (does each rating-conditioned model beat the rating-blind baseline on
+log-loss *and* Brier, with a *significant* — CI-clears-zero — log-loss win?) followed by a
+**head-to-head "where equity wins"** table that ranks slices by the baseline-minus-model
+log-loss gap. On the sample, rating-conditioned equity (`wdl-a`) wins most in the lower rating
+band — exactly where the rating-blind bar is most wrong — but the gate honestly reads **FAIL**
+there: on 15 rows the log-loss CI straddles zero, so the point win isn't yet proof. The numbers
+are illustrative only; real evidence needs a real dump. Regenerate it with:
 
 ```bash
 uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md

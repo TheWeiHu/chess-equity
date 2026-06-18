@@ -485,12 +485,13 @@ def _run_validate(args: argparse.Namespace) -> int:
     except (ValueError, Maia2NotInstalled) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    report = format_report(reports, title=title)
-
     # Significance: paired-bootstrap CI on each model's metric delta vs the baseline,
     # so the report says whether a win clears zero or is just noise (task 0060). Needs
     # the baseline plus at least one other predictor; --bootstrap 0 turns it off.
+    # Computed before the report so the gate verdict can consume the CIs and require a
+    # *significant* win on the headline metric, not just a point delta (task 0069).
     baseline_name = "baseline"
+    comparisons = None
     if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
         comparisons = compare_to_baseline(
             rows,
@@ -499,6 +500,10 @@ def _run_validate(args: argparse.Namespace) -> int:
             n_resamples=args.bootstrap,
             seed=args.seed,
         )
+
+    report = format_report(reports, title=title, comparisons=comparisons)
+
+    if comparisons:
         section = format_baseline_comparison(comparisons)
         if section:
             report = report + "\n" + section
@@ -577,9 +582,14 @@ def _run_validate(args: argparse.Namespace) -> int:
     # Machine-checkable gate (task 0115): with --gate, the prose PASS/FAIL verdict drives
     # the *exit code* so CI / the autonomous loop can assert the thesis programmatically.
     # Exit 0 only if every rating-conditioned predictor beats the baseline on log-loss AND
-    # Brier; nonzero (2) if any FAILS; 3 (misuse) if there is no challenger to gate.
+    # Brier; nonzero (2) if any FAILS; 3 (misuse) if there is no challenger to gate. With
+    # --bootstrap > 0 the gate is also significance-aware (task 0069): PASS requires the
+    # log-loss delta CI to clear zero, so a noisy point win FAILs. --bootstrap 0 keeps the
+    # point-only gate.
     if args.gate:
-        verdicts = gate_verdicts(reports, baseline_name=baseline_name)
+        verdicts = gate_verdicts(
+            reports, baseline_name=baseline_name, comparisons=comparisons
+        )
         if not verdicts:
             print(
                 "error: --gate needs a rating-conditioned predictor besides "
@@ -587,17 +597,22 @@ def _run_validate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 3
+        gated = bool(comparisons)
+        criterion = (
+            "log-loss AND Brier with a significant (CI-clears-zero) log-loss win"
+            if gated
+            else "log-loss AND Brier"
+        )
         failed = [v for v in verdicts if not v.passed]
         if failed:
             names = ", ".join(v.name for v in failed)
             print(
-                f"GATE: FAIL — {names} did not beat '{baseline_name}' on log-loss AND "
-                "Brier",
+                f"GATE: FAIL — {names} did not beat '{baseline_name}' on {criterion}",
                 file=sys.stderr,
             )
             return 2
         passed = ", ".join(v.name for v in verdicts)
-        print(f"GATE: PASS — {passed} beat '{baseline_name}' on log-loss and Brier")
+        print(f"GATE: PASS — {passed} beat '{baseline_name}' on {criterion}")
     return 0
 
 
