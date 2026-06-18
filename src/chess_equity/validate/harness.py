@@ -19,8 +19,8 @@ which reads each row's ``fen`` — present only when the dataset was built with
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
@@ -38,6 +38,7 @@ from chess_equity.validate.metrics import (
     brier_score,
     expected_calibration_error,
     log_loss,
+    reliability_table,
 )
 
 # A predictor: a position row -> predicted White expected-score in [0, 1].
@@ -251,13 +252,26 @@ def _score(preds: Sequence[float], labels: Sequence[float], *, bins: int = 10) -
     )
 
 
+# One reliability bucket: (bin_lo, mean_pred, mean_obs, count) — the binned empirical
+# White win-rate vs the predicted win-rate that backs the scalar ECE (task 0118).
+ReliabilityRow = Tuple[float, float, float, int]
+
+
 @dataclass(frozen=True)
 class PredictorReport:
-    """A predictor's overall scores plus per-slice breakdowns."""
+    """A predictor's overall scores plus per-slice breakdowns.
+
+    ``reliability`` is the overall reliability curve (task 0118): one
+    ``(bin_lo, mean_pred, mean_obs, count)`` per non-empty prediction bin, the binned
+    empirical win-rate that backs the scalar ``overall.ece`` — so the report can show
+    *why* a bar reading 70% is (or isn't) honest, not just the one-number ECE. Defaults
+    to empty so a hand-built report stays valid; :func:`evaluate` always fills it.
+    """
 
     name: str
     overall: Scores
     slices: Dict[str, Dict[str, Scores]]  # slicer name -> slice value -> scores
+    reliability: List[ReliabilityRow] = field(default_factory=list)
 
 
 def evaluate(
@@ -289,7 +303,12 @@ def evaluate(
                 for value, idxs in sorted(grouped.items())
             }
         reports.append(
-            PredictorReport(name=name, overall=_score(preds, labels, bins=bins), slices=slices)
+            PredictorReport(
+                name=name,
+                overall=_score(preds, labels, bins=bins),
+                slices=slices,
+                reliability=reliability_table(preds, labels, bins=bins),
+            )
         )
     return reports
 
@@ -650,6 +669,36 @@ def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
 
 
+def format_reliability(reports: Sequence[PredictorReport]) -> str:
+    """Render each predictor's overall reliability curve as Markdown (task 0118).
+
+    One table per predictor: for each prediction bin, the mean predicted White
+    expected-score vs the **empirical** White win-rate observed in that bin, the per-bin
+    count, and their gap. This is what makes the scalar ECE honest to a reader — a bar
+    reading 70% is only a real P(win)+½P(draw) if the ``mean obs`` of the 0.70 bin is
+    ~0.70. A well-calibrated predictor hugs the diagonal (``gap ≈ 0``) in every bin.
+    """
+    out: List[str] = ["## Reliability curve (is the equity bar an honest probability?)", ""]
+    out.append(
+        "For each predicted-probability bin: mean predicted vs **observed** White "
+        "expected-score, the bin's row count, and the gap (obs − pred). A calibrated "
+        "predictor has `gap ≈ 0` in every bin; the count-weighted mean `|gap|` is the ECE."
+    )
+    for r in reports:
+        out.append("")
+        out.append(f"### {r.name}  (n={r.overall.n}, ECE={r.overall.ece:.4f})")
+        out.append("")
+        out.append("| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |")
+        out.append("|--:|--:|--:|--:|--:|")
+        for bin_lo, mean_pred, mean_obs, count in r.reliability:
+            out.append(
+                f"| {bin_lo:.2f} | {mean_pred:.3f} | {mean_obs:.3f} | {count} "
+                f"| {mean_obs - mean_pred:+.3f} |"
+            )
+    out.append("")
+    return "\n".join(out)
+
+
 def format_report(
     reports: Sequence[PredictorReport],
     *,
@@ -684,6 +733,10 @@ def format_report(
         for r in reports:
             for value, s in r.slices[slicer_name].items():
                 out.append(f"| {r.name} | {value} " + _scores_row("", s)[2:])
+
+    if reports and any(r.reliability for r in reports):
+        out.append("")
+        out.append(format_reliability(reports))
 
     h2h = head_to_head_deltas(reports)
     if h2h is not None:
