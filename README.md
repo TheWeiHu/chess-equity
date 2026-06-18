@@ -46,7 +46,8 @@ On a held-out **real Lichess** run the rating-conditioned `wdl-a` (and Maia-2) c
 bar — the largest gains land in the lower rating band and the middlegame, exactly where
 the rating-blind bar is most wrong. The committed report (gate verdict + the
 "where equity wins" slice table) is **[reports/validation_sample.md](reports/validation_sample.md)**;
-its checked-in numbers are an illustrative 15-row sample — real evidence needs a real dump
+its checked-in numbers are an **illustrative 15-row sample, not statistically powered proof** —
+the headline evidence comes from the `chess-equity headline` recipe below, run on a real dump
 (attended-only, see [DEPENDENCIES.md](DEPENDENCIES.md)).
 
 Reproduce the real proof in one pinned command, then read the report it writes:
@@ -196,8 +197,11 @@ log-loss *and* Brier, with a *significant* — CI-clears-zero — log-loss win?)
 **head-to-head "where equity wins"** table that ranks slices by the baseline-minus-model
 log-loss gap. On the sample, rating-conditioned equity (`wdl-a`) wins most in the lower rating
 band — exactly where the rating-blind bar is most wrong — but the gate honestly reads **FAIL**
-there: on 15 rows the log-loss CI straddles zero, so the point win isn't yet proof. The numbers
-are illustrative only; real evidence needs a real dump. Regenerate it with:
+there: on 15 rows the log-loss CI straddles zero, so the point win isn't yet proof. **These
+numbers are illustrative only — a 15-row sample, not statistically powered, and never the
+headline proof.** The headline evidence comes from `chess-equity headline` on a real dump (see
+[Results](#results) and `reports/validation_headline.md`); the route to a committed real
+artifact is task 0128. Regenerate this *sample* with:
 
 ```bash
 uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md
