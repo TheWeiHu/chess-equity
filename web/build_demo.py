@@ -61,7 +61,7 @@ from chess_equity.types import lichess_win_percent  # noqa: E402
 
 # Single source of truth for the cp/grade formulas the web demo shares with the
 # import path (web/game_json.py) — keep them here and the two can't drift.
-from game_json import _material_cp_white, grade_move  # noqa: E402
+from game_json import _material_cp_white, drama_by_band, grade_move  # noqa: E402
 
 REFERENCE_BAND = 1500
 RATING_BANDS = [1100, 1500, 1900, 2300]
@@ -238,6 +238,8 @@ def build(
         },
         "rating_bands": RATING_BANDS,
         "moves": moves,
+        # Drama (clutch / missed-win / escape) per rating band, for the chart markers.
+        "drama": drama_by_band(moves, RATING_BANDS, game_id=game),
     }
 
 

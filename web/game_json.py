@@ -31,6 +31,8 @@ import chess.pgn  # noqa: E402
 
 from chess_equity.adapters import ObjectiveEngine  # noqa: E402
 from chess_equity.models import MaterialEngine  # noqa: E402
+from chess_equity.broadcast import MoveEvent  # noqa: E402
+from chess_equity.drama import score_event  # noqa: E402
 
 # Standard ladder mixed in with the players' real ratings so the slider has a few
 # stops to explore even when both players are close in rating.
@@ -115,6 +117,50 @@ def _int_header(headers, key: str) -> Optional[int]:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def drama_by_band(moves: List[dict], bands: Sequence[int], *, game_id: str = "game") -> dict:
+    """Run the shared drama classifier (``chess_equity.drama``) over the per-ply
+    White-POV equity *for each rating band*, returning ``{f"{we}-{be}": [event, ...]}``
+    for the bands that have any drama (sparse — quiet bands are omitted).
+
+    Drama (clutch / missed_win / escape) is a property of the rating-conditioned equity
+    line, which the web slider re-selects per band — so we precompute it per band here
+    and let ``app.js`` simply look up the current band's events, rather than reimplement
+    the classifier in JavaScript (single source of truth, no drift — same discipline as
+    the shared cp/grade helpers). Each event is a small dict ``{ply, kind, magnitude,
+    headline}`` ready for the chart's ``<title>`` hover. The static web data carries no
+    clocks, so the clock-driven ``scramble`` signal never fires here.
+    """
+    out: dict = {}
+    for we in bands:
+        for be in bands:
+            key = f"{we}-{be}"
+            events = []
+            prev_white = None
+            for m in moves:
+                eq_white = m["equity"][key]
+                if m["ply"] > 0 and prev_white is not None:
+                    white_to_move = chess.Board(m["fen"]).turn == chess.WHITE
+                    mover_white = not white_to_move  # the side that just moved
+                    delta = (eq_white - prev_white) if mover_white else (prev_white - eq_white)
+                    event = MoveEvent(
+                        game_id=game_id, ply=m["ply"], san=m["san"], uci="", fen=m["fen"],
+                        white_to_move=white_to_move, white_clock=None, black_clock=None,
+                        white_elo=we, black_elo=be, equity=float(eq_white),
+                        delta_equity=float(delta), last_move_grade=None, source="web",
+                        compute_ms=0.0,
+                    )
+                    drama = score_event(event)
+                    if drama is not None:
+                        events.append({
+                            "ply": drama.ply, "kind": drama.kind,
+                            "magnitude": drama.magnitude, "headline": drama.headline,
+                        })
+                prev_white = eq_white
+            if events:
+                out[key] = events
+    return out
 
 
 def rating_bands(white_elo: int, black_elo: int, ladder: Sequence[int] = DEFAULT_LADDER) -> List[int]:

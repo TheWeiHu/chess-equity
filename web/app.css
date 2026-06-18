@@ -130,6 +130,10 @@ footer .caveat { border-left: 2px solid var(--muted); padding-left: 0.6rem; opac
 .chart-dot { fill: var(--accent); opacity: 0.45; cursor: pointer; }
 .chart-dot:hover { opacity: 1; }
 .chart-dot.current { fill: var(--white-eq); opacity: 1; }
+/* Drama plies (chess_equity.drama): the clutch/escape/missed-win moments on the line. */
+.chart-dot.drama { fill: #f2b134; opacity: 0.95; stroke: #7a5410; stroke-width: 1; }
+.chart-dot.drama.missed_win { fill: #e0585b; stroke: #5a1f20; }
+.chart-dot.drama.current { fill: #ffd56b; }
 
 /* hover board preview (task 0078): a small floating board following the cursor */
 .board-preview {
