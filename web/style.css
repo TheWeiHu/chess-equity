@@ -51,12 +51,20 @@ body {
 .tagline strong { color: var(--ink); }
 
 /* ---- game picker (dropdown, guided demo) ---- */
-.game-picker { display: flex; gap: .5rem; align-items: center; margin-bottom: .75rem; color: var(--muted); }
+.game-picker { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .75rem; color: var(--muted); }
 .game-picker select {
-  flex: 1; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  flex: 1 1 12rem; min-width: 0;   /* long option labels must not force overflow on mobile */
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
   border-radius: 8px; padding: .4rem .55rem; cursor: pointer; font: inherit;
 }
 .game-picker select:hover { border-color: var(--accent); }
+.game-picker label { white-space: nowrap; }
+.game-picker #new {
+  white-space: nowrap; font: inherit; font-weight: 600; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: .42rem .8rem; cursor: pointer;
+}
+.game-picker #new:hover { background: #eef1f5; border-color: var(--accent); }
 
 /* ---- layout ---- */
 main {
@@ -67,6 +75,9 @@ main {
   align-items: start;
   padding-bottom: 2.5rem;
 }
+/* grid items default to min-width:auto and refuse to shrink below their content's
+   min-content width (the board), which forced horizontal scroll on phones. */
+main > section { min-width: 0; }
 @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
 
 .card {
@@ -154,6 +165,8 @@ main {
 .bar-name .sub { font-weight: 500; color: var(--muted); font-size: .78rem; }
 .readout { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.1rem; }
 #equity-readout { font-size: 1.7rem; color: var(--accent); letter-spacing: -.01em; }
+/* opening-book positions: equity is suppressed, so the readout reads muted, not green */
+#equity-readout.book { color: var(--muted); font-size: 1.25rem; font-weight: 700; }
 #cp-readout { color: var(--muted); }
 .bar {
   position: relative; border-radius: 12px; overflow: hidden;
