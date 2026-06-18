@@ -696,6 +696,31 @@ def head_to_head_deltas(
     )
 
 
+def worst_slice_verdict(h2h: HeadToHead) -> str:
+    """A one-line read on the head-to-head's *worst* slice (task 0121).
+
+    The head-to-head table is sorted equity-wins-first, so the single worst slice — the
+    one most favouring the rating-blind baseline — is the last entry. A buyer of the
+    thesis wants that surfaced directly: is there *any* rating × time-control slice where
+    the rating-conditioned model actually LOSES to the baseline? This states the win/total
+    slice count and names that worst slice (``baseline log-loss − model log-loss``; Δ < 0
+    means the baseline is better there). Returns ``""`` when there are no comparable slices.
+    """
+    if not h2h.slices:
+        return ""
+    wins = sum(1 for d in h2h.slices if d.delta > 0)
+    total = len(h2h.slices)
+    worst = h2h.slices[-1]  # smallest Δ — most baseline-favouring
+    where = (
+        "the baseline wins here" if worst.delta < 0 else "equity still wins every slice"
+    )
+    return (
+        f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
+        f"Δ={worst.delta:+.4f} — {where}. "
+        f"Equity wins on {wins}/{total} slices."
+    )
+
+
 def format_head_to_head(h2h: HeadToHead) -> str:
     """Render the head-to-head deltas as a compact Markdown table (equity-wins first)."""
     out: List[str] = []
@@ -706,6 +731,9 @@ def format_head_to_head(h2h: HeadToHead) -> str:
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
     out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
+    verdict = worst_slice_verdict(h2h)
+    if verdict:
+        out.append(verdict)
     out.append("")
     out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
     out.append("|---|---|--:|--:|--:|--:|")
