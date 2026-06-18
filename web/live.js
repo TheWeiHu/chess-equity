@@ -117,9 +117,12 @@
   function renderPlayers() {
     var m = state.meta, html;
     if (m) {
+      var blurb = state.branched
+        ? "You took over from " + m.name + " — now playing your own line. Pick the game again to reset."
+        : m.name + (m.year ? " · " + m.year : "") + " — step through it, or play a move from any point to take over.";
       html = "<div class='side'><span class='nm'>⬜ " + (m.white || "White") + "</span></div>" +
         "<div class='vs'>vs</div><div class='side'><span class='nm'>⬛ " + (m.black || "Black") + "</span></div>" +
-        "<div class='blurb'>" + m.name + (m.year ? " · " + m.year : "") + " — step through it, or play a move from any point to take over.</div>";
+        "<div class='blurb'>" + blurb + "</div>";
     } else {
       html = "<div class='side'><span class='nm'>Free play</span></div><div class='vs'></div>" +
         "<div class='side muted'>move either side</div>";
@@ -190,9 +193,13 @@
       if (!ok) { showFenErr(j.error || "error"); render(); return; }
       hideFenErr();
       j._we = state.we; j._be = state.be;
+      // Playing a move drops any future line — if a famous game was loaded, you've now
+      // branched into your own line. Flag it so the players card says so.
+      var deviated = state.ply < state.line.length - 1 || (state.meta && !state.branched);
       state.line = state.line.slice(0, state.ply + 1);
       state.line.push({ fen: j.fen, san: j.san, last: { from: uci.slice(0, 2), to: uci.slice(2, 4) }, resp: j });
       state.ply++; state.sel = null;
+      if (state.meta && deviated) { state.branched = true; renderPlayers(); }
       render();
     });
   }
@@ -260,7 +267,7 @@
 
   function newGame() {
     state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
-    state.ply = 0; state.sel = null; state.meta = null;
+    state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
     renderPlayers(); goPly(0);
   }
@@ -272,6 +279,7 @@
         return { fen: m.fen, san: m.san, resp: null,
           last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
       });
+      state.branched = false;
       state.ply = 0; state.sel = null;
       state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
       renderPlayers(); goPly(0);
@@ -280,7 +288,7 @@
 
   function loadFen(fen) {
     state.line = [{ fen: fen, san: "(start)", last: null, resp: null }];
-    state.ply = 0; state.sel = null; state.meta = null;
+    state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
     renderPlayers(); goPly(0);
   }
