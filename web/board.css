@@ -43,23 +43,25 @@
   background: radial-gradient(circle, rgba(196, 74, 61, .85) 0%, rgba(196, 74, 61, 0) 72%);
 }
 
-/* pieces: minimal flat inline-SVG silhouettes (board.js). White = light fill + a thin
- * dark edge, black = solid dark fill with a darker edge — high-contrast and crisp on the
- * green board at any size. The shape is one SVG; only fill/stroke change per colour. */
+/* pieces: clean Unicode glyphs (board.js) — White uses the outline glyph filled light
+ * with a soft dark edge (text-shadow, not a heavy text-stroke), Black uses the solid
+ * glyph in near-black. High-contrast and crisp on the green board at any size. */
 .sq .piece {
   position: relative;
-  width: 84cqi; height: 84cqi;          /* sized to the square via container units */
-  display: flex;
+  font-size: clamp(16px, 6vw, 46px);   /* fallback for browsers without container units */
+  font-size: 82cqi;
+  line-height: 1;
   z-index: 1;
   user-select: none;
-  filter: drop-shadow(0 1px 0.6px rgba(0, 0, 0, .22));
 }
-.sq .piece svg {
-  width: 100%; height: 100%; display: block;
-  stroke-linejoin: round; stroke-linecap: round;
+.sq .piece.white {
+  color: #f6f7f3;
+  text-shadow: 0 0 1.4px #3a3d45, 0 0 1.4px #3a3d45, 0 1px 1.2px rgba(0, 0, 0, .28);
 }
-.sq .piece.white svg { fill: #f6f7f3; stroke: #3a3d45; stroke-width: 1.1; }
-.sq .piece.black svg { fill: #2a2d35; stroke: #14161b; stroke-width: 0.9; }
+.sq .piece.black {
+  color: #2a2d35;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, .18);
+}
 
 /* edge coordinate labels */
 .sq .coord { position: absolute; font-size: 11px; font-weight: 700; opacity: .6; z-index: 2; }

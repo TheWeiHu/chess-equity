@@ -14,12 +14,12 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <!--
-  The single view: an interactive board where every position is scored live by Maia-2
-  (rating-conditioned equity) and Stockfish (the classic centipawn bar). Move the pieces
-  to play your own line, or load a famous game and step through it. Needs the backend:
+  Broadcast layout (design B3): the board + move list are the star up top; a "lower third"
+  strip beneath groups the two reads of the current position (Maia-2 equity + Stockfish
+  centipawn) together with the rating sliders and the "why the bars differ" note; a
+  full-width ribbon at the bottom traces White win% across the whole game, one grouped
+  Maia+Stockfish pair per move. Needs the backend:
       uv run python web/server.py     # then open http://localhost:8000/
-  Legal moves, SAN, game state and the famous-game library come from python-chess on the
-  server (/api/play, /api/games, /api/game); this page just renders and posts intents.
 -->
 <body>
   <header class="site-header">
@@ -29,41 +29,36 @@
   </header>
 
   <main class="wrap">
-    <figure class="card chart-block chart-row">
-      <figcaption>White win&#37; over the game
-        <span class="legend"><span class="key eq">equity</span>
-          <span class="key cp">centipawn</span></span>
-        <span id="chart-progress" class="chart-progress"></span>
-      </figcaption>
-      <svg id="chart" class="chart" viewBox="0 0 480 150" preserveAspectRatio="none" role="img"
-           aria-label="equity vs centipawn White win-percent per move, as bars"></svg>
-    </figure>
+    <!-- the star: board + move list, centered as one cluster -->
+    <section class="cluster">
+      <div class="board-col">
+        <div class="game-picker">
+          <label for="game-select">Load game</label>
+          <select id="game-select" aria-label="load a famous game"></select>
+          <button id="new" type="button">New game</button>
+        </div>
+        <div class="board-frame">
+          <div id="board" class="board" aria-label="interactive chess board"></div>
+        </div>
+        <div class="controls">
+          <button id="first" type="button" title="First (Home)">&#171;</button>
+          <button id="prev" type="button" title="Previous (&larr;)">&#8249;</button>
+          <input id="scrub" type="range" min="0" max="0" value="0" aria-label="move scrubber" />
+          <button id="next" type="button" title="Next (&rarr;)">&#8250;</button>
+          <button id="last" type="button" title="Last (End)">&#187;</button>
+          <button id="flip" type="button" class="flip" title="Flip board (F)">&#8645;</button>
+        </div>
+        <div id="status" class="move-caption"></div>
+      </div>
 
-    <section class="board-col">
-      <div class="game-picker">
-        <label for="game-select">Load game</label>
-        <select id="game-select" aria-label="load a famous game"></select>
-        <button id="new" type="button">New game</button>
-      </div>
-      <div class="board-frame">
-        <div id="board" class="board" aria-label="interactive chess board"></div>
-      </div>
-      <div class="controls">
-        <button id="first" type="button" title="First (Home)">&#171;</button>
-        <button id="prev" type="button" title="Previous (&larr;)">&#8249;</button>
-        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="move scrubber" />
-        <button id="next" type="button" title="Next (&rarr;)">&#8250;</button>
-        <button id="last" type="button" title="Last (End)">&#187;</button>
-        <button id="flip" type="button" class="flip" title="Flip board (F)">&#8645;</button>
-      </div>
-      <div id="status" class="move-caption"></div>
+      <aside class="moves-col">
+        <div class="moves-head">Moves</div>
+        <div id="moves" class="moves" aria-label="move list"></div>
+      </aside>
     </section>
 
-    <section class="moves-col">
-      <div id="moves" class="moves" aria-label="move list"></div>
-    </section>
-
-    <section class="bars-col">
+    <!-- the lower third: the two reads of THIS position, grouped, plus ratings + the aha -->
+    <section class="strip">
       <div class="card ratings">
         <div class="rating-row">
           <label for="white-elo">White rating</label>
@@ -77,24 +72,39 @@
         </div>
       </div>
 
-      <div class="card bars">
+      <div class="card bars scores">
+        <div class="scores-head" id="scores-head">This position</div>
         <div class="bar-block">
           <div class="bar-label">
-            <span class="bar-name">Equity <span class="sub">rating-conditioned · Maia-2</span></span>
+            <span class="bar-name">Equity <span class="sub">Maia-2 · rating-conditioned</span></span>
             <span class="readout" id="equity-readout">—</span>
           </div>
           <div class="bar equity-bar"><div class="fill" id="equity-fill"></div><span class="mid"></span></div>
         </div>
         <div class="bar-block">
           <div class="bar-label">
-            <span class="bar-name">Classic eval <span class="sub">rating-blind · Stockfish</span></span>
+            <span class="bar-name">Classic eval <span class="sub">Stockfish · rating-blind</span></span>
             <span class="readout" id="cp-readout">—</span>
           </div>
           <div class="bar cp-bar"><div class="fill" id="cp-fill"></div><span class="mid"></span></div>
         </div>
-        <p id="divergence" class="divergence" hidden></p>
+      </div>
+
+      <div class="card diff-card">
+        <p id="divergence" class="divergence"></p>
       </div>
     </section>
+
+    <!-- the footer ribbon: White win% across the whole game, one Maia+Stockfish pair per move -->
+    <figure class="card chart-row">
+      <figcaption>White win&#37; over the game <span class="sub">· each move shows its Maia + Stockfish pair</span>
+        <span class="legend"><span class="key eq">Maia equity</span>
+          <span class="key cp">Stockfish</span></span>
+        <span id="chart-progress" class="chart-progress"></span>
+      </figcaption>
+      <svg id="chart" class="chart" viewBox="0 0 480 150" preserveAspectRatio="none" role="img"
+           aria-label="White win-percent per move: a grouped Maia equity and Stockfish centipawn bar pair for each move"></svg>
+    </figure>
   </main>
 
   <script src="board.js"></script>

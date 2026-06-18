@@ -76,36 +76,37 @@
 
   function renderChart() {
     var svg = $("chart"); if (!svg) return;
-    var n = state.line.length, W = 480, H = 150, padX = 12, padY = 12;
+    var n = state.line.length, W = 480, H = 150, padX = 10, padY = 10;
     var innerW = W - 2 * padX, innerH = H - 2 * padY;
-    var mid = padY + innerH / 2;                       // the 50% (even) line
+    var base = H - padY;                               // bars grow up from the bottom
+    var mid = padY + innerH / 2;                       // the 50% reference line
     function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }
-    function yFor(p) { return padY + (1 - p / 100) * innerH; }   // p in 0..100 → pixel
-    // two thin bars per ply, diverging from the midline: up = White ahead, down = Black.
     var slot = n <= 1 ? innerW : innerW / (n - 1);
-    var bw = Math.max(1, Math.min(7, slot * 0.38));
+    // each MOVE is a tight pair: equity (green) just left of centre, centipawn (grey)
+    // just right, with a clear gap to the next move's pair.
+    var bw = Math.max(1.2, Math.min(6, slot * 0.30)), gap = Math.max(0.5, bw * 0.22);
     svg.innerHTML = "";
+    // a soft highlighted box behind the CURRENT move's pair — the clean "you are here"
+    var hx = xFor(state.ply), boxW = Math.max(bw * 2 + gap + 5, slot * 0.74);
+    svg.appendChild(svgEl("rect", { x: hx - boxW / 2, y: padY - 2, width: boxW, height: innerH + 4, rx: 3, class: "chart-now" }));
     svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
-    function bar(x, v, cls) {
-      var y = yFor(v), top = Math.min(mid, y), h = Math.max(1, Math.abs(mid - y));
-      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.5, bw / 2), class: cls }));
+    function bar(x, v, cls) {                          // v in 0..100 (White win%)
+      var h = Math.max(1.5, (v / 100) * innerH);
+      svg.appendChild(svgEl("rect", { x: x, y: base - h, width: bw, height: h, rx: Math.min(1.4, bw / 2), class: cls }));
     }
     state.line.forEach(function (nd, i) {
       if (!hasFresh(nd)) return;
       var cx = xFor(i);
-      var cpv = cpToWhite(nd.resp.cp) * 100;
-      bar(cx + 0.4, cpv, "bar-cp");                    // centipawn (grey), right of centre
-      if (!inBook(i)) bar(cx - bw - 0.4, nd.resp.equity_white, "bar-eq");  // equity (green), left
+      if (!inBook(i)) bar(cx - bw - gap / 2, nd.resp.equity_white, "bar-eq");  // Maia equity
+      bar(cx + gap / 2, cpToWhite(nd.resp.cp) * 100, "bar-cp");                // Stockfish
     });
-    // cursor + generous transparent click target for the current/any ply
-    var cur = xFor(state.ply);
-    svg.appendChild(svgEl("line", { x1: cur, y1: padY, x2: cur, y2: H - padY, class: "chart-cursor" }));
+    // generous transparent click target + tooltip per move
     state.line.forEach(function (nd, i) {
       var hit = svgEl("rect", { x: xFor(i) - slot / 2, y: padY, width: Math.max(slot, 2), height: innerH, fill: "transparent", style: "cursor:pointer" });
       var t = svgEl("title", {});
       var cpv = hasFresh(nd) ? Math.round(cpToWhite(nd.resp.cp) * 100) : "…";
       var eqv = hasFresh(nd) && !inBook(i) ? Math.round(nd.resp.equity_white) + "%" : (inBook(i) ? "book" : "…");
-      t.textContent = (i === 0 ? "start" : nd.san) + " — equity " + eqv + " · centipawn " + cpv + "%";
+      t.textContent = (i === 0 ? "start" : nd.san) + " — Maia " + eqv + " · Stockfish " + cpv + "%";
       hit.appendChild(t);
       hit.addEventListener("click", function () { goPly(i); });
       svg.appendChild(hit);
@@ -142,11 +143,26 @@
     $("scrub").value = state.ply;
   }
 
+  // The grouped-scores card heading: which position the two bars are reading.
+  function headText() {
+    if (state.ply === 0) return "Starting position";
+    var s = node().san;
+    return s ? "After " + s : "Move " + state.ply;
+  }
+  // Fill the "why the bars differ" card. It is always populated (never an empty box):
+  // the green "differ" state when the two reads disagree, a muted state otherwise.
+  function setDiff(kind, text) {
+    var div = $("divergence");
+    div.className = "divergence" + (kind === "differ" ? "" : " agree");
+    div.textContent = text;
+  }
+
   function renderBars() {
+    var sh = $("scores-head"); if (sh) sh.textContent = headText();
     var r = node().resp;
     if (!r) {
       $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
-      $("divergence").hidden = true;
+      setDiff("agree", "Evaluating this position…");
       return;
     }
     var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
@@ -158,13 +174,19 @@
     $("cp-fill").style.width = cpW + "%";
     $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
       ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
-    var gap = eq - cpW, div = $("divergence");
-    if (!book && !r.game_over && Math.abs(gap) >= 15) {
-      div.hidden = false;
-      div.textContent = "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
+    var gap = eq - cpW;
+    if (book) {
+      setDiff("agree", "Opening book — equity stays parked until the position leaves theory.");
+    } else if (r.game_over) {
+      setDiff("agree", "The game is decided here.");
+    } else if (Math.abs(gap) >= 15) {
+      setDiff("differ", "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
         Math.round(Math.abs(gap)) + " pts over the centipawn bar — at these ratings the " +
-        "realistic result differs from perfect play.";
-    } else { div.hidden = true; }
+        "realistic result differs from perfect play.");
+    } else {
+      setDiff("agree", "Equity and the engine agree here — the rating-conditioned read " +
+        "tracks near-perfect play.");
+    }
   }
 
   function renderStatus() {
@@ -328,8 +350,8 @@
     menu.className = "promo";
     ["q", "r", "b", "n"].forEach(function (p) {
       var b = document.createElement("button");
-      // same minimal piece set as the board, so the picker matches the experience
-      b.innerHTML = '<span class="piece black">' + window.ChessBoard.pieceSvg(p) + '</span>';
+      // same clean glyph set as the board, so the picker matches the experience
+      b.innerHTML = '<span class="piece black">' + window.ChessBoard.glyph(p) + '</span>';
       b.setAttribute("aria-label", { q: "queen", r: "rook", b: "bishop", n: "knight" }[p]);
       b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p); });
       menu.appendChild(b);
