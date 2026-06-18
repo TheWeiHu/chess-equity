@@ -29,6 +29,16 @@
   </header>
 
   <main class="wrap">
+    <figure class="card chart-block chart-row">
+      <figcaption>White win&#37; over the game
+        <span class="legend"><span class="key eq">equity</span>
+          <span class="key cp">centipawn</span></span>
+        <span id="chart-progress" class="chart-progress"></span>
+      </figcaption>
+      <svg id="chart" class="chart" viewBox="0 0 480 150" preserveAspectRatio="none" role="img"
+           aria-label="equity vs centipawn White win-percent per move, as bars"></svg>
+    </figure>
+
     <section class="board-col">
       <div class="game-picker">
         <label for="game-select">Load game</label>
@@ -66,16 +76,6 @@
           <input id="black-elo" type="range" min="1100" max="2300" step="100" value="1500" />
         </div>
       </div>
-
-      <figure class="card chart-block">
-        <figcaption>White win% over the game
-          <span class="legend"><span class="key eq">equity</span>
-            <span class="key cp">centipawn</span></span>
-          <span id="chart-progress" class="chart-progress"></span>
-        </figcaption>
-        <svg id="chart" class="chart" viewBox="0 0 480 150" role="img"
-             aria-label="equity vs centipawn White win-percent per move, as bars"></svg>
-      </figure>
 
       <div class="card bars">
         <div class="bar-block">

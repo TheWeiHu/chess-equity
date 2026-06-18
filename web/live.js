@@ -326,10 +326,12 @@
     var old = frame.querySelector(".promo"); if (old) old.remove();
     var menu = document.createElement("div");
     menu.className = "promo";
-    [["q", "♛"], ["r", "♜"], ["b", "♝"], ["n", "♞"]].forEach(function (p) {
+    ["q", "r", "b", "n"].forEach(function (p) {
       var b = document.createElement("button");
-      b.textContent = p[1];
-      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p[0]); });
+      // same minimal piece set as the board, so the picker matches the experience
+      b.innerHTML = '<span class="piece black">' + window.ChessBoard.pieceSvg(p) + '</span>';
+      b.setAttribute("aria-label", { q: "queen", r: "rook", b: "bishop", n: "knight" }[p]);
+      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p); });
       menu.appendChild(b);
     });
     frame.appendChild(menu);
