@@ -221,12 +221,45 @@ def clock_band(row: PositionRow) -> str:
     return "comfortable(60s+)"
 
 
+# The two named failure modes objective 0003 says the thesis must fix, keyed by the
+# eval regime each one occupies. Mirrored from ``baseline/failure_modes.json`` (one
+# magnitude anchor per curated category's ``engine_cp``): ``dead-draw-hard`` sits at a
+# hard 0.00 ("hard 0.00 isn't 50/50"), ``absurd-refutation`` at a decisive eval a
+# weaker side still misplays ("absurd-refutation reads ~equal" to a shallow eye). Kept
+# as a constant so the harness stays I/O-free; ``test_validate`` asserts these magnitudes
+# match the curated file so the two never silently drift apart.
+FAILURE_MODE_WINDOW_CP = 75.0
+FAILURE_MODE_CP_ANCHORS: Dict[str, tuple] = {
+    "dead-draw-hard": (0.0,),
+    "absurd-refutation": (1000.0,),
+}
+
+
+def failure_mode_band(row: PositionRow) -> str:
+    """Bucket a row by which curated 0003 failure-mode regime its eval falls in.
+
+    These are the slices where the rating-blind baseline is, by hypothesis, most wrong —
+    a dead draw whose practical result skews by rating, and a decisive position a weaker
+    side converts less often than the eval implies. A row is tagged with a category when
+    its centipawn eval is within :data:`FAILURE_MODE_WINDOW_CP` of that category's anchor
+    (the same ±75cp window ``failure_modes.json`` uses to measure practical results), and
+    ``"other"`` otherwise. Side-agnostic: a refutation winning for Black (cp ≈ −1000)
+    lands in the same bucket as the White-POV curated exemplar, so both sides count.
+    """
+    cp = abs(row.cp_eval)
+    for category, anchors in FAILURE_MODE_CP_ANCHORS.items():
+        if any(abs(cp - abs(a)) <= FAILURE_MODE_WINDOW_CP for a in anchors):
+            return category
+    return "other"
+
+
 # The slicings reported alongside the overall number.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
     "high_rating": high_rating_band,
     "phase": lambda row: row.phase,
     "clock": clock_band,
+    "failure_mode": failure_mode_band,
 }
 
 

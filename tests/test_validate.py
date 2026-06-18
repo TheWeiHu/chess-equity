@@ -105,6 +105,49 @@ def test_rating_band():
     assert rating_band(_row(we=2500, be=2500)) == "2400+"
 
 
+def test_failure_mode_band():
+    from chess_equity.validate.harness import failure_mode_band
+
+    # Hard 0.00 — the "isn't 50/50" mode — and just inside the ±75cp window.
+    assert failure_mode_band(_row(cp=0)) == "dead-draw-hard"
+    assert failure_mode_band(_row(cp=-70)) == "dead-draw-hard"
+    # The decisive "absurd-refutation" regime, side-agnostic (White- or Black-winning).
+    assert failure_mode_band(_row(cp=1000)) == "absurd-refutation"
+    assert failure_mode_band(_row(cp=-980)) == "absurd-refutation"
+    # Everything between the two named regimes is unremarkable.
+    assert failure_mode_band(_row(cp=400)) == "other"
+
+
+def test_failure_mode_slice_appears_in_report():
+    from chess_equity.validate.harness import SLICERS, failure_mode_band
+
+    assert SLICERS.get("failure_mode") is failure_mode_band
+    rows = [_row(cp=0, result=1.0), _row(cp=1000, result=1.0), _row(cp=400, result=0.0)]
+    reports = evaluate(rows, {"baseline": baseline_cp})
+    assert set(reports[0].slices["failure_mode"]) == {
+        "dead-draw-hard",
+        "absurd-refutation",
+        "other",
+    }
+
+
+def test_failure_mode_anchors_match_curated_file():
+    """The harness constant must not drift from baseline/failure_modes.json."""
+    import json
+    from collections import defaultdict
+    from pathlib import Path
+
+    from chess_equity.validate.harness import FAILURE_MODE_CP_ANCHORS
+
+    repo_root = Path(__file__).resolve().parents[1]
+    curated = json.loads((repo_root / "baseline" / "failure_modes.json").read_text())
+    by_cat: dict = defaultdict(set)
+    for pos in curated["positions"]:
+        by_cat[pos["category"]].add(abs(float(pos["engine_cp"])))
+    curated_anchors = {cat: tuple(sorted(cps)) for cat, cps in by_cat.items()}
+    assert FAILURE_MODE_CP_ANCHORS == curated_anchors
+
+
 # --- harness end to end --------------------------------------------------------
 
 def test_evaluate_overall_and_slices():
