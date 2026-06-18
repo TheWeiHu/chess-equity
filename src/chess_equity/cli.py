@@ -586,7 +586,7 @@ def _run_precompute(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    base_model = build_model(args.model)
+    base_model = build_model(args.model, depth=args.depth)
     # Be honest about what the bar is: the default 'baseline' is the rating-blind
     # material/centipawn placeholder, not Maia-2 (task 0081). Warn so the web demo's
     # equity isn't mistaken for the real rating-conditioned model.
@@ -833,6 +833,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     hl.add_argument("--black-elo", type=int, default=None, help="override Black rating")
     hl.add_argument("--top", type=int, default=5, help="size of the highlight reel (default 5)")
     hl.add_argument("--json", action="store_true", help="emit the reel as JSON")
+    hl.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
     add_model_arg(hl)
 
     data = sub.add_parser("data", help="build / manage the training+validation dataset")
@@ -921,6 +925,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     pc.add_argument(
         "--cache", help="persistent cache path for warm restarts (omit = in-memory only)"
     )
+    pc.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
     add_profile_args(pc)
     add_model_arg(pc)
 
@@ -974,7 +982,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
     if args.command == "highlights":
         try:
-            return _run_highlights(args, build_model(args.model))
+            return _run_highlights(args, build_model(args.model, depth=args.depth))
         except (ValueError, OSError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
