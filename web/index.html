@@ -56,19 +56,15 @@
         <!-- hero: the two reads of THIS position, grouped, with the aha note -->
         <div class="card bars scores">
           <div class="scores-head" id="scores-head">This position</div>
-          <div class="bar-block">
-            <div class="bar-label">
-              <span class="bar-name">Equity <span class="sub">Maia-2 · rating-conditioned</span></span>
-              <span class="readout" id="equity-readout">—</span>
-            </div>
+          <div class="bars-grid">
+            <div class="bars-scale">White win share <span class="scores-sub">· both on the same 0&#8211;100% scale</span></div>
+            <span class="bar-name eq">Equity <span class="sub">Maia-2</span></span>
             <div class="bar equity-bar"><div class="fill" id="equity-fill"></div><span class="mid"></span></div>
-          </div>
-          <div class="bar-block">
-            <div class="bar-label">
-              <span class="bar-name">Classic eval <span class="sub">Stockfish · rating-blind</span></span>
-              <span class="readout" id="cp-readout">—</span>
-            </div>
+            <span class="readout" id="equity-readout">—</span>
+
+            <span class="bar-name cp">Classic <span class="sub">Stockfish</span></span>
             <div class="bar cp-bar"><div class="fill" id="cp-fill"></div><span class="mid"></span></div>
+            <span class="readout" id="cp-readout">—</span>
           </div>
           <p id="divergence" class="divergence"></p>
         </div>
