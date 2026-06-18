@@ -774,6 +774,35 @@ def gate_verdict_payload(
     }
 
 
+def gate_badge_payload(verdict: dict) -> dict:
+    """Turn a gate ``verdict.json`` into a shields.io *endpoint* badge dict (task 0141).
+
+    The README's ``gate`` badge points a shields.io endpoint at a committed ``*.badge.json``
+    so the thesis PASS/FAIL is visible at the top of the doc, not buried in prose — and it
+    flips green/red with the verdict instead of being hand-edited. This is the transform:
+    read the top-level boolean ``pass`` (the *same* field ``gate-check`` exits on, so badge,
+    CI gate, and prose can never disagree) and emit the shields endpoint schema
+    (``schemaVersion``/``label``/``message``/``color``).
+
+    Pins the verdict's ``schema`` and requires a boolean ``pass`` — a shape change raises
+    :class:`ValueError` rather than silently rendering a stale or wrong badge.
+    """
+    schema = verdict.get("schema")
+    if schema != GATE_VERDICT_SCHEMA:
+        raise ValueError(
+            f"gate_badge_payload: unexpected schema {schema!r} (want {GATE_VERDICT_SCHEMA!r})"
+        )
+    passed = verdict.get("pass")
+    if not isinstance(passed, bool):
+        raise ValueError("gate_badge_payload: missing or non-boolean 'pass' field")
+    return {
+        "schemaVersion": 1,
+        "label": "gate",
+        "message": "passing" if passed else "failing",
+        "color": "brightgreen" if passed else "red",
+    }
+
+
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
     """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069).
 

@@ -1,0 +1,28 @@
+{
+  "schema": "chess-equity-gate/v1",
+  "baseline": "baseline",
+  "headline_metric": "log_loss",
+  "significance_gated": true,
+  "n": 12000,
+  "pass": true,
+  "predictors": [
+    {
+      "name": "wdl-a",
+      "pass": true,
+      "significant": true,
+      "log_loss_delta": -0.3403,
+      "brier_delta": -0.0355,
+      "pct_improvement": 37.6188,
+      "n": 12000
+    },
+    {
+      "name": "maia2",
+      "pass": true,
+      "significant": true,
+      "log_loss_delta": -0.2931,
+      "brier_delta": -0.0229,
+      "pct_improvement": 32.4011,
+      "n": 12000
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 # chess-equity
 
 [![CI](https://github.com/TheWeiHu/chess-equity/actions/workflows/ci.yml/badge.svg)](https://github.com/TheWeiHu/chess-equity/actions/workflows/ci.yml)
+[![gate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/TheWeiHu/chess-equity/main/reports/validation_real.badge.json)](reports/validation_real.md)
 
 > ⚠️ **Experimental prototype — nukeable at any time.** A research spike, not a
 > product: expect hard pivots, force-pushes, and throwaway code. Don't build on it.
@@ -65,9 +66,12 @@ uv run chess-equity headline --data <full --with-fen dump>   # -> reports/valida
 ```
 
 Both `validate --out` and `headline` write a machine-readable `*.verdict.json` beside the
-report (schema `chess-equity-gate/v1`, top-level `pass`). CI and badges assert the gate from
-that field instead of re-parsing the markdown — `chess-equity gate-check <verdict.json>`
-exits 0 only when `pass` is true (and is run on every push in [CI](.github/workflows/ci.yml)).
+report (schema `chess-equity-gate/v1`, top-level `pass`). CI and the **gate** badge above
+assert the gate from that field instead of re-parsing the markdown — `chess-equity
+gate-check <verdict.json>` exits 0 only when `pass` is true, and `chess-equity gate-badge
+<verdict.json>` regenerates the shields.io endpoint the badge renders, so its green/red
+state is driven by `verdict.json['pass']` (both run on every push in
+[CI](.github/workflows/ci.yml)).
 
 Full method, the gate's exact meaning, and a no-download sample run are in
 [Data & validation](#data--validation) below.
