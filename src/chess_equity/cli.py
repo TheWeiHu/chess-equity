@@ -440,6 +440,7 @@ def _run_validate(args: argparse.Namespace) -> int:
         format_baseline_comparison,
         format_ece_comparison,
         format_report,
+        gate_verdicts,
     )
 
     requested = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -572,6 +573,31 @@ def _run_validate(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         print(f"wrote {args.plots}")
+
+    # Machine-checkable gate (task 0115): with --gate, the prose PASS/FAIL verdict drives
+    # the *exit code* so CI / the autonomous loop can assert the thesis programmatically.
+    # Exit 0 only if every rating-conditioned predictor beats the baseline on log-loss AND
+    # Brier; nonzero (2) if any FAILS; 3 (misuse) if there is no challenger to gate.
+    if args.gate:
+        verdicts = gate_verdicts(reports, baseline_name=baseline_name)
+        if not verdicts:
+            print(
+                "error: --gate needs a rating-conditioned predictor besides "
+                f"'{baseline_name}' to gate against",
+                file=sys.stderr,
+            )
+            return 3
+        failed = [v for v in verdicts if not v.passed]
+        if failed:
+            names = ", ".join(v.name for v in failed)
+            print(
+                f"GATE: FAIL — {names} did not beat '{baseline_name}' on log-loss AND "
+                "Brier",
+                file=sys.stderr,
+            )
+            return 2
+        passed = ", ".join(v.name for v in verdicts)
+        print(f"GATE: PASS — {passed} beat '{baseline_name}' on log-loss and Brier")
     return 0
 
 
@@ -902,6 +928,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="N",
         help="reliability-bin count for ECE and the calibration tables (default 10); "
         "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
+    )
+    val.add_argument(
+        "--gate",
+        action="store_true",
+        help="make the thesis gate machine-checkable (task 0115): exit 0 only if every "
+        "rating-conditioned predictor beats `baseline` on log-loss AND Brier, exit 2 if "
+        "any FAILS (exit 3 if no challenger to gate). For CI / the autonomous loop",
     )
     val.add_argument(
         "--calibration",
