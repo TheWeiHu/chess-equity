@@ -17,11 +17,13 @@ just renders and POSTs move intents, so the page needs no chess library of its o
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
@@ -142,11 +144,64 @@ def play(payload: dict) -> dict:
     return out
 
 
+# ---- famous games (web/famous-games.json) -> FEN-per-ply for the board ----------
+
+def _load_famous() -> list:
+    try:
+        with open(os.path.join(HERE, "famous-games.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("games", [])
+    except (OSError, ValueError):
+        return []
+
+
+FAMOUS = _load_famous()
+FAMOUS_BY_ID = {g["id"]: g for g in FAMOUS}
+_MOVES_CACHE: dict = {}
+
+
+def game_moves(g: dict) -> list:
+    """Parse a famous game's PGN into [{ply, san, uci, fen}] (start + one per ply)."""
+    if g["id"] in _MOVES_CACHE:
+        return _MOVES_CACHE[g["id"]]
+    import chess.pgn
+
+    parsed = chess.pgn.read_game(io.StringIO(g["pgn"]))
+    board = parsed.board()
+    out = [{"ply": 0, "san": "(start)", "uci": None, "fen": board.fen()}]
+    for i, mv in enumerate(parsed.mainline_moves(), 1):
+        san = board.san(mv)
+        board.push(mv)
+        out.append({"ply": i, "san": san, "uci": mv.uci(), "fen": board.fen()})
+    _MOVES_CACHE[g["id"]] = out
+    return out
+
+
 class App(SimpleHTTPRequestHandler):
     """Serve the web/ folder for GET; handle POST /api/play for live evals."""
 
     def __init__(self, *a, **k):
         super().__init__(*a, directory=HERE, **k)
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/games":
+            self._send_json({"games": [
+                {"id": g["id"], "name": g["name"], "white": g.get("white"),
+                 "black": g.get("black"), "year": g.get("year"),
+                 "plies": len(game_moves(g)) - 1}
+                for g in FAMOUS
+            ]})
+            return
+        if parsed.path == "/api/game":
+            gid = (parse_qs(parsed.query).get("id") or [None])[0]
+            g = FAMOUS_BY_ID.get(gid)
+            if not g:
+                self._send_json({"error": f"unknown game {gid!r}"}, 404)
+                return
+            self._send_json({"id": g["id"], "name": g["name"], "white": g.get("white"),
+                             "black": g.get("black"), "moves": game_moves(g)})
+            return
+        super().do_GET()
 
     def _send_json(self, obj: dict, code: int = 200) -> None:
         body = json.dumps(obj).encode("utf-8")

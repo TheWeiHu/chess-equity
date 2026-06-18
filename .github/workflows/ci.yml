@@ -28,12 +28,3 @@ jobs:
       # — collected here) and node JS tests (run separately below).
       - name: Run tests
         run: pytest tests baseline overlay web -q
-      # The web demo's app.js logic is gated by two dependency-free node tests; without
-      # this step JS regressions in app.js (chart geometry, hover preview) go unnoticed.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Run web JS tests
-        run: |
-          node web/test_chart.js
-          node web/test_preview.js

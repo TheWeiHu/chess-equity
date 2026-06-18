@@ -1,66 +1,87 @@
-/* live.js — interactive board backed by web/server.py.
+/* live.js — the interactive board. One position at a time, scored live by the backend.
  *
- * The browser holds no chess rules: it POSTs the current FEN (+ an optional move and
- * the two ratings) to /api/play and renders whatever the server returns — legal moves,
- * game state, the Stockfish centipawn bar and the Maia-2 equity bar. Click a piece to
- * see its legal destinations, click one to play it.
+ * Model: state.line is a list of nodes [{fen, san, last, resp}] with a cursor state.ply.
+ * node[0] is the start position. You can:
+ *   • step through the line (first/prev/next/last/scrub/click) — each position is
+ *     evaluated lazily by /api/play when you land on it,
+ *   • load a famous game (/api/games + /api/game) into the line,
+ *   • play a move from the current position — that truncates any future and continues,
+ *     so taking over mid-game just branches the line.
+ * The browser holds no chess rules: legality, SAN, game-over and the game library all
+ * come from python-chess on the server.
  */
 (function () {
   "use strict";
 
-  // Board rendering (piece glyphs + squares) is shared with the guided demo via board.js.
   var FILES = "abcdefgh";
   var MATE_CP = 10000;
+  var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
   var state = {
-    fen: null, legal: {}, turn: "white", sel: null, last: null,
-    we: 1500, be: 1500, flipped: false, busy: false, history: [],
+    line: [{ fen: START, san: "(start)", last: null, resp: null }],
+    ply: 0, sel: null, we: 1500, be: 1500, flipped: false, busy: false,
+    meta: null,   // {name, white, black} of a loaded famous game, else null
   };
 
   function $(id) { return document.getElementById(id); }
+  function node() { return state.line[state.ply]; }
+  function legalMap() { var r = node().resp; return (r && r.legal) || {}; }
+  function cpToWhite(cp) { return 1 / (1 + Math.exp(-0.00368208 * cp)); }
+  function setThinking(on) { var b = document.querySelector(".bars"); if (b) b.classList.toggle("thinking", on); }
 
   // ---- rendering -----------------------------------------------------------
 
   function render() {
-    if (!state.fen) return;   // nothing to draw until the first /api/play resolves
-    var grid = ChessBoard.parseFen(state.fen).grid;
-    // King-in-check square: the server flags state._check; find the side-to-move's king.
+    var n = node();
+    var legal = legalMap();
     var check = null;
-    if (state._check) {
-      var king = state.turn === "white" ? "K" : "k";
+    if (n.resp && n.resp.check) {
+      var grid = ChessBoard.parseFen(n.fen).grid;
+      var king = n.resp.turn === "white" ? "K" : "k";
       for (var r = 0; r < 8 && !check; r++)
         for (var c = 0; c < 8; c++)
           if (grid[r][c] === king) check = ChessBoard.sqName(r, c);
     }
-    ChessBoard.render($("board"), state.fen, {
+    ChessBoard.render($("board"), n.fen, {
       flipped: state.flipped,
       coords: true,
-      highlight: state.last,                                   // {from, to} of the last move
+      highlight: n.last,
       selected: state.sel,
-      dests: state.sel ? (state.legal[state.sel] || []) : [],
+      dests: state.sel ? (legal[state.sel] || []) : [],
       check: check,
-      onSquare: onSquare,                                      // (name, ev)
-      draggable: function (name) { return !!state.legal[name]; },
-      onDragStart: onDragStart,                                // (name, ev)
-      onDrop: onDrop,                                          // (name, ev)
+      onSquare: onSquare,
+      draggable: function (name) { return !!legal[name]; },
+      onDragStart: onDragStart,
+      onDrop: onDrop,
     });
+    renderControls();
+    renderBars();
+    renderStatus();
+    renderMoves();
   }
 
-  function renderBars(resp) {
-    var eq = resp.equity_white;
-    var cpWhite = cpToWhite(resp.cp) * 100;
-    $("equity-fill").style.width = eq + "%";
+  function renderControls() {
+    $("scrub").max = state.line.length - 1;
+    $("scrub").value = state.ply;
+  }
+
+  function renderBars() {
+    var r = node().resp;
+    var eqFill = $("equity-fill"), cpFill = $("cp-fill");
+    if (!r) {
+      $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
+      $("best").textContent = ""; $("divergence").hidden = true;
+      return;
+    }
+    var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
+    eqFill.style.width = eq + "%";
     $("equity-readout").textContent = Math.round(eq) + "% White";
-    $("cp-fill").style.width = cpWhite + "%";
-    $("cp-readout").textContent = Math.abs(resp.cp) >= MATE_CP
-      ? (resp.cp > 0 ? "#" : "-#") : (resp.cp >= 0 ? "+" : "") + (resp.cp / 100).toFixed(1);
-
-    var best = $("best");
-    best.textContent = resp.best_san ? "Stockfish prefers " + resp.best_san : "";
-
-    var gap = eq - cpWhite;
-    var div = $("divergence");
-    if (!resp.game_over && Math.abs(gap) >= 15) {
+    cpFill.style.width = cpW + "%";
+    $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
+      ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
+    $("best").textContent = r.best_san ? "Stockfish prefers " + r.best_san : "";
+    var gap = eq - cpW, div = $("divergence");
+    if (!r.game_over && Math.abs(gap) >= 15) {
       div.hidden = false;
       div.textContent = "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
         Math.round(Math.abs(gap)) + " pts over the centipawn bar — at these ratings the " +
@@ -68,101 +89,115 @@
     } else { div.hidden = true; }
   }
 
-  function cpToWhite(cp) { return 1 / (1 + Math.exp(-0.00368208 * cp)); }
-
-  function renderStatus(resp) {
-    var s = $("status");
-    if (resp.checkmate) s.innerHTML = "<span class='san'>Checkmate</span> — " +
-      (resp.turn === "white" ? "Black" : "White") + " wins.";
-    else if (resp.stalemate) s.innerHTML = "<span class='san'>Draw</span> (no result).";
-    else s.innerHTML = (resp.turn === "white" ? "White" : "Black") + " to move" +
-      (resp.check ? " — <span class='san'>check</span>" : "");
+  function renderStatus() {
+    var r = node().resp, s = $("status");
+    if (!r) { s.textContent = "evaluating…"; return; }
+    if (r.checkmate) { s.innerHTML = "<span class='san'>Checkmate</span> — " + (r.turn === "white" ? "Black" : "White") + " wins."; return; }
+    if (r.stalemate) { s.innerHTML = "<span class='san'>Draw</span> (no result)."; return; }
+    s.innerHTML = (r.turn === "white" ? "White" : "Black") + " to move" + (r.check ? " — <span class='san'>check</span>" : "");
   }
 
   function renderMoves() {
     var ol = $("moves");
     ol.innerHTML = "";
-    state.history.forEach(function (h, i) {
-      if (!h.san) return;
+    state.line.forEach(function (nd, i) {
+      if (i === 0) return;
       var li = document.createElement("li");
-      li.textContent = (i % 2 === 0 ? (i / 2 + 1) + ". " : "") + h.san;
+      var label = document.createElement("span");
+      label.textContent = (i % 2 === 1 ? Math.ceil(i / 2) + ". " : "") + nd.san;
+      li.appendChild(label);
+      if (i === state.ply) li.classList.add("current");
+      li.addEventListener("click", function () { goPly(i); });
       ol.appendChild(li);
     });
-    var ply = state.history.filter(function (h) { return h.san; }).length;
-    if (ply) {
-      var box = ol.lastChild;
-      if (box && box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
+    var cur = ol.querySelector("li.current");
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function renderPlayers() {
+    var m = state.meta, html;
+    if (m) {
+      html = "<div class='side'><span class='nm'>⬜ " + (m.white || "White") + "</span></div>" +
+        "<div class='vs'>vs</div><div class='side'><span class='nm'>⬛ " + (m.black || "Black") + "</span></div>" +
+        "<div class='blurb'>" + m.name + (m.year ? " · " + m.year : "") + " — step through it, or play a move from any point to take over.</div>";
+    } else {
+      html = "<div class='side'><span class='nm'>Free play</span></div><div class='vs'></div>" +
+        "<div class='side muted'>move either side</div>";
     }
+    $("players").innerHTML = html;
   }
 
-  function applyResp(resp, san, lastMove) {
-    state.fen = resp.fen;
-    state.legal = resp.legal || {};
-    state.turn = resp.turn;
-    state._check = resp.check;
-    state.sel = null;
-    state.last = lastMove || null;
-    $("fen").value = resp.fen;
-    render();
-    renderBars(resp);
-    renderStatus(resp);
-    renderMoves();
-  }
+  // ---- evaluation + navigation ---------------------------------------------
 
-  // ---- networking ----------------------------------------------------------
-
-  function play(opts) {
-    // opts: { uci?, fen?, record?, optimistic? }. `optimistic` means attemptMove has
-    // already slid the piece into place locally, so we skip the start re-render (which
-    // would snap it back to the old position) and just wait for the eval to land.
+  // Ensure the node at ply p has a fresh eval (for the current ratings), then refresh.
+  function ensureEval(p) {
+    var n = state.line[p];
+    if (n.resp && n.resp._we === state.we && n.resp._be === state.be) return;
     if (state.busy) return;
-    state.busy = true;
-    setThinking(true);
-    if (!opts.optimistic) render();
-    var body = {
-      fen: opts.fen != null ? opts.fen : state.fen,
-      white_elo: state.we, black_elo: state.be,
-    };
-    if (opts.uci) body.uci = opts.uci;
-    fetch("/api/play", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        state.busy = false; setThinking(false);
-        if (!res.ok) { showFenErr(res.j.error || "error"); render(); return; }
-        hideFenErr();
-        var last = opts.uci ? { from: opts.uci.slice(0, 2), to: opts.uci.slice(2, 4) } : state.last;
-        if (opts.record) state.history.push({ fen: res.j.fen, san: res.j.san, last: last, resp: res.j });
-        applyResp(res.j, res.j.san, last);
-      })
-      .catch(function (err) { state.busy = false; setThinking(false); showFenErr(String(err)); render(); });
+    state.busy = true; setThinking(true);
+    postPlay({ fen: n.fen }, function (j, ok) {
+      state.busy = false; setThinking(false);
+      if (!ok) { showFenErr(j.error || "error"); return; }
+      hideFenErr();
+      j._we = state.we; j._be = state.be;
+      n.resp = j;
+      if (state.ply === p) render();
+    });
   }
 
-  function setThinking(on) {
-    var bars = document.querySelector(".bars");
-    if (bars) bars.classList.toggle("thinking", on);
+  function goPly(p) {
+    state.ply = Math.max(0, Math.min(state.line.length - 1, p));
+    state.sel = null;
+    render();
+    ensureEval(state.ply);
+  }
+
+  function postPlay(extra, cb) {
+    var body = { white_elo: state.we, black_elo: state.be };
+    for (var k in extra) body[k] = extra[k];
+    fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) { cb(rj[1], rj[0]); })
+      .catch(function (err) { cb({ error: String(err) }, false); });
   }
 
   // ---- interaction ---------------------------------------------------------
 
-  // Play from -> to, detecting a pawn promotion (which pops the picker first).
-  function attemptMove(from, to) {
-    var grid = ChessBoard.parseFen(state.fen).grid;
-    var piece = grid[8 - parseInt(from[1], 10)][FILES.indexOf(from[0])];
-    var toRank = parseInt(to[1], 10);
-    var uci = from + to;
-    if ((piece === "P" && toRank === 8) || (piece === "p" && toRank === 1)) { promote(uci); return; }
-    // Slide the piece to its square immediately (optimistic), then evaluate. The piece
-    // moves the instant you let go instead of after the ~1s engine round-trip; the
-    // authoritative position (castling rook, en passant, check) syncs when the eval lands.
-    animateMove(from, to);
-    play({ uci: uci, record: true, optimistic: true });
+  function onSquare(name) {
+    if (state.busy) return;
+    var legal = legalMap();
+    if (state.sel && (legal[state.sel] || []).indexOf(name) >= 0) { attemptMove(state.sel, name); return; }
+    state.sel = legal[name] ? name : null;
+    render();
   }
 
-  // Optimistic, animated piece move (FLIP slide). Special moves (castling/en passant/
-  // promotion) are corrected by the full render when the server response arrives.
+  function attemptMove(from, to) {
+    var grid = ChessBoard.parseFen(node().fen).grid;
+    var piece = grid[8 - parseInt(from[1], 10)][FILES.indexOf(from[0])];
+    var uci = from + to, toRank = parseInt(to[1], 10);
+    if ((piece === "P" && toRank === 8) || (piece === "p" && toRank === 1)) { promote(uci); return; }
+    animateMove(from, to);
+    doMove(uci);
+  }
+
+  // Play `uci` from the current position: truncate any future line and continue.
+  function doMove(uci) {
+    if (state.busy) return;
+    state.busy = true; setThinking(true);
+    var base = node().fen;
+    postPlay({ fen: base, uci: uci }, function (j, ok) {
+      state.busy = false; setThinking(false);
+      if (!ok) { showFenErr(j.error || "error"); render(); return; }
+      hideFenErr();
+      j._we = state.we; j._be = state.be;
+      state.line = state.line.slice(0, state.ply + 1);
+      state.line.push({ fen: j.fen, san: j.san, last: { from: uci.slice(0, 2), to: uci.slice(2, 4) }, resp: j });
+      state.ply++; state.sel = null;
+      render();
+    });
+  }
+
+  // Optimistic, animated piece move (FLIP slide); the server response then syncs.
   function animateMove(from, to) {
     var board = $("board");
     var fromSq = board.querySelector('.sq[data-name="' + from + '"]');
@@ -170,29 +205,16 @@
     if (!fromSq || !toSq) return;
     var piece = fromSq.querySelector(".piece");
     if (!piece) return;
-    board.querySelectorAll(".sq.sel, .sq.dest, .sq.capture").forEach(function (s) {
-      s.classList.remove("sel", "dest", "capture");
-    });
+    board.querySelectorAll(".sq.sel, .sq.dest, .sq.capture").forEach(function (s) { s.classList.remove("sel", "dest", "capture"); });
     var fr = fromSq.getBoundingClientRect(), tr = toSq.getBoundingClientRect();
     var dx = tr.left - fr.left, dy = tr.top - fr.top;
     var captured = toSq.querySelector(".piece");
     if (captured) captured.remove();
     toSq.appendChild(piece);
     if (piece.animate) {
-      piece.animate(
-        [{ transform: "translate(" + (-dx) + "px," + (-dy) + "px)" }, { transform: "none" }],
-        { duration: 150, easing: "cubic-bezier(.4,0,.2,1)" }
-      );
+      piece.animate([{ transform: "translate(" + (-dx) + "px," + (-dy) + "px)" }, { transform: "none" }],
+        { duration: 150, easing: "cubic-bezier(.4,0,.2,1)" });
     }
-  }
-
-  function onSquare(name) {
-    if (state.busy) return;
-    // Completing a move (click-to-move)?
-    if (state.sel && (state.legal[state.sel] || []).indexOf(name) >= 0) { attemptMove(state.sel, name); return; }
-    // Otherwise select a piece that has legal moves.
-    state.sel = state.legal[name] ? name : null;
-    render();
   }
 
   function onDragStart(name, ev) {
@@ -200,47 +222,32 @@
     state.sel = name;
     paintDrag(name);
     if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", name); }
-    ev.target.addEventListener("dragend", onDragEnd, { once: true });
+    ev.target.addEventListener("dragend", function () { if (!state.busy) render(); }, { once: true });
   }
-
   function onDrop(name) {
-    if (state.sel && (state.legal[state.sel] || []).indexOf(name) >= 0) attemptMove(state.sel, name);
-    else render();   // illegal target — clear the drag marks
+    var legal = legalMap();
+    if (state.sel && (legal[state.sel] || []).indexOf(name) >= 0) attemptMove(state.sel, name);
+    else render();
   }
-
-  function onDragEnd() {
-    // Dropped outside a legal square (no move started): repaint from state.
-    if (!state.busy) render();
-  }
-
   function squareEl(name) { return document.querySelector('#board .sq[data-name="' + name + '"]'); }
-
-  // Mark a piece + its legal destinations without a full re-render (a re-render mid
-  // drag would remove the element being dragged and abort the drag).
   function paintDrag(from) {
-    document.querySelectorAll("#board .sq").forEach(function (sq) {
-      sq.classList.remove("dest", "capture", "sel");
-    });
-    var src = squareEl(from);
-    if (src) src.classList.add("sel");
-    (state.legal[from] || []).forEach(function (to) {
-      var sq = squareEl(to);
-      if (!sq) return;
-      sq.classList.add("dest");
-      if (sq.querySelector(".piece")) sq.classList.add("capture");
+    document.querySelectorAll("#board .sq").forEach(function (sq) { sq.classList.remove("dest", "capture", "sel"); });
+    var src = squareEl(from); if (src) src.classList.add("sel");
+    (legalMap()[from] || []).forEach(function (to) {
+      var sq = squareEl(to); if (!sq) return;
+      sq.classList.add("dest"); if (sq.querySelector(".piece")) sq.classList.add("capture");
     });
   }
 
   function promote(baseUci) {
     var frame = document.querySelector(".board-frame");
-    var old = frame.querySelector(".promo");
-    if (old) old.remove();
+    var old = frame.querySelector(".promo"); if (old) old.remove();
     var menu = document.createElement("div");
     menu.className = "promo";
     [["q", "♛"], ["r", "♜"], ["b", "♝"], ["n", "♞"]].forEach(function (p) {
       var b = document.createElement("button");
       b.textContent = p[1];
-      b.addEventListener("click", function () { menu.remove(); play({ uci: baseUci + p[0], record: true }); });
+      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p[0]); });
       menu.appendChild(b);
     });
     frame.appendChild(menu);
@@ -249,43 +256,89 @@
   function showFenErr(msg) { var e = $("fen-err"); e.hidden = false; e.textContent = msg; }
   function hideFenErr() { $("fen-err").hidden = true; }
 
-  // ---- controls ------------------------------------------------------------
+  // ---- game library + controls ---------------------------------------------
 
-  function undo() {
-    if (state.busy || !state.history.length) return;
-    state.history.pop();
-    var prev = state.history[state.history.length - 1];
-    if (prev) applyResp(prev.resp, prev.san, prev.last);
-    else { state.last = null; play({ fen: START, record: false }); }
+  function newGame() {
+    state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
+    state.ply = 0; state.sel = null; state.meta = null;
+    $("game-select").value = "";
+    renderPlayers(); goPly(0);
   }
 
-  var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  function loadGame(id) {
+    postGet("/api/game?id=" + encodeURIComponent(id), function (g, ok) {
+      if (!ok) { showFenErr(g.error || "could not load game"); return; }
+      state.line = g.moves.map(function (m) {
+        return { fen: m.fen, san: m.san, resp: null,
+          last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
+      });
+      state.ply = 0; state.sel = null;
+      state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
+      renderPlayers(); goPly(0);
+    });
+  }
+
+  function loadFen(fen) {
+    state.line = [{ fen: fen, san: "(start)", last: null, resp: null }];
+    state.ply = 0; state.sel = null; state.meta = null;
+    $("game-select").value = "";
+    renderPlayers(); goPly(0);
+  }
+
+  function postGet(url, cb) {
+    fetch(url).then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) { cb(rj[1], rj[0]); })
+      .catch(function (err) { cb({ error: String(err) }, false); });
+  }
 
   function wire() {
-    $("new").addEventListener("click", function () {
-      state.history = []; state.last = null; state.sel = null; play({ fen: START, record: false });
-    });
-    $("undo").addEventListener("click", undo);
+    $("first").addEventListener("click", function () { goPly(0); });
+    $("prev").addEventListener("click", function () { goPly(state.ply - 1); });
+    $("next").addEventListener("click", function () { goPly(state.ply + 1); });
+    $("last").addEventListener("click", function () { goPly(state.line.length - 1); });
     $("flip").addEventListener("click", function () { state.flipped = !state.flipped; render(); });
+    $("scrub").addEventListener("input", function (e) { goPly(parseInt(e.target.value, 10)); });
+    $("new").addEventListener("click", newGame);
+    $("load-fen").addEventListener("click", function () { loadFen($("fen").value.trim()); });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "f" || e.key === "F") { state.flipped = !state.flipped; render(); }
+      if (e.key === "ArrowLeft") goPly(state.ply - 1);
+      else if (e.key === "ArrowRight") goPly(state.ply + 1);
+      else if (e.key === "Home") goPly(0);
+      else if (e.key === "End") goPly(state.line.length - 1);
+      else if (e.key === "f" || e.key === "F") { state.flipped = !state.flipped; render(); }
     });
     function slider(id, outId, key) {
       var el = $(id);
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        play({ fen: state.fen, record: false });   // re-eval current position
+        ensureEval(state.ply);   // equity is rating-conditioned → re-score this position
       });
     }
     slider("white-elo", "white-elo-out", "we");
     slider("black-elo", "black-elo-out", "be");
-    $("load-fen").addEventListener("click", function () {
-      state.history = []; state.last = null; state.sel = null;
-      play({ fen: $("fen").value.trim(), record: false });
+  }
+
+  function loadLibrary() {
+    postGet("/api/games", function (data, ok) {
+      var sel = $("game-select");
+      var blank = document.createElement("option");
+      blank.value = ""; blank.textContent = ok && data.games && data.games.length ? "— pick a game —" : "(start the server for the library)";
+      sel.appendChild(blank);
+      if (ok && data.games) {
+        data.games.forEach(function (g) {
+          var o = document.createElement("option");
+          o.value = g.id;
+          o.textContent = g.name + (g.year ? " (" + g.year + ")" : "") + " · " + g.plies + " plies";
+          sel.appendChild(o);
+        });
+      }
+      sel.addEventListener("change", function () { if (sel.value) loadGame(sel.value); });
     });
   }
 
   wire();
-  play({ fen: START, record: false });
+  loadLibrary();
+  renderPlayers();
+  goPly(0);   // start position, evaluated live
 })();
