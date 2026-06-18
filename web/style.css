@@ -123,9 +123,8 @@ main {
 /* compact the rail cards so the move list keeps real height in the fixed viewport */
 .rail { gap: .65rem; }
 .rail .card { padding: .8rem .95rem; }
-.rail .equity-bar { height: 30px; }
-.rail .cp-bar { height: 18px; }
-.rail .bar-block { margin: .15rem 0 .5rem; }
+.rail .equity-bar { height: 28px; }
+.rail .cp-bar { height: 28px; }
 .rail #equity-readout { font-size: 1.25rem; }
 .rail .scores-head { margin-bottom: .5rem; padding-bottom: .4rem; }
 .rail .divergence { padding: .6rem .75rem; font-size: .82rem; line-height: 1.4; }
@@ -239,26 +238,46 @@ input[type=range]::-moz-range-thumb {
   padding-bottom: .55rem; border-bottom: 1px solid var(--line);
   font-weight: 600;
 }
+.scores-head .scores-sub { font-weight: 500; opacity: .85; }
 
-/* ---- bars ---- */
-.bar-block { margin: .2rem 0 .75rem; }
-.bar-block:last-of-type { margin-bottom: .2rem; }
-.bar-label { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; margin-bottom: .45rem; }
-.bar-name { font-weight: 700; font-size: 1rem; line-height: 1.25; }
-.bar-name .sub { display: block; font-weight: 500; color: var(--muted); font-size: .76rem; }
-.readout { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.1rem; white-space: nowrap; }
-#equity-readout { font-size: 1.4rem; color: var(--accent); letter-spacing: -.01em; }
+/* ---- bars: the two reads of the position, grouped on one shared scale ----
+   A 3-column grid (label · bar · readout) puts both bars in the SAME track
+   column, so their left origins and leading edges line up on one axis — the
+   Maia-vs-Stockfish contrast reads at a glance instead of as two stacked bars. */
+.bars-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  column-gap: .7rem; row-gap: .5rem;
+}
+.bars-scale {
+  grid-column: 1 / -1;
+  font-size: .78rem; font-weight: 600; color: var(--ink, inherit);
+  margin-bottom: .1rem;
+}
+.bars-scale .scores-sub { font-weight: 500; color: var(--muted); }
+.bar-name { font-weight: 700; font-size: .95rem; line-height: 1.2; display: flex; align-items: baseline; gap: .35rem; }
+.bar-name::before {
+  content: ""; width: 10px; height: 10px; border-radius: 3px;
+  align-self: center; flex: 0 0 auto;
+}
+.bar-name.eq::before { background: var(--accent); }
+.bar-name.cp::before { background: #9aa3b0; }
+.bar-name .sub { font-weight: 500; color: var(--muted); font-size: .76rem; }
+.readout { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.2rem; white-space: nowrap; text-align: right; }
+#equity-readout { color: var(--accent); letter-spacing: -.01em; }
 /* opening-book positions: equity is suppressed, so the readout reads muted, not green */
-#equity-readout.book { color: var(--muted); font-size: 1.1rem; font-weight: 700; }
+#equity-readout.book { color: var(--muted); font-weight: 700; }
 #cp-readout { color: var(--muted); }
 .bar {
-  position: relative; border-radius: 12px; overflow: hidden;
+  position: relative; border-radius: 9px; overflow: hidden;
   /* the track itself is Black's winning share */
   background: var(--track);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, .35);
 }
-.equity-bar { height: 38px; }   /* the hero bar reads big and bold */
-.cp-bar { height: 24px; }
+/* equal height so the two fills compare fairly on the same scale */
+.equity-bar { height: 30px; }
+.cp-bar { height: 30px; }
 .bar .fill {
   position: absolute; inset: 0 auto 0 0; width: 50%;
   transition: width .35s cubic-bezier(.4, .0, .2, 1);
