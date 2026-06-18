@@ -56,6 +56,11 @@ Reproduce the real proof in one pinned command, then read the report it writes:
 uv run chess-equity headline --data <full --with-fen dump>   # -> reports/validation_headline.md
 ```
 
+Both `validate --out` and `headline` write a machine-readable `*.verdict.json` beside the
+report (schema `chess-equity-gate/v1`, top-level `pass`). CI and badges assert the gate from
+that field instead of re-parsing the markdown — `chess-equity gate-check <verdict.json>`
+exits 0 only when `pass` is true (and is run on every push in [CI](.github/workflows/ci.yml)).
+
 Full method, the gate's exact meaning, and a no-download sample run are in
 [Data & validation](#data--validation) below.
 
