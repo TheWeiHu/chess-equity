@@ -21,6 +21,9 @@ from chess_equity.data.source_month import (
 )
 
 SAMPLE_PGN = Path(__file__).resolve().parents[1] / "data" / "sample" / "sample_games.pgn"
+# A committed scored sample wdl-a can grade without torch/stockfish; its path carries no
+# month token, so the leakage guard's month can only come from the sidecar (or --eval-month).
+SAMPLE_CSV = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset.csv"
 
 
 # --- month validation ----------------------------------------------------------
@@ -108,3 +111,48 @@ def test_cli_data_stamp_missing_path_errors(tmp_path):
     from chess_equity.cli import main
 
     assert main(["data", "stamp", str(tmp_path / "nope.csv"), "2016-05"]) == 1
+
+
+# --- the sidecar feeds the leakage guard (task 0127 criterion 3) ----------------
+#
+# These pin the cross-feature contract with the leakage guard (task 0112): with no
+# --eval-month and no month token in the path, the guard's eval month must come from
+# the stamped sidecar — otherwise the thesis could be silently validated on wdl-a's
+# own training month (2016-05). Regression guard for the merge that wired the two
+# features together in validate.
+
+def test_validate_uses_sidecar_month_for_leakage_guard(tmp_path, capsys):
+    from chess_equity.cli import main
+
+    # A sample wdl-a can score, copied to a month-less path so only the sidecar can
+    # supply the eval month, then stamped with wdl-a's own training month.
+    ds = tmp_path / "dataset.csv"
+    ds.write_text(SAMPLE_CSV.read_text(encoding="utf-8"), encoding="utf-8")
+    write_source_month(ds, "2016-05")
+
+    rc = main(
+        ["validate", "--data", str(ds), "--models", "baseline,wdl-a",
+         "--strict", "--bootstrap", "0"]
+    )
+    captured = capsys.readouterr()
+    assert rc == 2  # --strict refuses because the sidecar fed 2016-05 into the guard
+    assert "refusing" in captured.err
+
+
+def test_validate_eval_month_flag_overrides_sidecar(tmp_path, capsys):
+    from chess_equity.cli import main
+
+    ds = tmp_path / "dataset.csv"
+    ds.write_text(SAMPLE_CSV.read_text(encoding="utf-8"), encoding="utf-8")
+    write_source_month(ds, "2016-05")  # sidecar says the leaky month...
+
+    # ...but an explicit --eval-month wins, so a held-out month clears the guard.
+    rc = main(
+        ["validate", "--data", str(ds), "--models", "baseline,wdl-a",
+         "--eval-month", "2013-01", "--bootstrap", "0"]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "LEAKAGE" not in captured.out and "LEAKAGE" not in captured.err
+    # The title still reports the dataset's own stamped month, not the override.
+    assert "data month: 2016-05" in captured.out

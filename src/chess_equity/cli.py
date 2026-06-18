@@ -487,9 +487,19 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    # The dataset's own source month, read from its sidecar (task 0127): the recorded
+    # truth of which Lichess month --data was drawn from. It is what the leakage guard
+    # uses to default --eval-month (so the operator can't silently get it wrong), and is
+    # surfaced in the report title.
+    from chess_equity.data.source_month import read_source_month
+
+    data_month = read_source_month(args.data)
+
     # Leakage guard (task 0112): if the eval dataset's source month is a model's own
-    # training month, its scores are memorization, not held-out evidence. The month is
-    # declared via --eval-month or inferred from the dataset path; --strict refuses.
+    # training month, its scores are memorization, not held-out evidence. Eval-month
+    # precedence: explicit --eval-month, else the dataset's stamped source month (task
+    # 0127), else inferred from the dataset path; --strict refuses. Resolved once so the
+    # detection and the report's warning block agree.
     from chess_equity.validate.leakage import (
         detect_leakage,
         format_leakage_warning,
@@ -498,7 +508,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         model_fit_months,
     )
 
-    eval_month = getattr(args, "eval_month", None) or infer_month_from_path(args.data)
+    eval_month = (
+        getattr(args, "eval_month", None)
+        or data_month
+        or infer_month_from_path(args.data)
+    )
     leaks = detect_leakage(eval_month, model_fit_months(requested))
     if leaks:
         print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)
@@ -511,14 +525,8 @@ def _run_validate(args: argparse.Namespace) -> int:
             return 2
 
     title = f"Validation report — {args.data}"
-    # The dataset's source month, read from its sidecar (task 0127). Surfacing it makes
-    # the run's eval month explicit in the report, and is what the leakage guard reads to
-    # default --eval-month when the operator omits it (so it can't be silently wrong).
-    from chess_equity.data.source_month import read_source_month
-
-    eval_month = read_source_month(args.data)
-    if eval_month:
-        title += f" (data month: {eval_month})"
+    if data_month:
+        title += f" (data month: {data_month})"
 
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
