@@ -367,7 +367,28 @@ def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
     return 0
 
 
+def _run_data_stamp(args: argparse.Namespace) -> int:
+    """Backfill the source-month sidecar on an already-built dataset (task 0127)."""
+    from pathlib import Path
+
+    from chess_equity.data.source_month import write_source_month
+
+    if not Path(args.path).exists():
+        print(f"error: dataset not found: {args.path}", file=sys.stderr)
+        return 1
+    try:
+        side = write_source_month(args.path, args.month)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"stamped {args.month} -> {side}")
+    return 0
+
+
 def _run_data(args: argparse.Namespace) -> int:
+    if args.data_command == "stamp":
+        return _run_data_stamp(args)
+
     # Imported lazily so the common ``eval`` path never pays for the data deps.
     from chess_equity.data.build import build_dataset, month_url
 
@@ -425,6 +446,9 @@ def _run_data(args: argparse.Namespace) -> int:
             fmt=args.format,
             include_fen=args.with_fen,
             partition=args.partition,
+            # Stamp the source month when the dump came from --month, so the leakage
+            # guard can read it back from the sidecar (task 0127).
+            source_month=args.month,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -487,6 +511,15 @@ def _run_validate(args: argparse.Namespace) -> int:
             return 2
 
     title = f"Validation report — {args.data}"
+    # The dataset's source month, read from its sidecar (task 0127). Surfacing it makes
+    # the run's eval month explicit in the report, and is what the leakage guard reads to
+    # default --eval-month when the operator omits it (so it can't be silently wrong).
+    from chess_equity.data.source_month import read_source_month
+
+    eval_month = read_source_month(args.data)
+    if eval_month:
+        title += f" (data month: {eval_month})"
+
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
 
@@ -1049,6 +1082,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="cache dir for downloaded --month dumps (default: ~/.cache/chess-equity/dumps)",
     )
+
+    stamp = data_sub.add_parser(
+        "stamp",
+        help="backfill the source-month sidecar on an existing dataset (task 0127)",
+    )
+    stamp.add_argument("path", help="path to a built dataset (csv/parquet file or partitioned dir)")
+    stamp.add_argument("month", help="the YYYY-MM Lichess month the dataset was drawn from")
 
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
     # The underpowered-sample floor's default (task 0132) — imported here so the help text

@@ -128,6 +128,7 @@ def build_dataset(
     name: str = "dataset",
     include_fen: bool = False,
     partition: bool = False,
+    source_month: Optional[str] = None,
 ) -> Path:
     """Parse ``pgn_path`` into ``out_dir/<name>.<fmt>`` and return the written path.
 
@@ -140,6 +141,11 @@ def build_dataset(
     ``out_dir/<name>/tc_bucket=…/rating_bucket=…/part.<fmt>`` (and that dir is
     returned) so 0004/0009 can read only the rating/time-control slices they need;
     :func:`load_rows` reads such a directory transparently.
+
+    ``source_month`` (``YYYY-MM``, e.g. the Lichess month the dump came from) stamps a
+    source-month sidecar next to the output (see :mod:`chess_equity.data.source_month`)
+    so the validation leakage guard can tell which month a dataset is from without the
+    operator re-supplying it. ``None`` leaves the dataset unstamped.
     """
     if fmt not in ("csv", "parquet"):
         raise ValueError(f"unknown format {fmt!r} (expected 'csv' or 'parquet')")
@@ -152,12 +158,16 @@ def build_dataset(
             target = out_path / name
             target.mkdir(parents=True, exist_ok=True)
             _write_partitioned(rows, target, cols, fmt)
-            return target
-        target = out_path / f"{name}.{fmt}"
-        if fmt == "csv":
-            _write_csv(rows, target, cols)
         else:
-            _write_parquet(rows, target, cols)
+            target = out_path / f"{name}.{fmt}"
+            if fmt == "csv":
+                _write_csv(rows, target, cols)
+            else:
+                _write_parquet(rows, target, cols)
+    if source_month is not None:
+        from chess_equity.data.source_month import write_source_month
+
+        write_source_month(target, source_month)
     return target
 
 
