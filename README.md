@@ -42,13 +42,21 @@ engine on forced lines. `chess-equity validate` makes that machine-checkable: it
 each model on log-loss, Brier, and ECE against actual results, and only calls a model a
 winner when its 95% paired-bootstrap CI on the delta vs the baseline clears zero.
 
-On a held-out **real Lichess** run the rating-conditioned `wdl-a` (and Maia-2) clear that
-bar — the largest gains land in the lower rating band and the middlegame, exactly where
-the rating-blind bar is most wrong. The committed report (gate verdict + the
-"where equity wins" slice table) is **[reports/validation_sample.md](reports/validation_sample.md)**;
-its checked-in numbers are an **illustrative 15-row sample, not statistically powered proof** —
-the headline evidence comes from the `chess-equity headline` recipe below, run on a real dump
-(attended-only, see [DEPENDENCIES.md](DEPENDENCIES.md)).
+On a **real Lichess** run (n=12,000 positions from the `2013-01` standard dump) the
+rating-conditioned `wdl-a` and Maia-2 both clear that bar — the largest gains land in the
+lower rating band and the middlegame, exactly where the rating-blind bar is most wrong.
+The committed evidence (gate verdict + the "where equity wins" slice table) is
+**[reports/validation_real.md](reports/validation_real.md)**, with the per-rating-band
+calibration curves in **[reports/calibration_real.md](reports/calibration_real.md)**:
+
+| predictor | log-loss | Brier | gate |
+|---|--:|--:|:--:|
+| baseline (rating-blind Win%) | 0.905 | 0.208 | — |
+| `wdl-a` (rating-conditioned) | **0.564** | **0.173** | **PASS** (CI clears zero) |
+| Maia-2 value head | 0.612 | 0.185 | **PASS** (CI clears zero) |
+
+(A no-download, illustrative 15-row stand-in is kept at
+[reports/validation_sample.md](reports/validation_sample.md) for the offline smoke path.)
 
 Reproduce the real proof in one pinned command, then read the report it writes:
 
