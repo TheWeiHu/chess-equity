@@ -42,6 +42,7 @@ from chess_equity.models import LichessBaselineModel, placeholder_equity_warning
 from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
 from chess_equity.search import MaiaSearchModel
 from chess_equity.search import estimate_to_equity as search_estimate_to_equity
+from chess_equity.types import Equity, WDL
 
 START_FEN = chess.STARTING_FEN
 
@@ -49,6 +50,62 @@ START_FEN = chess.STARTING_FEN
 def _eval_fen(model: EquityModel, fen: str, white_elo: int, black_elo: int) -> str:
     equity = model.evaluate(fen, white_elo, black_elo)
     return render_eval(equity)
+
+
+def _white_pov_wdl(equity: Equity, fen: str) -> WDL:
+    """The W/D/L triple from White's POV (``equity.wdl`` is from the side-to-move's)."""
+    white_to_move = chess.Board(fen).turn == chess.WHITE
+    return equity.wdl if white_to_move else equity.wdl.flipped()
+
+
+def _eval_record(equity: Equity, fen: str, white_elo: int, black_elo: int) -> dict:
+    """The structured per-position payload behind ``eval --json`` (task 0140).
+
+    White-POV throughout: ``equity`` is the [0, 100] bar value and the W/D/L triple is
+    also from White's side, so ``equity == 100 * (p_win + 0.5 * p_draw)`` holds within
+    every record. ``cp`` is the objective centipawn eval, or ``null`` when the model
+    exposes none. ``model`` is the source id printed in brackets by the text render.
+    """
+    w = _white_pov_wdl(equity, fen)
+    return {
+        "fen": fen,
+        "model": equity.source,
+        "white_elo": white_elo,
+        "black_elo": black_elo,
+        "pov": "white",
+        "equity": equity.equity_white,
+        "p_win": w.p_win,
+        "p_draw": w.p_draw,
+        "p_loss": w.p_loss,
+        "cp": equity.cp,
+    }
+
+
+def _eval_pgn_records(
+    model: EquityModel, path: str, white_elo: int, black_elo: int
+) -> List[dict]:
+    """One :func:`_eval_record` per ply of the first game in ``path`` (``--pgn --json``).
+
+    Ply 0 is the start position (``san`` null); each subsequent record carries the
+    SAN of the move that produced it, so a consumer can align records to the game.
+    """
+    with open(path, encoding="utf-8") as fh:
+        game = chess.pgn.read_game(fh)
+    if game is None:
+        raise ValueError(f"no game found in {path}")
+    board = game.board()
+    record = _eval_record(
+        model.evaluate(board.fen(), white_elo, black_elo), board.fen(), white_elo, black_elo
+    )
+    records = [{**record, "ply": 0, "san": None}]
+    for ply, move in enumerate(game.mainline_moves(), start=1):
+        san = board.san(move)
+        board.push(move)
+        record = _eval_record(
+            model.evaluate(board.fen(), white_elo, black_elo), board.fen(), white_elo, black_elo
+        )
+        records.append({**record, "ply": ply, "san": san})
+    return records
 
 
 def _eval_pgn(model: EquityModel, path: str, white_elo: int, black_elo: int) -> List[str]:
@@ -185,7 +242,14 @@ def _eval_search_fen(model: MaiaSearchModel, fen: str, white_elo: int, black_elo
 def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
-        if getattr(args, "rating_sweep", None):
+        if getattr(args, "json", False):
+            scored = _apply_profiles(model, args)
+            if args.pgn:
+                print(json.dumps(_eval_pgn_records(scored, args.pgn, args.white_elo, args.black_elo)))
+            else:
+                equity = scored.evaluate(args.fen, args.white_elo, args.black_elo)
+                print(json.dumps(_eval_record(equity, args.fen, args.white_elo, args.black_elo)))
+        elif getattr(args, "rating_sweep", None):
             from chess_equity.validate.rating_sweep import parse_rungs, render_text, sweep
 
             rungs = sweep(_apply_profiles(model, args), args.fen, parse_rungs(args.rating_sweep))
@@ -978,6 +1042,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
     ev.add_argument("fen", nargs="?", default=START_FEN, help="FEN (default: startpos)")
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
+    ev.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the structured per-position payload as JSON (a single object, or a "
+        "JSON array with one record per ply when --pgn is given) instead of the human bar",
+    )
     ev.add_argument("--white-elo", type=int, default=1500)
     ev.add_argument("--black-elo", type=int, default=1500)
     ev.add_argument(

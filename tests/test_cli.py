@@ -1,6 +1,62 @@
+import json
+import re
+
 import chess
 
 from chess_equity.cli import main
+
+_SCHEMA_KEYS = {
+    "fen", "model", "white_elo", "black_elo",
+    "pov", "equity", "p_win", "p_draw", "p_loss", "cp",
+}
+
+
+def _assert_record_schema(rec):
+    assert _SCHEMA_KEYS <= set(rec), f"missing keys: {_SCHEMA_KEYS - set(rec)}"
+    assert rec["pov"] == "white"
+    assert 0.0 <= rec["equity"] <= 100.0
+    for p in ("p_win", "p_draw", "p_loss"):
+        assert 0.0 <= rec[p] <= 1.0
+    assert abs(rec["p_win"] + rec["p_draw"] + rec["p_loss"] - 1.0) < 1e-6
+    # White-POV invariant: the bar value is the white-POV expected score.
+    assert abs(rec["equity"] - 100.0 * (rec["p_win"] + 0.5 * rec["p_draw"])) < 1e-4
+    assert rec["cp"] is None or isinstance(rec["cp"], (int, float))
+    assert isinstance(rec["model"], str) and rec["model"]
+
+
+def test_eval_json_emits_stable_schema(capsys):
+    rc = main(["eval", chess.STARTING_FEN, "--white-elo", "1500", "--black-elo", "1500", "--json"])
+    assert rc == 0
+    rec = json.loads(capsys.readouterr().out)
+    _assert_record_schema(rec)
+    assert rec["fen"] == chess.STARTING_FEN
+    assert rec["white_elo"] == 1500 and rec["black_elo"] == 1500
+
+
+def test_eval_json_equity_agrees_with_text_render(capsys):
+    fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
+    main(["eval", fen, "--json"])
+    rec = json.loads(capsys.readouterr().out)
+    main(["eval", fen])
+    text = capsys.readouterr().out
+    # The text bar renders the same white-POV percent as JSON `equity` (one decimal).
+    pct = float(re.search(r"(\d+\.\d)%", text).group(1))
+    assert abs(pct - rec["equity"]) < 0.06
+
+
+def test_eval_pgn_json_one_record_per_ply(tmp_path, capsys):
+    pgn = tmp_path / "game.pgn"
+    pgn.write_text("1. e4 e5 2. Nf3 Nc6 *\n")
+    rc = main(["eval", "--pgn", str(pgn), "--json"])
+    assert rc == 0
+    records = json.loads(capsys.readouterr().out)
+    # start position + 4 half-moves = 5 records.
+    assert len(records) == 5
+    assert [r["ply"] for r in records] == [0, 1, 2, 3, 4]
+    assert records[0]["san"] is None
+    assert records[1]["san"] == "e4"
+    for rec in records:
+        _assert_record_schema(rec)
 
 
 def test_eval_startpos_runs_and_prints_bar(capsys):
