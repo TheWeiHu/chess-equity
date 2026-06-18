@@ -4,6 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>chess-equity — interactive board (Maia-2 + Stockfish)</title>
+  <!-- Real typefaces: Space Grotesk for the wordmark/headings, Inter for UI text.
+       Falls back gracefully to the system stack if offline (the app stays usable). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap" />
   <link rel="stylesheet" href="board.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -19,9 +25,6 @@
   <header class="site-header">
     <div class="wrap">
       <h1>chess&#8202;<span class="accent">equity</span></h1>
-      <p class="tagline">Move the pieces — every position is scored live by
-        <strong>Maia-2</strong> (rating-conditioned equity) and <strong>Stockfish</strong>
-        (the classic centipawn bar). Or load a famous game and step through it.</p>
     </div>
   </header>
 
@@ -51,8 +54,6 @@
     </section>
 
     <section class="bars-col">
-      <div class="card players" id="players"></div>
-
       <div class="card ratings">
         <div class="rating-row">
           <label for="white-elo">White rating</label>
@@ -64,8 +65,6 @@
           <output id="black-elo-out">1500</output>
           <input id="black-elo" type="range" min="1100" max="2300" step="100" value="1500" />
         </div>
-        <p class="muted rating-note">Maia-2 buckets ratings in 100s and clamps to
-          1100&#8211;2300; the centipawn bar ignores them.</p>
       </div>
 
       <div class="card bars">
@@ -86,34 +85,8 @@
         <p id="best" class="best-move"></p>
         <p id="divergence" class="divergence" hidden></p>
       </div>
-
-      <figure class="card chart-block">
-        <figcaption>Across the game — White win%
-          <span class="legend"><span class="key eq">equity</span>
-            <span class="key cp">centipawn</span></span>
-          <span id="chart-progress" class="chart-progress"></span>
-        </figcaption>
-        <svg id="chart" class="chart" viewBox="0 0 480 150" role="img"
-             aria-label="equity vs centipawn win-percent across the game"></svg>
-      </figure>
-
-      <div class="card fen-card">
-        <label for="fen">Position (FEN)</label>
-        <div class="fen-row">
-          <input id="fen" type="text" spellcheck="false" aria-label="FEN" />
-          <button id="load-fen" type="button">Load</button>
-        </div>
-        <p id="fen-err" class="fen-err" hidden></p>
-      </div>
     </section>
   </main>
-
-  <footer class="wrap">
-    <p><strong>How it works:</strong> each position POSTs to <code>/api/play</code>; the
-      server runs Stockfish (depth from <code>$STOCKFISH_DEPTH</code>, default 12) for the
-      centipawn bar and Maia-2's value head for the equity bar. Famous games come from
-      <code>web/famous-games.json</code> — add any game by pasting its PGN there.</p>
-  </footer>
 
   <script src="board.js"></script>
   <script src="live.js"></script>

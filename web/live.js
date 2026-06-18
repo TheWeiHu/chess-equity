@@ -1,14 +1,10 @@
 /* live.js — the interactive board. One position at a time, scored live by the backend.
  *
  * Model: state.line is a list of nodes [{fen, san, last, resp}] with a cursor state.ply.
- * node[0] is the start position. You can:
- *   • step through the line (first/prev/next/last/scrub/click) — each position is
- *     evaluated lazily by /api/play when you land on it,
- *   • load a famous game (/api/games + /api/game) into the line,
- *   • play a move from the current position — that truncates any future and continues,
- *     so taking over mid-game just branches the line.
- * The browser holds no chess rules: legality, SAN, game-over and the game library all
- * come from python-chess on the server.
+ * node[0] is the start position. Step through the line (first/prev/next/last/scrub/click/
+ * move-list), load a famous game (/api/games + /api/game), or play a move from the current
+ * position — that truncates any future and continues, so taking over mid-game branches the
+ * line. The browser holds no chess rules: legality, SAN and game-over come from the server.
  */
 (function () {
   "use strict";
@@ -16,8 +12,8 @@
   var FILES = "abcdefgh";
   var MATE_CP = 10000;
   var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-  // The first two full moves are opening book — Maia-2 equity there is noise that
-  // swings wildly for no real reason, so we don't show it (cp bar stays; it's fine).
+  // The first two full moves are opening book — Maia-2 equity there is noise that swings
+  // wildly for no real reason, so we don't show it (the cp bar is accurate, so it stays).
   // Plies: 0 = start, 1..4 = White/Black move 1 and 2. Equity shows from move 3 (ply 5).
   var BOOK_PLIES = 4;
   function inBook(p) { return p <= BOOK_PLIES; }
@@ -25,7 +21,8 @@
   var state = {
     line: [{ fen: START, san: "(start)", last: null, resp: null }],
     ply: 0, sel: null, we: 1500, be: 1500, flipped: false, busy: false,
-    meta: null,   // {name, white, black} of a loaded famous game, else null
+    meta: null,        // {name, white, black, year} of a loaded famous game, else null
+    branched: false,   // true once you've played your own move off a loaded game
   };
 
   function $(id) { return document.getElementById(id); }
@@ -63,75 +60,6 @@
     renderBars();
     renderStatus();
     renderMoves();
-    renderChart();
-  }
-
-  // ---- across-the-game chart (objective cp vs calibrated equity, White win%) ----
-
-  var SVG_NS = "http://www.w3.org/2000/svg";
-  function svgEl(name, attrs) {
-    var el = document.createElementNS(SVG_NS, name);
-    for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
-    return el;
-  }
-  function hasFresh(n) { return n.resp && n.resp._we === state.we && n.resp._be === state.be; }
-
-  function renderChart() {
-    var svg = $("chart"); if (!svg) return;
-    var n = state.line.length, W = 480, H = 150, pad = 22;
-    var innerW = W - 2 * pad, innerH = H - 2 * pad;
-    function xFor(i) { return n <= 1 ? pad + innerW / 2 : pad + (i / (n - 1)) * innerW; }
-    function yFor(p) { return pad + (1 - p / 100) * innerH; }
-    var eq = [], cp = [], dots = [];
-    state.line.forEach(function (nd, i) {
-      if (!hasFresh(nd)) return;
-      var c = cpToWhite(nd.resp.cp) * 100;
-      cp.push(xFor(i) + "," + yFor(c));
-      // skip equity inside the opening book — it's noise we don't plot
-      if (inBook(i)) return;
-      var e = nd.resp.equity_white;
-      eq.push(xFor(i) + "," + yFor(e));
-      dots.push({ i: i, x: xFor(i), y: yFor(e), e: e, c: c, san: nd.san });
-    });
-    svg.innerHTML = "";
-    svg.appendChild(svgEl("line", { x1: pad, y1: yFor(50), x2: W - pad, y2: yFor(50), class: "chart-mid" }));
-    var cx = xFor(state.ply);
-    svg.appendChild(svgEl("line", { x1: cx, y1: pad, x2: cx, y2: H - pad, class: "chart-cursor" }));
-    if (cp.length) svg.appendChild(svgEl("polyline", { points: cp.join(" "), class: "chart-cp" }));
-    if (eq.length) svg.appendChild(svgEl("polyline", { points: eq.join(" "), class: "chart-eq" }));
-    dots.forEach(function (d) {
-      var dot = svgEl("circle", { cx: d.x, cy: d.y, r: d.i === state.ply ? 4 : 2, class: "chart-dot" + (d.i === state.ply ? " current" : "") });
-      var t = svgEl("title", {});
-      t.textContent = (d.i === 0 ? "start" : d.san) + ": equity " + Math.round(d.e) + "% · cp-bar " + Math.round(d.c) + "%";
-      dot.appendChild(t);
-      dot.addEventListener("click", function () { goPly(d.i); });
-      svg.appendChild(dot);
-    });
-  }
-
-  // Progressively evaluate every ply in the background so the chart fills in over the
-  // whole game. A generation token cancels the run when the game or ratings change.
-  var fillGen = 0;
-  function startFill() {
-    var gen = ++fillGen, i = 0;
-    function step() {
-      if (gen !== fillGen) return;
-      while (i < state.line.length && hasFresh(state.line[i])) i++;
-      updateProgress();
-      if (i >= state.line.length) return;
-      var p = i, nd = state.line[p];
-      postPlay({ fen: nd.fen }, function (j, ok) {
-        if (gen !== fillGen) return;
-        if (ok) { j._we = state.we; j._be = state.be; nd.resp = j; renderChart(); if (state.ply === p) { renderBars(); renderStatus(); } }
-        i = p + 1; setTimeout(step, 0);
-      });
-    }
-    step();
-  }
-  function updateProgress() {
-    var el = $("chart-progress"); if (!el) return;
-    var done = state.line.filter(hasFresh).length, total = state.line.length;
-    el.textContent = done < total ? "charting " + done + "/" + total + "…" : "";
   }
 
   function renderControls() {
@@ -141,7 +69,6 @@
 
   function renderBars() {
     var r = node().resp;
-    var eqFill = $("equity-fill"), cpFill = $("cp-fill");
     if (!r) {
       $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
       $("best").textContent = ""; $("divergence").hidden = true;
@@ -150,10 +77,10 @@
     var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
     var book = inBook(state.ply);
     // Opening book: equity is meaningless this early, so park the bar at even and say "Book".
-    eqFill.style.width = (book ? 50 : eq) + "%";
+    $("equity-fill").style.width = (book ? 50 : eq) + "%";
     $("equity-readout").textContent = book ? "Book" : Math.round(eq) + "% White";
     $("equity-readout").classList.toggle("book", book);
-    cpFill.style.width = cpW + "%";
+    $("cp-fill").style.width = cpW + "%";
     $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
       ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
     $("best").textContent = r.best_san ? "Stockfish prefers " + r.best_san : "";
@@ -168,10 +95,12 @@
 
   function renderStatus() {
     var r = node().resp, s = $("status");
-    if (!r) { s.textContent = "evaluating…"; return; }
-    if (r.checkmate) { s.innerHTML = "<span class='san'>Checkmate</span> — " + (r.turn === "white" ? "Black" : "White") + " wins."; return; }
-    if (r.stalemate) { s.innerHTML = "<span class='san'>Draw</span> (no result)."; return; }
-    s.innerHTML = (r.turn === "white" ? "White" : "Black") + " to move" + (r.check ? " — <span class='san'>check</span>" : "");
+    // The loaded game (or "Your line" once you've branched) is shown here — no separate card.
+    var ctx = state.meta ? (state.branched ? "Your line" : state.meta.name) + " · " : "";
+    if (!r) { s.textContent = ctx + "evaluating…"; return; }
+    if (r.checkmate) { s.innerHTML = ctx + "<span class='san'>Checkmate</span> — " + (r.turn === "white" ? "Black" : "White") + " wins."; return; }
+    if (r.stalemate) { s.innerHTML = ctx + "<span class='san'>Draw</span> (no result)."; return; }
+    s.innerHTML = ctx + (r.turn === "white" ? "White" : "Black") + " to move" + (r.check ? " — <span class='san'>check</span>" : "");
   }
 
   function renderMoves() {
@@ -202,22 +131,6 @@
     if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
   }
 
-  function renderPlayers() {
-    var m = state.meta, html;
-    if (m) {
-      var blurb = state.branched
-        ? "You took over from " + m.name + " — now playing your own line. Pick the game again to reset."
-        : m.name + (m.year ? " · " + m.year : "") + " — step through it, or play a move from any point to take over.";
-      html = "<div class='side'><span class='nm'>⬜ " + (m.white || "White") + "</span></div>" +
-        "<div class='vs'>vs</div><div class='side'><span class='nm'>⬛ " + (m.black || "Black") + "</span></div>" +
-        "<div class='blurb'>" + blurb + "</div>";
-    } else {
-      html = "<div class='side'><span class='nm'>Free play</span></div><div class='vs'></div>" +
-        "<div class='side muted'>move either side</div>";
-    }
-    $("players").innerHTML = html;
-  }
-
   // ---- evaluation + navigation ---------------------------------------------
 
   // Ensure the node at ply p has a fresh eval (for the current ratings), then refresh.
@@ -228,8 +141,7 @@
     state.busy = true; setThinking(true);
     postPlay({ fen: n.fen }, function (j, ok) {
       state.busy = false; setThinking(false);
-      if (!ok) { showFenErr(j.error || "error"); return; }
-      hideFenErr();
+      if (!ok) { showErr(j.error || "error"); return; }
       j._we = state.we; j._be = state.be;
       n.resp = j;
       if (state.ply === p) render();
@@ -251,6 +163,8 @@
       .then(function (rj) { cb(rj[1], rj[0]); })
       .catch(function (err) { cb({ error: String(err) }, false); });
   }
+
+  function showErr(msg) { $("status").textContent = msg; }
 
   // ---- interaction ---------------------------------------------------------
 
@@ -278,16 +192,15 @@
     var base = node().fen;
     postPlay({ fen: base, uci: uci }, function (j, ok) {
       state.busy = false; setThinking(false);
-      if (!ok) { showFenErr(j.error || "error"); render(); return; }
-      hideFenErr();
-      j._we = state.we; j._be = state.be;
+      if (!ok) { showErr(j.error || "error"); render(); return; }
       // Playing a move drops any future line — if a famous game was loaded, you've now
-      // branched into your own line. Flag it so the players card says so.
+      // branched into your own line (the status caption then says "Your line").
       var deviated = state.ply < state.line.length - 1 || (state.meta && !state.branched);
+      j._we = state.we; j._be = state.be;
       state.line = state.line.slice(0, state.ply + 1);
       state.line.push({ fen: j.fen, san: j.san, last: { from: uci.slice(0, 2), to: uci.slice(2, 4) }, resp: j });
       state.ply++; state.sel = null;
-      if (state.meta && deviated) { state.branched = true; renderPlayers(); }
+      if (state.meta && deviated) state.branched = true;
       render();
     });
   }
@@ -348,21 +261,18 @@
     frame.appendChild(menu);
   }
 
-  function showFenErr(msg) { var e = $("fen-err"); e.hidden = false; e.textContent = msg; }
-  function hideFenErr() { $("fen-err").hidden = true; }
-
   // ---- game library + controls ---------------------------------------------
 
   function newGame() {
     state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
     state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
-    renderPlayers(); goPly(0); startFill();
+    goPly(0);
   }
 
   function loadGame(id) {
     postGet("/api/game?id=" + encodeURIComponent(id), function (g, ok) {
-      if (!ok) { showFenErr(g.error || "could not load game"); return; }
+      if (!ok) { showErr(g.error || "could not load game"); return; }
       state.line = g.moves.map(function (m) {
         return { fen: m.fen, san: m.san, resp: null,
           last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
@@ -370,15 +280,8 @@
       state.branched = false;
       state.ply = 0; state.sel = null;
       state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
-      renderPlayers(); goPly(0); startFill();
+      goPly(0);
     });
-  }
-
-  function loadFen(fen) {
-    state.line = [{ fen: fen, san: "(start)", last: null, resp: null }];
-    state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
-    $("game-select").value = "";
-    renderPlayers(); goPly(0); startFill();
   }
 
   function postGet(url, cb) {
@@ -395,7 +298,6 @@
     $("flip").addEventListener("click", function () { state.flipped = !state.flipped; render(); });
     $("scrub").addEventListener("input", function (e) { goPly(parseInt(e.target.value, 10)); });
     $("new").addEventListener("click", newGame);
-    $("load-fen").addEventListener("click", function () { loadFen($("fen").value.trim()); });
     document.addEventListener("keydown", function (e) {
       if (e.key === "ArrowLeft") goPly(state.ply - 1);
       else if (e.key === "ArrowRight") goPly(state.ply + 1);
@@ -408,8 +310,7 @@
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        ensureEval(state.ply);   // re-score the current position now…
-        startFill();             // …and re-chart the whole game at the new ratings
+        ensureEval(state.ply);   // re-score the current position at the new ratings
       });
     }
     slider("white-elo", "white-elo-out", "we");
@@ -436,7 +337,5 @@
 
   wire();
   loadLibrary();
-  renderPlayers();
   goPly(0);   // start position, evaluated live
-  startFill();
 })();
