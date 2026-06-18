@@ -576,11 +576,21 @@ def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
 
 
-def format_report(reports: Sequence[PredictorReport], *, title: str = "Validation report") -> str:
+def format_report(
+    reports: Sequence[PredictorReport],
+    *,
+    title: str = "Validation report",
+    head_to_head: Optional["HeadToHead"] = None,
+) -> str:
     """Render reports as a Markdown document (lower log-loss / Brier / ECE is better).
 
     The report opens with a PASS/FAIL gate verdict (task 0058) so the attended proof run
     yields an unambiguous answer instead of a table to eyeball, then the full metrics.
+
+    ``head_to_head`` lets the caller pass a pre-built head-to-head — e.g. the CI-enriched
+    one from :func:`head_to_head_with_cis` (task 0068), which needs the rows the report
+    object doesn't carry. When omitted, the point-estimate head-to-head is derived from
+    ``reports`` as before.
     """
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
@@ -603,7 +613,7 @@ def format_report(reports: Sequence[PredictorReport], *, title: str = "Validatio
             for value, s in r.slices[slicer_name].items():
                 out.append(f"| {r.name} | {value} " + _scores_row("", s)[2:])
 
-    h2h = head_to_head_deltas(reports)
+    h2h = head_to_head if head_to_head is not None else head_to_head_deltas(reports)
     if h2h is not None:
         out.append("")
         out.append(format_head_to_head(h2h))
@@ -629,6 +639,13 @@ class SliceDelta:
 
     ``delta > 0`` means the rating-conditioned model has the *lower* log-loss there — i.e.
     equity wins in that slice. ``delta < 0`` means the rating-blind baseline is better.
+
+    When the head-to-head was built with per-slice bootstrap (task 0068), ``ci_lo``/``ci_hi``
+    are the ``confidence``-level bounds on ``delta`` *in this same orientation* (baseline −
+    model, so > 0 = equity wins), and ``verdict`` reads ``"beats"`` (whole CI clears zero
+    above), ``"worse"`` (whole CI below zero), or ``"inconclusive"`` (CI straddles zero, or
+    the slice fell below the small-n floor). They stay ``None`` for the point-estimate-only
+    path (:func:`head_to_head_deltas`).
     """
 
     slicer: str
@@ -637,16 +654,27 @@ class SliceDelta:
     baseline_log_loss: float
     model_log_loss: float
     delta: float
+    ci_lo: Optional[float] = None
+    ci_hi: Optional[float] = None
+    verdict: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class HeadToHead:
-    """Baseline-vs-best-model log-loss deltas, overall and per slice (sorted best-first)."""
+    """Baseline-vs-best-model log-loss deltas, overall and per slice (sorted best-first).
+
+    ``overall_ci_lo``/``overall_ci_hi``/``overall_verdict`` mirror :class:`SliceDelta`'s
+    CI fields for the all-rows delta; they are filled only on the bootstrap path
+    (:func:`head_to_head_with_cis`) and stay ``None`` otherwise.
+    """
 
     baseline: str
     model: str
     overall_delta: float
     slices: List[SliceDelta]  # every (slicer, value) pair, sorted by delta descending
+    overall_ci_lo: Optional[float] = None
+    overall_ci_hi: Optional[float] = None
+    overall_verdict: Optional[str] = None
 
 
 def head_to_head_deltas(
@@ -696,6 +724,132 @@ def head_to_head_deltas(
     )
 
 
+# Slices below this many rows are too small to bootstrap a meaningful CI: a handful of
+# rows would let one lucky row flip the verdict. We still SHOW the slice (the point delta
+# is informative), but label it inconclusive rather than letting tiny-n noise read as a
+# significant win. Mirrors the spirit of the gate's "CI must clear zero" rule (task 0068).
+MIN_SLICE_N = 30
+
+
+def _delta_ci_verdict(ci: DeltaCI) -> str:
+    """Verdict for a per-slice CI, expressed in the head-to-head (baseline − model) sign.
+
+    :func:`paired_bootstrap_ci` uses ``delta = model − baseline`` (negative = model wins),
+    so its ``beats_baseline``/``worse_than_baseline`` already answer the right question;
+    we only relabel them for the equity-wins-positive head-to-head convention.
+    """
+    if ci.beats_baseline:
+        return "beats"
+    if ci.worse_than_baseline:
+        return "worse"
+    return "inconclusive"
+
+
+def head_to_head_with_cis(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline_name: str = "baseline",
+    slicers: Dict[str, Callable[[PositionRow], str]] = SLICERS,
+    metric: str = "log_loss",
+    min_slice_n: int = MIN_SLICE_N,
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> Optional[HeadToHead]:
+    """Head-to-head deltas with a paired-bootstrap CI + verdict on each per-slice delta.
+
+    The point-estimate :func:`head_to_head_deltas` answers *where* equity wins; this answers
+    *whether each band-level win is real or small-n noise* — the wedge's actual thesis is
+    "equity wins in the off-2300 bands and under time pressure", and a bare per-slice delta
+    can't tell a genuine band win from a few lucky rows. For every slice it resamples the
+    rows in that slice (paired: the same indices score both predictors, via
+    :func:`~chess_equity.validate.bootstrap.paired_bootstrap_ci` over the per-row metric
+    terms) and attaches a ``confidence`` CI + ``beats``/``worse``/``inconclusive`` verdict.
+    The CI is stored in the head-to-head orientation (baseline − model, so ``> 0`` = equity
+    wins). Slices below ``min_slice_n`` rows are shown but flagged ``inconclusive`` with no
+    CI rather than risking a spurious "significant" read on a handful of rows.
+
+    Picks the challenger the same way as :func:`head_to_head_deltas` (the non-baseline
+    predictor with the lowest *overall* log-loss). Returns ``None`` when there is no
+    baseline or no challenger. Each slice gets its own seed offset so the CIs are
+    independent across slices yet byte-reproducible under ``seed``.
+    """
+    from chess_equity.validate.bootstrap import METRIC_TERMS, paired_bootstrap_ci
+
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    if baseline_name not in predictors:
+        return None
+    challengers = [name for name in predictors if name != baseline_name]
+    if not challengers:
+        return None
+
+    preds = {name: [predictors[name](r) for r in rows] for name in predictors}
+    base_preds = preds[baseline_name]
+    # Best challenger = lowest overall log-loss, matching head_to_head_deltas.
+    model_name = min(challengers, key=lambda name: log_loss(preds[name], labels))
+    model_preds = preds[model_name]
+
+    terms = METRIC_TERMS[metric]
+
+    def _ci_for(idxs: Sequence[int], offset: int) -> tuple:
+        """(baseline_loss, model_loss, ci_lo, ci_hi, verdict) for the rows at ``idxs``."""
+        m = [model_preds[i] for i in idxs]
+        b = [base_preds[i] for i in idxs]
+        ls = [labels[i] for i in idxs]
+        model_loss = log_loss(m, ls)
+        base_loss = log_loss(b, ls)
+        if len(idxs) < min_slice_n:
+            return base_loss, model_loss, None, None, "inconclusive"
+        ci = paired_bootstrap_ci(
+            terms(m, ls),
+            terms(b, ls),
+            metric,
+            n_resamples=n_resamples,
+            confidence=confidence,
+            seed=seed + offset,
+        )
+        # ci.delta is model − baseline; flip to baseline − model so > 0 = equity wins.
+        return base_loss, model_loss, -ci.hi, -ci.lo, _delta_ci_verdict(ci)
+
+    all_idx = list(range(len(rows)))
+    o_base, o_model, o_lo, o_hi, o_verdict = _ci_for(all_idx, 0)
+
+    deltas: List[SliceDelta] = []
+    offset = 1
+    for slicer_name, slicer in slicers.items():
+        grouped: Dict[str, List[int]] = {}
+        for i, row in enumerate(rows):
+            grouped.setdefault(slicer(row), []).append(i)
+        for value, idxs in sorted(grouped.items()):
+            base_loss, model_loss, lo, hi, verdict = _ci_for(idxs, offset)
+            offset += 1
+            deltas.append(
+                SliceDelta(
+                    slicer=slicer_name,
+                    value=value,
+                    n=len(idxs),
+                    baseline_log_loss=base_loss,
+                    model_log_loss=model_loss,
+                    delta=base_loss - model_loss,
+                    ci_lo=lo,
+                    ci_hi=hi,
+                    verdict=verdict,
+                )
+            )
+    deltas.sort(key=lambda d: d.delta, reverse=True)
+    return HeadToHead(
+        baseline=baseline_name,
+        model=model_name,
+        overall_delta=o_base - o_model,
+        slices=deltas,
+        overall_ci_lo=o_lo,
+        overall_ci_hi=o_hi,
+        overall_verdict=o_verdict,
+    )
+
+
 def worst_slice_verdict(h2h: HeadToHead) -> str:
     """A one-line read on the head-to-head's *worst* slice (task 0121).
 
@@ -721,8 +875,21 @@ def worst_slice_verdict(h2h: HeadToHead) -> str:
     )
 
 
+def _ci_cell(d: SliceDelta) -> str:
+    """The `95% CI` cell for a slice: the bounds when bootstrapped, else an em dash."""
+    if d.ci_lo is None or d.ci_hi is None:
+        return "—"
+    return f"[{d.ci_lo:+.4f}, {d.ci_hi:+.4f}]"
+
+
 def format_head_to_head(h2h: HeadToHead) -> str:
-    """Render the head-to-head deltas as a compact Markdown table (equity-wins first)."""
+    """Render the head-to-head deltas as a compact Markdown table (equity-wins first).
+
+    When the head-to-head carries per-slice CIs (built by :func:`head_to_head_with_cis`,
+    task 0068) the table grows ``95% CI`` and ``verdict`` columns so a reader can tell a
+    real band-level win from small-n noise; otherwise it renders the point-estimate table.
+    """
+    has_cis = any(d.verdict is not None for d in h2h.slices)
     out: List[str] = []
     out.append(f"## Head-to-head: where equity wins ({h2h.baseline} vs {h2h.model})")
     out.append("")
@@ -730,16 +897,37 @@ def format_head_to_head(h2h: HeadToHead) -> str:
         f"Δ log-loss = `{h2h.baseline}` − `{h2h.model}` on the same rows; "
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
-    out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
+    overall = f"Overall Δ: {h2h.overall_delta:+.4f}"
+    if h2h.overall_verdict is not None:
+        if h2h.overall_ci_lo is not None and h2h.overall_ci_hi is not None:
+            overall += f" (95% CI [{h2h.overall_ci_lo:+.4f}, {h2h.overall_ci_hi:+.4f}])"
+        overall += f" — {h2h.overall_verdict}"
+    out.append(overall)
+    if has_cis:
+        out.append(
+            "Per-slice 95% CIs are paired bootstraps on the Δ; "
+            f"slices under n={MIN_SLICE_N} are shown but read **inconclusive** "
+            "(too few rows to bootstrap)."
+        )
     verdict = worst_slice_verdict(h2h)
     if verdict:
         out.append(verdict)
     out.append("")
-    out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
-    out.append("|---|---|--:|--:|--:|--:|")
-    for d in h2h.slices:
-        out.append(
-            f"| {d.slicer} | {d.value} | {d.n} | "
-            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
-        )
+    if has_cis:
+        out.append("| slice | value | n | baseline log-loss | model log-loss | Δ | 95% CI | verdict |")
+        out.append("|---|---|--:|--:|--:|--:|---|---|")
+        for d in h2h.slices:
+            out.append(
+                f"| {d.slicer} | {d.value} | {d.n} | "
+                f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} | "
+                f"{_ci_cell(d)} | {d.verdict or '—'} |"
+            )
+    else:
+        out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
+        out.append("|---|---|--:|--:|--:|--:|")
+        for d in h2h.slices:
+            out.append(
+                f"| {d.slicer} | {d.value} | {d.n} | "
+                f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
+            )
     return "\n".join(out)

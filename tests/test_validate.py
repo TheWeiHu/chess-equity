@@ -544,6 +544,100 @@ def test_head_to_head_on_committed_sample():
     assert any(d.slicer == "rating" for d in h2h.slices)
 
 
+# --- head-to-head: per-slice paired-bootstrap CIs (task 0068) -------------------
+
+def test_head_to_head_with_cis_needs_a_challenger():
+    from chess_equity.validate.harness import head_to_head_with_cis
+
+    rows = [_row(cp=100, result=1.0), _row(cp=-100, result=0.0)]
+    # Baseline only -> nothing to compare against.
+    assert head_to_head_with_cis(rows, {"baseline": baseline_cp}) is None
+    # No predictor named "baseline" -> no reference.
+    assert head_to_head_with_cis(rows, {"model": lambda r: r.result}) is None
+
+
+def test_head_to_head_per_slice_cis_on_committed_sample():
+    """Pin deterministic per-slice CIs + verdicts on the committed FEN sample (task 0068).
+
+    The wedge's thesis is band-level ("equity wins in the off-2300 bands / under time
+    pressure"), so each per-slice delta needs a CI: a real win must clear zero, and a
+    handful-of-rows slice must read inconclusive, not spuriously significant. We use a
+    small-n floor of 10 on the 15-row sample so exactly the larger slices get a CI and
+    the tiny ones are flagged — the same machinery a full run uses at the default floor.
+    """
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_with_cis
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    preds = {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}
+    h2h = head_to_head_with_cis(
+        rows, preds, n_resamples=2000, seed=0, min_slice_n=10
+    )
+    assert h2h is not None and h2h.slices
+    assert h2h.baseline == "baseline" and h2h.model == "wdl-a"
+    by_key = {(d.slicer, d.value): d for d in h2h.slices}
+
+    # A slice with enough rows gets a real, deterministic CI. clock comfortable (n=13)
+    # clears zero -> equity significantly wins there ("beats"; CI in baseline−model
+    # orientation, so a win is wholly positive).
+    comfy = by_key[("clock", "comfortable(60s+)")]
+    assert comfy.n == 13
+    assert comfy.ci_lo is not None and comfy.ci_hi is not None
+    assert comfy.verdict == "beats"
+    assert comfy.ci_lo > 0, "a 'beats' CI must clear zero on the equity-wins side"
+    assert isclose(comfy.ci_lo, 0.002106, abs_tol=1e-6)
+    assert isclose(comfy.ci_hi, 0.105770, abs_tol=1e-6)
+
+    # A larger slice whose CI straddles zero reads inconclusive, not a win.
+    opening = by_key[("phase", "opening")]
+    assert opening.n == 15
+    assert opening.ci_lo is not None and opening.ci_lo < 0 < opening.ci_hi
+    assert opening.verdict == "inconclusive"
+
+    # Every slice below the floor is SHOWN but flagged inconclusive with no CI — tiny-n
+    # noise never reads as a significant win or loss.
+    for d in h2h.slices:
+        assert isclose(d.delta, d.baseline_log_loss - d.model_log_loss)
+        if d.n < 10:
+            assert d.ci_lo is None and d.ci_hi is None
+            assert d.verdict == "inconclusive"
+
+    # Overall delta carries a CI + verdict too.
+    assert h2h.overall_verdict in {"beats", "worse", "inconclusive"}
+    assert h2h.overall_ci_lo is not None and h2h.overall_ci_hi is not None
+
+    # Byte-reproducible under the seed.
+    again = head_to_head_with_cis(rows, preds, n_resamples=2000, seed=0, min_slice_n=10)
+    assert [(d.ci_lo, d.ci_hi, d.verdict) for d in again.slices] == [
+        (d.ci_lo, d.ci_hi, d.verdict) for d in h2h.slices
+    ]
+
+
+def test_format_report_renders_per_slice_cis_when_supplied():
+    """When given a CI-enriched head-to-head, the report grows CI + verdict columns."""
+    from pathlib import Path
+
+    from chess_equity.data.build import load_rows
+    from chess_equity.validate.harness import head_to_head_with_cis
+
+    sample = Path(__file__).resolve().parents[1] / "data" / "sample" / "dataset_fen.csv"
+    rows = load_rows(str(sample))
+    preds = {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}
+    reports = evaluate(rows, preds)
+    h2h = head_to_head_with_cis(rows, preds, n_resamples=500, seed=0, min_slice_n=10)
+    md = format_report(reports, head_to_head=h2h)
+    assert "## Head-to-head: where equity wins" in md
+    assert "| 95% CI | verdict |" in md
+    assert "read **inconclusive**" in md  # the small-n floor note
+    # The default (no head_to_head) still renders the point-estimate table, no CI column.
+    plain = format_report(reports)
+    assert "## Head-to-head: where equity wins" in plain
+    assert "95% CI" not in plain
+
+
 # --- board-model predictor (task 0029) -----------------------------------------
 
 class _FakeBoardModel:

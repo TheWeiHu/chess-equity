@@ -31,6 +31,7 @@ from chess_equity.validate.harness import (
     format_report,
     format_verdict,
     gate_verdicts,
+    head_to_head_with_cis,
 )
 from chess_equity.validate.split import game_level_split
 
@@ -51,5 +52,6 @@ __all__ = [
     "format_ece_comparison",
     "format_verdict",
     "gate_verdicts",
+    "head_to_head_with_cis",
     "game_level_split",
 ]

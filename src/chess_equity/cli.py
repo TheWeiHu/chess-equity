@@ -441,6 +441,7 @@ def _run_validate(args: argparse.Namespace) -> int:
         format_ece_comparison,
         format_report,
         gate_verdicts,
+        head_to_head_with_cis,
     )
 
     requested = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -485,7 +486,21 @@ def _run_validate(args: argparse.Namespace) -> int:
     except (ValueError, Maia2NotInstalled) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    report = format_report(reports, title=title)
+    # Head-to-head: per-slice paired-bootstrap CIs on the baseline-minus-model deltas, so
+    # a reader can tell a real band-level equity win from small-n noise (task 0068). Needs
+    # the rows (the report objects don't carry them); --bootstrap 0 falls back to the
+    # point-estimate head-to-head derived from `reports` inside format_report.
+    baseline_name = "baseline"
+    h2h = None
+    if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
+        h2h = head_to_head_with_cis(
+            rows,
+            predictors,
+            baseline_name=baseline_name,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+    report = format_report(reports, title=title, head_to_head=h2h)
 
     # Significance: paired-bootstrap CI on each model's metric delta vs the baseline,
     # so the report says whether a win clears zero or is just noise (task 0060). Needs
