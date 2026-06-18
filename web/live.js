@@ -60,6 +60,81 @@
     renderBars();
     renderStatus();
     renderMoves();
+    renderChart();
+  }
+
+  // ---- over-the-game bar chart (White win%: Maia equity vs Stockfish centipawn) ----
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  // an eval is "fresh" only if it was computed at the current pair of ratings
+  function hasFresh(n) { return n.resp && n.resp._we === state.we && n.resp._be === state.be; }
+
+  function renderChart() {
+    var svg = $("chart"); if (!svg) return;
+    var n = state.line.length, W = 480, H = 160, padX = 14, padY = 14;
+    var innerW = W - 2 * padX, innerH = H - 2 * padY;
+    var mid = padY + innerH / 2;                       // the 50% (even) line
+    function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }
+    function yFor(p) { return padY + (1 - p / 100) * innerH; }   // p in 0..100 → pixel
+    // two thin bars per ply, diverging from the midline: up = White ahead, down = Black.
+    var slot = n <= 1 ? innerW : innerW / (n - 1);
+    var bw = Math.max(1, Math.min(7, slot * 0.38));
+    svg.innerHTML = "";
+    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
+    function bar(x, v, cls) {
+      var y = yFor(v), top = Math.min(mid, y), h = Math.max(1, Math.abs(mid - y));
+      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.5, bw / 2), class: cls }));
+    }
+    state.line.forEach(function (nd, i) {
+      if (!hasFresh(nd)) return;
+      var cx = xFor(i);
+      var cpv = cpToWhite(nd.resp.cp) * 100;
+      bar(cx + 0.4, cpv, "bar-cp");                    // centipawn (grey), right of centre
+      if (!inBook(i)) bar(cx - bw - 0.4, nd.resp.equity_white, "bar-eq");  // equity (green), left
+    });
+    // cursor + generous transparent click target for the current/any ply
+    var cur = xFor(state.ply);
+    svg.appendChild(svgEl("line", { x1: cur, y1: padY, x2: cur, y2: H - padY, class: "chart-cursor" }));
+    state.line.forEach(function (nd, i) {
+      var hit = svgEl("rect", { x: xFor(i) - slot / 2, y: padY, width: Math.max(slot, 2), height: innerH, fill: "transparent", style: "cursor:pointer" });
+      var t = svgEl("title", {});
+      var cpv = hasFresh(nd) ? Math.round(cpToWhite(nd.resp.cp) * 100) : "…";
+      var eqv = hasFresh(nd) && !inBook(i) ? Math.round(nd.resp.equity_white) + "%" : (inBook(i) ? "book" : "…");
+      t.textContent = (i === 0 ? "start" : nd.san) + " — equity " + eqv + " · centipawn " + cpv + "%";
+      hit.appendChild(t);
+      hit.addEventListener("click", function () { goPly(i); });
+      svg.appendChild(hit);
+    });
+  }
+
+  // Progressively evaluate every ply in the background so the chart fills in over the
+  // whole game. A generation token cancels the run when the game or ratings change.
+  var fillGen = 0;
+  function startFill() {
+    var gen = ++fillGen, i = 0;
+    function step() {
+      if (gen !== fillGen) return;
+      while (i < state.line.length && hasFresh(state.line[i])) i++;
+      updateProgress();
+      if (i >= state.line.length) return;
+      var p = i, nd = state.line[p];
+      postPlay({ fen: nd.fen }, function (j, ok) {
+        if (gen !== fillGen) return;
+        if (ok) { j._we = state.we; j._be = state.be; nd.resp = j; renderChart(); if (state.ply === p) { renderBars(); renderStatus(); } }
+        i = p + 1; setTimeout(step, 0);
+      });
+    }
+    step();
+  }
+  function updateProgress() {
+    var el = $("chart-progress"); if (!el) return;
+    var done = state.line.filter(hasFresh).length, total = state.line.length;
+    el.textContent = done < total ? "charting " + done + "/" + total + "…" : "";
   }
 
   function renderControls() {
@@ -71,7 +146,7 @@
     var r = node().resp;
     if (!r) {
       $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
-      $("best").textContent = ""; $("divergence").hidden = true;
+      $("divergence").hidden = true;
       return;
     }
     var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
@@ -83,7 +158,6 @@
     $("cp-fill").style.width = cpW + "%";
     $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
       ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
-    $("best").textContent = r.best_san ? "Stockfish prefers " + r.best_san : "";
     var gap = eq - cpW, div = $("divergence");
     if (!book && !r.game_over && Math.abs(gap) >= 15) {
       div.hidden = false;
@@ -267,7 +341,7 @@
     state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
     state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
-    goPly(0);
+    goPly(0); startFill();
   }
 
   function loadGame(id) {
@@ -280,7 +354,7 @@
       state.branched = false;
       state.ply = 0; state.sel = null;
       state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
-      goPly(0);
+      goPly(0); startFill();
     });
   }
 
@@ -310,7 +384,8 @@
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        ensureEval(state.ply);   // re-score the current position at the new ratings
+        ensureEval(state.ply);   // re-score the current position now…
+        startFill();             // …and re-chart the whole game at the new ratings
       });
     }
     slider("white-elo", "white-elo-out", "we");
@@ -338,4 +413,5 @@
   wire();
   loadLibrary();
   goPly(0);   // start position, evaluated live
+  startFill();
 })();
