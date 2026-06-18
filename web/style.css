@@ -1,4 +1,7 @@
-/* app.css — chess-equity web demo. Vanilla CSS, no deps, no build step. */
+/* style.css — the shared design system for BOTH demos (guided.html + live.html).
+   Paired with board.css (the board) so the two tabs are visually identical: one
+   palette, one card/bar/slider/move style. Page-specific bits live in app.js/live.js
+   markup; this is the single source for look-and-feel. Vanilla CSS, no build step. */
 
 :root {
   /* Dark palette — matches the unified shell (index.html) + the guided demo so the
@@ -46,30 +49,13 @@ body {
 .tagline { margin: 0.4rem 0 0; max-width: 56ch; color: var(--muted); font-size: 1.05rem; }
 .tagline strong { color: var(--ink); }
 
-/* ---- game picker ---- */
-.game-picker {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.7rem;
-  margin: 0.6rem auto 1.4rem;
+/* ---- game picker (dropdown, guided demo) ---- */
+.game-picker { display: flex; gap: .5rem; align-items: center; margin-bottom: .75rem; color: var(--muted); }
+.game-picker select {
+  flex: 1; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: .4rem .55rem; cursor: pointer; font: inherit;
 }
-.game-card {
-  text-align: left;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 0.8rem 0.95rem;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  transition: border-color .15s, box-shadow .15s, transform .05s;
-  box-shadow: var(--shadow);
-}
-.game-card:hover { border-color: #c8d6bf; transform: translateY(-1px); }
-.game-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow); }
-.game-card .gc-name { font-weight: 700; display: flex; justify-content: space-between; gap: .5rem; }
-.game-card .gc-plies { font-weight: 500; color: var(--muted); font-size: .82rem; }
-.game-card .gc-blurb { margin-top: .25rem; font-size: .85rem; color: var(--muted); line-height: 1.4; }
+.game-picker select:hover { border-color: var(--accent); }
 
 /* ---- layout ---- */
 main {
@@ -202,14 +188,32 @@ main {
 .key { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; }
 .key::before { content: ""; width: 14px; height: 3px; border-radius: 2px; }
 .key.eq::before { background: var(--accent); }
-.key.cp::before { background: var(--cp); }
+.key.cp::before { background: var(--cp); height: 0; border-top: 2px dashed var(--cp); }
 .chart { width: 100%; height: auto; margin-top: .4rem; }
 .chart-mid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
-.chart-cursor { stroke: #ccc2ad; stroke-width: 1.5; }
-.chart-cp { fill: none; stroke: var(--cp); stroke-width: 2; opacity: .8; }
+.chart-cursor { stroke: #4a505c; stroke-width: 1.5; }
+.chart-cp { fill: none; stroke: var(--cp); stroke-width: 1.8; stroke-dasharray: 4 3; opacity: .8; }
 .chart-eq { fill: none; stroke: var(--accent); stroke-width: 2.5; }
-.chart-dot { fill: var(--accent); cursor: pointer; }
-.chart-dot.current { fill: var(--ink); }
+.chart-dot { fill: var(--accent); opacity: .5; cursor: pointer; }
+.chart-dot:hover { opacity: 1; }
+.chart-dot.current { fill: var(--ink); opacity: 1; }
+/* drama plies (chess_equity.drama): clutch / escape / missed-win moments on the line */
+.chart-dot.drama { fill: #f2b134; opacity: .95; stroke: #7a5410; stroke-width: 1; }
+.chart-dot.drama.missed_win { fill: var(--bad); stroke: #5a1f20; }
+.chart-dot.drama.current { fill: #ffd56b; }
+
+/* ---- floating board preview (guided: hover a chart dot) ---- */
+.board-preview {
+  position: fixed; z-index: 10; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .4rem; box-shadow: var(--shadow);
+}
+.board-preview[hidden] { display: none; }
+.preview-caption {
+  font-size: .75rem; color: var(--muted); margin-bottom: .3rem;
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+.caveat { border-left: 2px solid var(--line); padding-left: .6rem; }
 
 /* ---- live board (live.html) ---- */
 .live-tag {
