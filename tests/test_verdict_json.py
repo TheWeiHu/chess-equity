@@ -27,8 +27,10 @@ SAMPLE = REPO_ROOT / "data" / "sample" / "dataset.csv"
 
 def _validate(out: Path, *extra) -> int:
     # --bootstrap 0 keeps these fast and deterministic; the verdict mirrors the point gate.
+    # --min-n 0 disables the underpowered guard (task 0132) so the 15-row sample exercises
+    # PASS/FAIL mechanics here instead of reading INCONCLUSIVE (exit 4) on tiny n.
     return main(
-        ["validate", "--data", str(SAMPLE), "--out", str(out), "--bootstrap", "0", *extra]
+        ["validate", "--data", str(SAMPLE), "--out", str(out), "--bootstrap", "0", "--min-n", "0", *extra]
     )
 
 
