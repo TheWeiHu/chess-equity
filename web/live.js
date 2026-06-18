@@ -1,110 +1,165 @@
-/* live.js — interactive board backed by web/server.py.
+/* live.js — the interactive board. One position at a time, scored live by the backend.
  *
- * The browser holds no chess rules: it POSTs the current FEN (+ an optional move and
- * the two ratings) to /api/play and renders whatever the server returns — legal moves,
- * game state, the Stockfish centipawn bar and the Maia-2 equity bar. Click a piece to
- * see its legal destinations, click one to play it.
+ * Model: state.line is a list of nodes [{fen, san, last, resp}] with a cursor state.ply.
+ * node[0] is the start position. Step through the line (first/prev/next/last/scrub/click/
+ * move-list), load a famous game (/api/games + /api/game), or play a move from the current
+ * position — that truncates any future and continues, so taking over mid-game branches the
+ * line. The browser holds no chess rules: legality, SAN and game-over come from the server.
  */
 (function () {
   "use strict";
 
-  var PIECES = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟",
-                 k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
   var FILES = "abcdefgh";
   var MATE_CP = 10000;
+  var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  // The first two full moves are opening book — Maia-2 equity there is noise that swings
+  // wildly for no real reason, so we don't show it (the cp bar is accurate, so it stays).
+  // Plies: 0 = start, 1..4 = White/Black move 1 and 2. Equity shows from move 3 (ply 5).
+  var BOOK_PLIES = 4;
+  function inBook(p) { return p <= BOOK_PLIES; }
 
   var state = {
-    fen: null, legal: {}, turn: "white", sel: null, last: null,
-    we: 1500, be: 1500, flipped: false, busy: false, history: [],
+    line: [{ fen: START, san: "(start)", last: null, resp: null }],
+    ply: 0, sel: null, we: 1500, be: 1500, flipped: false, busy: false,
+    meta: null,        // {name, white, black, year} of a loaded famous game, else null
+    branched: false,   // true once you've played your own move off a loaded game
   };
 
   function $(id) { return document.getElementById(id); }
-
-  function parseGrid(fen) {
-    return fen.split(" ")[0].split("/").map(function (row) {
-      var line = [];
-      row.split("").forEach(function (ch) {
-        if (/\d/.test(ch)) { for (var k = 0; k < +ch; k++) line.push(null); }
-        else line.push(ch);
-      });
-      return line;
-    });
-  }
-
-  function sqName(r, c) { return FILES[c] + (8 - r); }
+  function node() { return state.line[state.ply]; }
+  function legalMap() { var r = node().resp; return (r && r.legal) || {}; }
+  function cpToWhite(cp) { return 1 / (1 + Math.exp(-0.00368208 * cp)); }
+  function setThinking(on) { var b = document.querySelector(".bars"); if (b) b.classList.toggle("thinking", on); }
 
   // ---- rendering -----------------------------------------------------------
 
   function render() {
-    if (!state.fen) return;   // nothing to draw until the first /api/play resolves
-    var grid = parseGrid(state.fen);
-    var dests = state.sel ? (state.legal[state.sel] || []) : [];
-    var checkRC = null;
-    if (state._check) {
-      var king = state.turn === "white" ? "K" : "k";
-      for (var r = 0; r < 8 && !checkRC; r++)
+    var n = node();
+    var legal = legalMap();
+    var check = null;
+    if (n.resp && n.resp.check) {
+      var grid = ChessBoard.parseFen(n.fen).grid;
+      var king = n.resp.turn === "white" ? "K" : "k";
+      for (var r = 0; r < 8 && !check; r++)
         for (var c = 0; c < 8; c++)
-          if (grid[r][c] === king) checkRC = sqName(r, c);
+          if (grid[r][c] === king) check = ChessBoard.sqName(r, c);
     }
-
-    var board = $("board");
-    board.innerHTML = "";
-    for (var d = 0; d < 8; d++) {
-      for (var e = 0; e < 8; e++) {
-        var rr = state.flipped ? 7 - d : d;
-        var cc = state.flipped ? 7 - e : e;
-        var name = sqName(rr, cc);
-        var piece = grid[rr][cc];
-        var sq = document.createElement("div");
-        sq.className = "sq " + ((rr + cc) % 2 === 0 ? "light" : "dark");
-        if (state.last && (name === state.last.from || name === state.last.to)) sq.classList.add("hl");
-        if (name === state.sel) sq.classList.add("sel");
-        if (checkRC === name) sq.classList.add("check");
-        if (dests.indexOf(name) >= 0) { sq.classList.add("dest"); if (piece) sq.classList.add("capture"); }
-        if (piece) {
-          var span = document.createElement("span");
-          span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
-          span.textContent = PIECES[piece];
-          if (state.legal[name]) {            // only pieces with legal moves are draggable
-            span.draggable = true;
-            span.addEventListener("dragstart", onDragStart);
-          }
-          sq.appendChild(span);
-        }
-        if (d === 7) sq.appendChild(coord("file", FILES[cc]));
-        if (e === 0) sq.appendChild(coord("rank", String(8 - rr)));
-        sq.dataset.name = name;
-        sq.addEventListener("click", onSquare);
-        sq.addEventListener("dragover", function (ev) { ev.preventDefault(); });
-        sq.addEventListener("drop", onDrop);
-        board.appendChild(sq);
-      }
-    }
-    board.classList.toggle("busy", state.busy);
+    ChessBoard.render($("board"), n.fen, {
+      flipped: state.flipped,
+      coords: true,
+      highlight: n.last,
+      selected: state.sel,
+      dests: state.sel ? (legal[state.sel] || []) : [],
+      check: check,
+      onSquare: onSquare,
+      draggable: function (name) { return !!legal[name]; },
+      onDragStart: onDragStart,
+      onDrop: onDrop,
+    });
+    renderControls();
+    renderBars();
+    renderStatus();
+    renderMoves();
+    renderChart();
   }
 
-  function coord(kind, text) {
-    var s = document.createElement("span");
-    s.className = "coord " + kind;
-    s.textContent = text;
-    return s;
+  // ---- over-the-game bar chart (White win%: Maia equity vs Stockfish centipawn) ----
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  // an eval is "fresh" only if it was computed at the current pair of ratings
+  function hasFresh(n) { return n.resp && n.resp._we === state.we && n.resp._be === state.be; }
+
+  function renderChart() {
+    var svg = $("chart"); if (!svg) return;
+    var n = state.line.length, W = 480, H = 150, padX = 12, padY = 12;
+    var innerW = W - 2 * padX, innerH = H - 2 * padY;
+    var mid = padY + innerH / 2;                       // the 50% (even) line
+    function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }
+    function yFor(p) { return padY + (1 - p / 100) * innerH; }   // p in 0..100 → pixel
+    // two thin bars per ply, diverging from the midline: up = White ahead, down = Black.
+    var slot = n <= 1 ? innerW : innerW / (n - 1);
+    var bw = Math.max(1, Math.min(7, slot * 0.38));
+    svg.innerHTML = "";
+    svg.appendChild(svgEl("line", { x1: padX, y1: mid, x2: W - padX, y2: mid, class: "chart-mid" }));
+    function bar(x, v, cls) {
+      var y = yFor(v), top = Math.min(mid, y), h = Math.max(1, Math.abs(mid - y));
+      svg.appendChild(svgEl("rect", { x: x, y: top, width: bw, height: h, rx: Math.min(1.5, bw / 2), class: cls }));
+    }
+    state.line.forEach(function (nd, i) {
+      if (!hasFresh(nd)) return;
+      var cx = xFor(i);
+      var cpv = cpToWhite(nd.resp.cp) * 100;
+      bar(cx + 0.4, cpv, "bar-cp");                    // centipawn (grey), right of centre
+      if (!inBook(i)) bar(cx - bw - 0.4, nd.resp.equity_white, "bar-eq");  // equity (green), left
+    });
+    // cursor + generous transparent click target for the current/any ply
+    var cur = xFor(state.ply);
+    svg.appendChild(svgEl("line", { x1: cur, y1: padY, x2: cur, y2: H - padY, class: "chart-cursor" }));
+    state.line.forEach(function (nd, i) {
+      var hit = svgEl("rect", { x: xFor(i) - slot / 2, y: padY, width: Math.max(slot, 2), height: innerH, fill: "transparent", style: "cursor:pointer" });
+      var t = svgEl("title", {});
+      var cpv = hasFresh(nd) ? Math.round(cpToWhite(nd.resp.cp) * 100) : "…";
+      var eqv = hasFresh(nd) && !inBook(i) ? Math.round(nd.resp.equity_white) + "%" : (inBook(i) ? "book" : "…");
+      t.textContent = (i === 0 ? "start" : nd.san) + " — equity " + eqv + " · centipawn " + cpv + "%";
+      hit.appendChild(t);
+      hit.addEventListener("click", function () { goPly(i); });
+      svg.appendChild(hit);
+    });
   }
 
-  function renderBars(resp) {
-    var eq = resp.equity_white;
-    var cpWhite = cpToWhite(resp.cp) * 100;
-    $("equity-fill").style.width = eq + "%";
-    $("equity-readout").textContent = Math.round(eq) + "% White";
-    $("cp-fill").style.width = cpWhite + "%";
-    $("cp-readout").textContent = Math.abs(resp.cp) >= MATE_CP
-      ? (resp.cp > 0 ? "#" : "-#") : (resp.cp >= 0 ? "+" : "") + (resp.cp / 100).toFixed(1);
+  // Progressively evaluate every ply in the background so the chart fills in over the
+  // whole game. A generation token cancels the run when the game or ratings change.
+  var fillGen = 0;
+  function startFill() {
+    var gen = ++fillGen, i = 0;
+    function step() {
+      if (gen !== fillGen) return;
+      while (i < state.line.length && hasFresh(state.line[i])) i++;
+      updateProgress();
+      if (i >= state.line.length) return;
+      var p = i, nd = state.line[p];
+      postPlay({ fen: nd.fen }, function (j, ok) {
+        if (gen !== fillGen) return;
+        if (ok) { j._we = state.we; j._be = state.be; nd.resp = j; renderChart(); if (state.ply === p) { renderBars(); renderStatus(); } }
+        i = p + 1; setTimeout(step, 0);
+      });
+    }
+    step();
+  }
+  function updateProgress() {
+    var el = $("chart-progress"); if (!el) return;
+    var done = state.line.filter(hasFresh).length, total = state.line.length;
+    el.textContent = done < total ? "charting " + done + "/" + total + "…" : "";
+  }
 
-    var best = $("best");
-    best.textContent = resp.best_san ? "Stockfish prefers " + resp.best_san : "";
+  function renderControls() {
+    $("scrub").max = state.line.length - 1;
+    $("scrub").value = state.ply;
+  }
 
-    var gap = eq - cpWhite;
-    var div = $("divergence");
-    if (!resp.game_over && Math.abs(gap) >= 15) {
+  function renderBars() {
+    var r = node().resp;
+    if (!r) {
+      $("equity-readout").textContent = "—"; $("cp-readout").textContent = "—";
+      $("divergence").hidden = true;
+      return;
+    }
+    var eq = r.equity_white, cpW = cpToWhite(r.cp) * 100;
+    var book = inBook(state.ply);
+    // Opening book: equity is meaningless this early, so park the bar at even and say "Book".
+    $("equity-fill").style.width = (book ? 50 : eq) + "%";
+    $("equity-readout").textContent = book ? "Book" : Math.round(eq) + "% White";
+    $("equity-readout").classList.toggle("book", book);
+    $("cp-fill").style.width = cpW + "%";
+    $("cp-readout").textContent = Math.abs(r.cp) >= MATE_CP
+      ? (r.cp > 0 ? "#" : "-#") : (r.cp >= 0 ? "+" : "") + (r.cp / 100).toFixed(1);
+    var gap = eq - cpW, div = $("divergence");
+    if (!book && !r.game_over && Math.abs(gap) >= 15) {
       div.hidden = false;
       div.textContent = "Equity favours " + (gap > 0 ? "White" : "Black") + " by " +
         Math.round(Math.abs(gap)) + " pts over the centipawn bar — at these ratings the " +
@@ -112,191 +167,251 @@
     } else { div.hidden = true; }
   }
 
-  function cpToWhite(cp) { return 1 / (1 + Math.exp(-0.00368208 * cp)); }
-
-  function renderStatus(resp) {
-    var s = $("status");
-    if (resp.checkmate) s.innerHTML = "<span class='san'>Checkmate</span> — " +
-      (resp.turn === "white" ? "Black" : "White") + " wins.";
-    else if (resp.stalemate) s.innerHTML = "<span class='san'>Draw</span> (no result).";
-    else s.innerHTML = (resp.turn === "white" ? "White" : "Black") + " to move" +
-      (resp.check ? " — <span class='san'>check</span>" : "");
+  function renderStatus() {
+    var r = node().resp, s = $("status");
+    // The loaded game (or "Your line" once you've branched) is shown here — no separate card.
+    var ctx = state.meta ? (state.branched ? "Your line" : state.meta.name) + " · " : "";
+    if (!r) { s.textContent = ctx + "evaluating…"; return; }
+    if (r.checkmate) { s.innerHTML = ctx + "<span class='san'>Checkmate</span> — " + (r.turn === "white" ? "Black" : "White") + " wins."; return; }
+    if (r.stalemate) { s.innerHTML = ctx + "<span class='san'>Draw</span> (no result)."; return; }
+    s.innerHTML = ctx + (r.turn === "white" ? "White" : "Black") + " to move" + (r.check ? " — <span class='san'>check</span>" : "");
   }
 
   function renderMoves() {
-    var ol = $("moves");
-    ol.innerHTML = "";
-    state.history.forEach(function (h, i) {
-      if (!h.san) return;
-      var li = document.createElement("li");
-      li.textContent = (i % 2 === 0 ? (i / 2 + 1) + ". " : "") + h.san;
-      ol.appendChild(li);
-    });
-    var ply = state.history.filter(function (h) { return h.san; }).length;
-    if (ply) {
-      var box = ol.lastChild;
-      if (box && box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
+    var box = $("moves");
+    box.innerHTML = "";
+    // one row per full move: number, White ply, Black ply — a vertical scroller.
+    for (var i = 1; i < state.line.length; i += 2) {
+      var row = document.createElement("div");
+      row.className = "mv-row";
+      var num = document.createElement("span");
+      num.className = "mv-num";
+      num.textContent = Math.ceil(i / 2) + ".";
+      row.appendChild(num);
+      [i, i + 1].forEach(function (p) {
+        var cell = document.createElement("span");
+        if (p < state.line.length) {
+          cell.className = "mv-ply" + (p === state.ply ? " current" : "");
+          cell.textContent = state.line[p].san;
+          cell.addEventListener("click", function () { goPly(p); });
+        } else {
+          cell.className = "mv-ply empty";
+        }
+        row.appendChild(cell);
+      });
+      box.appendChild(row);
     }
+    var cur = box.querySelector(".mv-ply.current");
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
   }
 
-  function applyResp(resp, san, lastMove) {
-    state.fen = resp.fen;
-    state.legal = resp.legal || {};
-    state.turn = resp.turn;
-    state._check = resp.check;
-    state.sel = null;
-    state.last = lastMove || null;
-    $("fen").value = resp.fen;
-    render();
-    renderBars(resp);
-    renderStatus(resp);
-    renderMoves();
-  }
+  // ---- evaluation + navigation ---------------------------------------------
 
-  // ---- networking ----------------------------------------------------------
-
-  function play(opts) {
-    // opts: { uci?, fen?, record? } — record pushes onto the undo stack.
+  // Ensure the node at ply p has a fresh eval (for the current ratings), then refresh.
+  function ensureEval(p) {
+    var n = state.line[p];
+    if (n.resp && n.resp._we === state.we && n.resp._be === state.be) return;
     if (state.busy) return;
-    state.busy = true;
-    render();
-    var body = {
-      fen: opts.fen != null ? opts.fen : state.fen,
-      white_elo: state.we, black_elo: state.be,
-    };
-    if (opts.uci) body.uci = opts.uci;
-    fetch("/api/play", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        state.busy = false;
-        if (!res.ok) { showFenErr(res.j.error || "error"); render(); return; }
-        hideFenErr();
-        var last = opts.uci ? { from: opts.uci.slice(0, 2), to: opts.uci.slice(2, 4) } : state.last;
-        if (opts.record) state.history.push({ fen: res.j.fen, san: res.j.san, last: last, resp: res.j });
-        applyResp(res.j, res.j.san, last);
-      })
-      .catch(function (err) { state.busy = false; showFenErr(String(err)); render(); });
+    state.busy = true; setThinking(true);
+    postPlay({ fen: n.fen }, function (j, ok) {
+      state.busy = false; setThinking(false);
+      if (!ok) { showErr(j.error || "error"); return; }
+      j._we = state.we; j._be = state.be;
+      n.resp = j;
+      if (state.ply === p) render();
+    });
   }
+
+  function goPly(p) {
+    state.ply = Math.max(0, Math.min(state.line.length - 1, p));
+    state.sel = null;
+    render();
+    ensureEval(state.ply);
+  }
+
+  function postPlay(extra, cb) {
+    var body = { white_elo: state.we, black_elo: state.be };
+    for (var k in extra) body[k] = extra[k];
+    fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) { cb(rj[1], rj[0]); })
+      .catch(function (err) { cb({ error: String(err) }, false); });
+  }
+
+  function showErr(msg) { $("status").textContent = msg; }
 
   // ---- interaction ---------------------------------------------------------
 
-  // Play from -> to, detecting a pawn promotion (which pops the picker first).
-  function attemptMove(from, to) {
-    var grid = parseGrid(state.fen);
-    var piece = grid[8 - parseInt(from[1], 10)][FILES.indexOf(from[0])];
-    var toRank = parseInt(to[1], 10);
-    var uci = from + to;
-    if ((piece === "P" && toRank === 8) || (piece === "p" && toRank === 1)) { promote(uci); return; }
-    play({ uci: uci, record: true });
-  }
-
-  function onSquare(ev) {
+  function onSquare(name) {
     if (state.busy) return;
-    var name = ev.currentTarget.dataset.name;
-    // Completing a move (click-to-move)?
-    if (state.sel && (state.legal[state.sel] || []).indexOf(name) >= 0) { attemptMove(state.sel, name); return; }
-    // Otherwise select a piece that has legal moves.
-    state.sel = state.legal[name] ? name : null;
+    var legal = legalMap();
+    if (state.sel && (legal[state.sel] || []).indexOf(name) >= 0) { attemptMove(state.sel, name); return; }
+    state.sel = legal[name] ? name : null;
     render();
   }
 
-  function onDragStart(ev) {
-    if (state.busy) { ev.preventDefault(); return; }
-    var from = ev.target.parentElement.dataset.name;
-    state.sel = from;
-    paintDrag(from);
-    if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", from); }
-    ev.target.addEventListener("dragend", onDragEnd, { once: true });
+  function attemptMove(from, to) {
+    var grid = ChessBoard.parseFen(node().fen).grid;
+    var piece = grid[8 - parseInt(from[1], 10)][FILES.indexOf(from[0])];
+    var uci = from + to, toRank = parseInt(to[1], 10);
+    if ((piece === "P" && toRank === 8) || (piece === "p" && toRank === 1)) { promote(uci); return; }
+    animateMove(from, to);
+    doMove(uci);
   }
 
-  function onDrop(ev) {
-    ev.preventDefault();
-    var to = ev.currentTarget.dataset.name;
-    if (state.sel && (state.legal[state.sel] || []).indexOf(to) >= 0) attemptMove(state.sel, to);
-    else render();   // illegal target — clear the drag marks
-  }
-
-  function onDragEnd() {
-    // Dropped outside a legal square (no move started): repaint from state.
-    if (!state.busy) render();
-  }
-
-  function squareEl(name) { return document.querySelector('#board .sq[data-name="' + name + '"]'); }
-
-  // Mark a piece + its legal destinations without a full re-render (a re-render mid
-  // drag would remove the element being dragged and abort the drag).
-  function paintDrag(from) {
-    document.querySelectorAll("#board .sq").forEach(function (sq) {
-      sq.classList.remove("dest", "capture", "sel");
+  // Play `uci` from the current position: truncate any future line and continue.
+  function doMove(uci) {
+    if (state.busy) return;
+    state.busy = true; setThinking(true);
+    var base = node().fen;
+    postPlay({ fen: base, uci: uci }, function (j, ok) {
+      state.busy = false; setThinking(false);
+      if (!ok) { showErr(j.error || "error"); render(); return; }
+      // Playing a move drops any future line — if a famous game was loaded, you've now
+      // branched into your own line (the status caption then says "Your line").
+      var deviated = state.ply < state.line.length - 1 || (state.meta && !state.branched);
+      j._we = state.we; j._be = state.be;
+      state.line = state.line.slice(0, state.ply + 1);
+      state.line.push({ fen: j.fen, san: j.san, last: { from: uci.slice(0, 2), to: uci.slice(2, 4) }, resp: j });
+      state.ply++; state.sel = null;
+      if (state.meta && deviated) state.branched = true;
+      render();
     });
-    var src = squareEl(from);
-    if (src) src.classList.add("sel");
-    (state.legal[from] || []).forEach(function (to) {
-      var sq = squareEl(to);
-      if (!sq) return;
-      sq.classList.add("dest");
-      if (sq.querySelector(".piece")) sq.classList.add("capture");
+  }
+
+  // Optimistic, animated piece move (FLIP slide); the server response then syncs.
+  function animateMove(from, to) {
+    var board = $("board");
+    var fromSq = board.querySelector('.sq[data-name="' + from + '"]');
+    var toSq = board.querySelector('.sq[data-name="' + to + '"]');
+    if (!fromSq || !toSq) return;
+    var piece = fromSq.querySelector(".piece");
+    if (!piece) return;
+    board.querySelectorAll(".sq.sel, .sq.dest, .sq.capture").forEach(function (s) { s.classList.remove("sel", "dest", "capture"); });
+    var fr = fromSq.getBoundingClientRect(), tr = toSq.getBoundingClientRect();
+    var dx = tr.left - fr.left, dy = tr.top - fr.top;
+    var captured = toSq.querySelector(".piece");
+    if (captured) captured.remove();
+    toSq.appendChild(piece);
+    if (piece.animate) {
+      piece.animate([{ transform: "translate(" + (-dx) + "px," + (-dy) + "px)" }, { transform: "none" }],
+        { duration: 150, easing: "cubic-bezier(.4,0,.2,1)" });
+    }
+  }
+
+  function onDragStart(name, ev) {
+    if (state.busy) { ev.preventDefault(); return; }
+    state.sel = name;
+    paintDrag(name);
+    if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", name); }
+    ev.target.addEventListener("dragend", function () { if (!state.busy) render(); }, { once: true });
+  }
+  function onDrop(name) {
+    var legal = legalMap();
+    if (state.sel && (legal[state.sel] || []).indexOf(name) >= 0) attemptMove(state.sel, name);
+    else render();
+  }
+  function squareEl(name) { return document.querySelector('#board .sq[data-name="' + name + '"]'); }
+  function paintDrag(from) {
+    document.querySelectorAll("#board .sq").forEach(function (sq) { sq.classList.remove("dest", "capture", "sel"); });
+    var src = squareEl(from); if (src) src.classList.add("sel");
+    (legalMap()[from] || []).forEach(function (to) {
+      var sq = squareEl(to); if (!sq) return;
+      sq.classList.add("dest"); if (sq.querySelector(".piece")) sq.classList.add("capture");
     });
   }
 
   function promote(baseUci) {
     var frame = document.querySelector(".board-frame");
-    var old = frame.querySelector(".promo");
-    if (old) old.remove();
+    var old = frame.querySelector(".promo"); if (old) old.remove();
     var menu = document.createElement("div");
     menu.className = "promo";
     [["q", "♛"], ["r", "♜"], ["b", "♝"], ["n", "♞"]].forEach(function (p) {
       var b = document.createElement("button");
       b.textContent = p[1];
-      b.addEventListener("click", function () { menu.remove(); play({ uci: baseUci + p[0], record: true }); });
+      b.addEventListener("click", function () { menu.remove(); animateMove(baseUci.slice(0, 2), baseUci.slice(2, 4)); doMove(baseUci + p[0]); });
       menu.appendChild(b);
     });
     frame.appendChild(menu);
   }
 
-  function showFenErr(msg) { var e = $("fen-err"); e.hidden = false; e.textContent = msg; }
-  function hideFenErr() { $("fen-err").hidden = true; }
+  // ---- game library + controls ---------------------------------------------
 
-  // ---- controls ------------------------------------------------------------
-
-  function undo() {
-    if (state.busy || !state.history.length) return;
-    state.history.pop();
-    var prev = state.history[state.history.length - 1];
-    if (prev) applyResp(prev.resp, prev.san, prev.last);
-    else { state.last = null; play({ fen: START, record: false }); }
+  function newGame() {
+    state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
+    state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
+    $("game-select").value = "";
+    goPly(0); startFill();
   }
 
-  var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  function loadGame(id) {
+    postGet("/api/game?id=" + encodeURIComponent(id), function (g, ok) {
+      if (!ok) { showErr(g.error || "could not load game"); return; }
+      state.line = g.moves.map(function (m) {
+        return { fen: m.fen, san: m.san, resp: null,
+          last: m.uci ? { from: m.uci.slice(0, 2), to: m.uci.slice(2, 4) } : null };
+      });
+      state.branched = false;
+      state.ply = 0; state.sel = null;
+      state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
+      goPly(0); startFill();
+    });
+  }
+
+  function postGet(url, cb) {
+    fetch(url).then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (rj) { cb(rj[1], rj[0]); })
+      .catch(function (err) { cb({ error: String(err) }, false); });
+  }
 
   function wire() {
-    $("new").addEventListener("click", function () {
-      state.history = []; state.last = null; state.sel = null; play({ fen: START, record: false });
-    });
-    $("undo").addEventListener("click", undo);
+    $("first").addEventListener("click", function () { goPly(0); });
+    $("prev").addEventListener("click", function () { goPly(state.ply - 1); });
+    $("next").addEventListener("click", function () { goPly(state.ply + 1); });
+    $("last").addEventListener("click", function () { goPly(state.line.length - 1); });
     $("flip").addEventListener("click", function () { state.flipped = !state.flipped; render(); });
+    $("scrub").addEventListener("input", function (e) { goPly(parseInt(e.target.value, 10)); });
+    $("new").addEventListener("click", newGame);
     document.addEventListener("keydown", function (e) {
-      if (e.key === "f" || e.key === "F") { state.flipped = !state.flipped; render(); }
+      if (e.key === "ArrowLeft") goPly(state.ply - 1);
+      else if (e.key === "ArrowRight") goPly(state.ply + 1);
+      else if (e.key === "Home") goPly(0);
+      else if (e.key === "End") goPly(state.line.length - 1);
+      else if (e.key === "f" || e.key === "F") { state.flipped = !state.flipped; render(); }
     });
     function slider(id, outId, key) {
       var el = $(id);
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        play({ fen: state.fen, record: false });   // re-eval current position
+        ensureEval(state.ply);   // re-score the current position now…
+        startFill();             // …and re-chart the whole game at the new ratings
       });
     }
     slider("white-elo", "white-elo-out", "we");
     slider("black-elo", "black-elo-out", "be");
-    $("load-fen").addEventListener("click", function () {
-      state.history = []; state.last = null; state.sel = null;
-      play({ fen: $("fen").value.trim(), record: false });
+  }
+
+  function loadLibrary() {
+    postGet("/api/games", function (data, ok) {
+      var sel = $("game-select");
+      var blank = document.createElement("option");
+      blank.value = ""; blank.textContent = ok && data.games && data.games.length ? "— pick a game —" : "(start the server for the library)";
+      sel.appendChild(blank);
+      if (ok && data.games) {
+        data.games.forEach(function (g) {
+          var o = document.createElement("option");
+          o.value = g.id;
+          o.textContent = g.name + (g.year ? " (" + g.year + ")" : "") + " · " + g.plies + " plies";
+          sel.appendChild(o);
+        });
+      }
+      sel.addEventListener("change", function () { if (sel.value) loadGame(sel.value); });
     });
   }
 
   wire();
-  play({ fen: START, record: false });
+  loadLibrary();
+  goPly(0);   // start position, evaluated live
+  startFill();
 })();

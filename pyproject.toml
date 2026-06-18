@@ -23,9 +23,21 @@ data = [
 ]
 # The real Maia-2 equity model (task 0005, `--model maia2`). Heavyweight (pulls torch
 # + a downloaded checkpoint), so it's opt-in; the baseline path and tests need none of
-# it — tests inject a fake inference backend.
+# it — tests inject a fake inference backend. NB: maia2 0.9 ships an EMPTY dependency
+# list, so its real runtime deps (torch + numpy/pandas/einops/gdown/pyzstd/requests/
+# tqdm/pyyaml) must be pinned here — otherwise `uv sync --extra maia2` installs maia2
+# but not torch, and the model fails to import at runtime.
 maia2 = [
     "maia2",
+    "torch",
+    "numpy",
+    "pandas",
+    "einops",
+    "gdown",
+    "pyzstd",
+    "requests",
+    "tqdm",
+    "pyyaml",
 ]
 # Reliability-curve plots for the validation gate (task 0036, `validate --plots`).
 # Optional: every numeric metric and the Markdown reports work without it.

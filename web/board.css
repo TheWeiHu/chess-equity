@@ -1,0 +1,76 @@
+/* board.css — one chess-board style shared by both demos (guided + live), paired with
+ * board.js. Self-contained (no page palette vars) so the two boards look identical
+ * regardless of each page's theme: green squares, solid outlined pieces, responsive
+ * squares that never "explode" on re-layout, plus the interactive overlays. */
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.sq {
+  /* Squareness comes from the square itself (height tracks its 1/8-of-board width),
+     so it never depends on grid row sizing or content height. inline-size containment
+     lets us size the glyph in cqi units without the both-axis collapse bug. */
+  aspect-ratio: 1 / 1;
+  container-type: inline-size;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.sq.light { background: #eef2e7; }
+.sq.dark  { background: #7aa86a; }
+
+/* last-move highlight, picked-up square, legal destinations, king-in-check */
+.sq.hl::before { content: ""; position: absolute; inset: 0; background: rgba(245, 222, 76, 0.55); }
+.sq.sel::before { content: ""; position: absolute; inset: 0; background: rgba(80, 160, 110, 0.45); }
+.sq.dest { cursor: pointer; }
+.sq.dest::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 28%; height: 28%;
+  transform: translate(-50%, -50%); border-radius: 50%; background: rgba(20, 24, 34, .34); z-index: 1;
+}
+.sq.dest.capture::after {
+  width: 86%; height: 86%; background: transparent; box-sizing: border-box;
+  border: 4px solid rgba(20, 24, 34, .34); border-radius: 50%;
+}
+.sq.check::after {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(circle, rgba(196, 74, 61, .85) 0%, rgba(196, 74, 61, 0) 72%);
+}
+
+/* pieces: clean two-tone silhouettes — white = light fill + a thin dark edge, black =
+ * solid dark fill. A light hairline stroke (not the old fat 1.6px one) keeps them crisp
+ * and readable on the green board without the heavy, ornate look. */
+.sq .piece {
+  position: relative;
+  font-size: clamp(16px, 6vw, 44px);   /* fallback for browsers without container units */
+  font-size: 70cqi;
+  line-height: 1;
+  z-index: 1;
+  user-select: none;
+  filter: drop-shadow(0 1px 0.5px rgba(0, 0, 0, .16));
+}
+.sq .piece.white { color: #fbfbf8; -webkit-text-stroke: 0.7px #41434b; text-stroke: 0.7px #41434b; }
+.sq .piece.black { color: #2a2d35; -webkit-text-stroke: 0.4px #14161b; text-stroke: 0.4px #14161b; }
+
+/* edge coordinate labels */
+.sq .coord { position: absolute; font-size: 11px; font-weight: 700; opacity: .6; z-index: 2; }
+.sq .coord.file { right: 4px; bottom: 2px; }
+.sq .coord.rank { left: 4px; top: 2px; }
+.sq.light .coord { color: #7aa86a; }
+.sq.dark  .coord { color: #eef2e7; }
+
+.sq[data-name] .piece { cursor: pointer; }
+.sq .piece[draggable="true"] { cursor: grab; }
+.sq .piece[draggable="true"]:active { cursor: grabbing; }
+/* subtle lift on a hovered movable piece — a small "you can pick this up" affordance */
+.sq .piece[draggable="true"] { transition: transform .1s ease; }
+.sq:hover .piece[draggable="true"] { transform: scale(1.08); }
+
+/* the floating mini board (hover preview in the guided demo) */
+.board.mini { width: 160px; border-radius: 4px; }
