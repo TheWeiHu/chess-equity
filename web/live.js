@@ -76,7 +76,7 @@
 
   function renderChart() {
     var svg = $("chart"); if (!svg) return;
-    var n = state.line.length, W = 480, H = 160, padX = 14, padY = 14;
+    var n = state.line.length, W = 480, H = 150, padX = 12, padY = 12;
     var innerW = W - 2 * padX, innerH = H - 2 * padY;
     var mid = padY + innerH / 2;                       // the 50% (even) line
     function xFor(i) { return n <= 1 ? padX + innerW / 2 : padX + (i / (n - 1)) * innerW; }

@@ -182,6 +182,13 @@ class App(SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=HERE, **k)
 
+    def end_headers(self) -> None:  # noqa: N802
+        # Dev server: never let the browser cache the static assets, so editing
+        # live.js / style.css / board.js always takes effect on reload (otherwise a
+        # cached old script throws against markup that has since changed).
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        super().end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/api/games":

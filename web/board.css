@@ -43,18 +43,20 @@
   background: radial-gradient(circle, rgba(196, 74, 61, .85) 0%, rgba(196, 74, 61, 0) 72%);
 }
 
-/* pieces: solid glyphs, white = light fill + dark outline, black = dark fill + light outline */
+/* pieces: clean two-tone silhouettes — white = light fill + a thin dark edge, black =
+ * solid dark fill. A light hairline stroke (not the old fat 1.6px one) keeps them crisp
+ * and readable on the green board without the heavy, ornate look. */
 .sq .piece {
   position: relative;
-  font-size: clamp(16px, 6vw, 46px);   /* fallback for browsers without container units */
-  font-size: 76cqi;
+  font-size: clamp(16px, 6vw, 44px);   /* fallback for browsers without container units */
+  font-size: 70cqi;
   line-height: 1;
   z-index: 1;
   user-select: none;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .28));
+  filter: drop-shadow(0 1px 0.5px rgba(0, 0, 0, .16));
 }
-.sq .piece.white { color: #f8f7f3; -webkit-text-stroke: 1.6px #2b2f37; text-stroke: 1.6px #2b2f37; }
-.sq .piece.black { color: #24282f; -webkit-text-stroke: 1px #14171d;  text-stroke: 1px #14171d; }
+.sq .piece.white { color: #fbfbf8; -webkit-text-stroke: 0.7px #41434b; text-stroke: 0.7px #41434b; }
+.sq .piece.black { color: #2a2d35; -webkit-text-stroke: 0.4px #14161b; text-stroke: 0.4px #14161b; }
 
 /* edge coordinate labels */
 .sq .coord { position: absolute; font-size: 11px; font-weight: 700; opacity: .6; z-index: 2; }
