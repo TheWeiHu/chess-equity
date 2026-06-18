@@ -31,7 +31,7 @@ import chess  # noqa: E402
 
 MATE_CP = 10000.0
 PORT = int(os.environ.get("PORT", "8000"))
-DEPTH = int(os.environ.get("STOCKFISH_DEPTH", "14"))
+DEPTH = int(os.environ.get("STOCKFISH_DEPTH", "12"))  # snappy for interactive play; bump via env
 
 
 class Engines:

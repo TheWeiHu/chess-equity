@@ -44,7 +44,6 @@
       onDragStart: onDragStart,                                // (name, ev)
       onDrop: onDrop,                                          // (name, ev)
     });
-    $("board").classList.toggle("busy", state.busy);
   }
 
   function renderBars(resp) {
@@ -113,10 +112,13 @@
   // ---- networking ----------------------------------------------------------
 
   function play(opts) {
-    // opts: { uci?, fen?, record? } — record pushes onto the undo stack.
+    // opts: { uci?, fen?, record?, optimistic? }. `optimistic` means attemptMove has
+    // already slid the piece into place locally, so we skip the start re-render (which
+    // would snap it back to the old position) and just wait for the eval to land.
     if (state.busy) return;
     state.busy = true;
-    render();
+    setThinking(true);
+    if (!opts.optimistic) render();
     var body = {
       fen: opts.fen != null ? opts.fen : state.fen,
       white_elo: state.we, black_elo: state.be,
@@ -128,14 +130,19 @@
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
-        state.busy = false;
+        state.busy = false; setThinking(false);
         if (!res.ok) { showFenErr(res.j.error || "error"); render(); return; }
         hideFenErr();
         var last = opts.uci ? { from: opts.uci.slice(0, 2), to: opts.uci.slice(2, 4) } : state.last;
         if (opts.record) state.history.push({ fen: res.j.fen, san: res.j.san, last: last, resp: res.j });
         applyResp(res.j, res.j.san, last);
       })
-      .catch(function (err) { state.busy = false; showFenErr(String(err)); render(); });
+      .catch(function (err) { state.busy = false; setThinking(false); showFenErr(String(err)); render(); });
+  }
+
+  function setThinking(on) {
+    var bars = document.querySelector(".bars");
+    if (bars) bars.classList.toggle("thinking", on);
   }
 
   // ---- interaction ---------------------------------------------------------
@@ -147,7 +154,36 @@
     var toRank = parseInt(to[1], 10);
     var uci = from + to;
     if ((piece === "P" && toRank === 8) || (piece === "p" && toRank === 1)) { promote(uci); return; }
-    play({ uci: uci, record: true });
+    // Slide the piece to its square immediately (optimistic), then evaluate. The piece
+    // moves the instant you let go instead of after the ~1s engine round-trip; the
+    // authoritative position (castling rook, en passant, check) syncs when the eval lands.
+    animateMove(from, to);
+    play({ uci: uci, record: true, optimistic: true });
+  }
+
+  // Optimistic, animated piece move (FLIP slide). Special moves (castling/en passant/
+  // promotion) are corrected by the full render when the server response arrives.
+  function animateMove(from, to) {
+    var board = $("board");
+    var fromSq = board.querySelector('.sq[data-name="' + from + '"]');
+    var toSq = board.querySelector('.sq[data-name="' + to + '"]');
+    if (!fromSq || !toSq) return;
+    var piece = fromSq.querySelector(".piece");
+    if (!piece) return;
+    board.querySelectorAll(".sq.sel, .sq.dest, .sq.capture").forEach(function (s) {
+      s.classList.remove("sel", "dest", "capture");
+    });
+    var fr = fromSq.getBoundingClientRect(), tr = toSq.getBoundingClientRect();
+    var dx = tr.left - fr.left, dy = tr.top - fr.top;
+    var captured = toSq.querySelector(".piece");
+    if (captured) captured.remove();
+    toSq.appendChild(piece);
+    if (piece.animate) {
+      piece.animate(
+        [{ transform: "translate(" + (-dx) + "px," + (-dy) + "px)" }, { transform: "none" }],
+        { duration: 150, easing: "cubic-bezier(.4,0,.2,1)" }
+      );
+    }
   }
 
   function onSquare(name) {

@@ -63,8 +63,12 @@
 .sq.light .coord { color: #6f9b62; }
 .sq.dark  .coord { color: #ebecd0; }
 
-.board[data-name], .sq[data-name] .piece { cursor: pointer; }
-.board.busy { opacity: .6; pointer-events: none; }
+.sq[data-name] .piece { cursor: pointer; }
+.sq .piece[draggable="true"] { cursor: grab; }
+.sq .piece[draggable="true"]:active { cursor: grabbing; }
+/* subtle lift on a hovered movable piece — a small "you can pick this up" affordance */
+.sq .piece[draggable="true"] { transition: transform .1s ease; }
+.sq:hover .piece[draggable="true"] { transform: scale(1.08); }
 
 /* the floating mini board (hover preview in the guided demo) */
 .board.mini { width: 160px; border-radius: 4px; }
