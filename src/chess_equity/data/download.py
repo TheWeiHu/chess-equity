@@ -20,6 +20,7 @@ default) so tests inject a fake opener and never touch the network.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +30,21 @@ from chess_equity.data.build import month_url
 
 # Where dumps are cached between runs. Override per-call with ``dest_dir``.
 DEFAULT_DUMP_DIR = os.path.join(os.path.expanduser("~"), ".cache", "chess-equity", "dumps")
+
+# Rough compressed size of a recent Lichess standard-rated monthly dump. Used only to
+# warn the caller before a multi-GB stream starts — not a hard limit.
+APPROX_DUMP_SIZE_GB = 30
+
+
+def data_extra_available() -> bool:
+    """True if the ``data`` extra (``zstandard``) is importable.
+
+    Reading a Lichess ``.zst`` month dump needs it, so ``data build --month`` checks
+    this *before* any network I/O to fail fast with an install hint (task 0071) rather
+    than after a ~30 GB download lands and :func:`chess_equity.data.build.open_pgn`
+    trips on the missing import.
+    """
+    return importlib.util.find_spec("zstandard") is not None
 
 # 1 MiB transfer chunks — big enough to amortise syscalls, small enough to stay streaming.
 _CHUNK = 1 << 20
