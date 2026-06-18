@@ -852,6 +852,61 @@ def _run_personal(args: argparse.Namespace) -> int:
     return 0
 
 
+# Exit codes for `gate-check` (task 0136). 0/2 mirror `validate --gate`'s PASS/FAIL so a
+# consumer can treat the two interchangeably; 3 is "couldn't even read the verdict" (missing
+# file, bad JSON, or a schema the consumer doesn't understand) — a loud failure, never a
+# silent pass.
+GATE_CHECK_PASS = 0
+GATE_CHECK_FAIL = 2
+GATE_CHECK_ERROR = 3
+
+
+def _run_gate_check(args: argparse.Namespace) -> int:
+    """Consume a gate verdict.json (task 0136): exit 0 iff its top-level ``pass`` is true.
+
+    Task 0135 writes a machine-readable ``verdict.json`` beside each ``validate --out`` /
+    ``headline`` report so CI, a README badge, or a dashboard can assert the thesis gate
+    *without re-parsing markdown*. This is that consumer: load the JSON, pin its schema
+    version (a shape change fails loudly via :data:`GATE_CHECK_ERROR` rather than silently
+    passing), and turn the boolean ``pass`` into a process exit code — 0 PASS / 2 FAIL,
+    matching ``validate --gate``.
+    """
+    from pathlib import Path
+
+    from chess_equity.validate.harness import GATE_VERDICT_SCHEMA
+
+    path = Path(args.verdict)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"gate-check: no verdict.json at {path}", file=sys.stderr)
+        return GATE_CHECK_ERROR
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"gate-check: cannot read {path}: {exc}", file=sys.stderr)
+        return GATE_CHECK_ERROR
+
+    schema = payload.get("schema")
+    if schema != GATE_VERDICT_SCHEMA:
+        print(
+            f"gate-check: unexpected schema {schema!r} (want {GATE_VERDICT_SCHEMA!r}) in {path}",
+            file=sys.stderr,
+        )
+        return GATE_CHECK_ERROR
+
+    passed = payload.get("pass")
+    if not isinstance(passed, bool):
+        print(f"gate-check: missing or non-boolean 'pass' field in {path}", file=sys.stderr)
+        return GATE_CHECK_ERROR
+
+    names = ", ".join(p.get("name", "?") for p in payload.get("predictors", []))
+    verdict = "PASS" if passed else "FAIL"
+    print(
+        f"gate-check: {verdict} — {names or 'no predictors'} vs {payload.get('baseline')} "
+        f"on {payload.get('headline_metric')} (n={payload.get('n')})"
+    )
+    return GATE_CHECK_PASS if passed else GATE_CHECK_FAIL
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1115,6 +1170,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     hd.add_argument("--seed", type=int, default=0, help="RNG seed for the bootstrap")
 
+    gc = sub.add_parser(
+        "gate-check",
+        help="consume a gate verdict.json (task 0136): exit 0 iff its top-level `pass` is "
+        "true, else exit 2 (FAIL) / 3 (unreadable or wrong schema). Lets CI / a README "
+        "badge assert the thesis gate from the machine-readable mirror (task 0135) "
+        "instead of re-parsing the markdown report",
+    )
+    gc.add_argument(
+        "verdict",
+        help="path to the verdict.json written beside a `validate --out` / `headline` "
+        "report (e.g. reports/validation_headline.verdict.json)",
+    )
+
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
     tr.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     tr.add_argument("--out", help="artifact path (default: the packaged wdl_a.json)")
@@ -1177,6 +1245,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         from chess_equity.validate.headline import run_headline
 
         return run_headline(args.data, out=args.out, bootstrap=args.bootstrap, seed=args.seed)
+    if args.command == "gate-check":
+        return _run_gate_check(args)
     if args.command == "train":
         return _run_train(args)
     if args.command == "precompute":

@@ -27,6 +27,16 @@ jobs:
       # (web/ holds test_import_game.py — the Lichess game-import tooling).
       - name: Run tests
         run: pytest tests baseline overlay web -q
+      # The thesis gate, asserted from the machine-readable verdict.json (task 0136) rather
+      # than by re-parsing the markdown: run the torch-free baseline-vs-wdl-a gate on the
+      # committed sample, then let `gate-check` turn verdict.json['pass'] into the build's
+      # exit code. --min-n 0 disables the underpowered floor (task 0132) for the tiny fixture.
+      - name: Assert thesis gate (verdict.json)
+        run: |
+          chess-equity validate --data data/sample/dataset.csv \
+            --models baseline,wdl-a --bootstrap 0 --min-n 0 \
+            --out "$RUNNER_TEMP/ci_gate.md"
+          chess-equity gate-check "$RUNNER_TEMP/ci_gate.verdict.json"
       # The live demo's eval-cache logic (web/live.js) is gated by a dependency-free node
       # test: scrubbing a charted game must make zero /api/play calls (task 0123).
       - uses: actions/setup-node@v4
