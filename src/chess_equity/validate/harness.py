@@ -73,6 +73,20 @@ def baseline_cp_clock(row: PositionRow) -> float:
 _WDL_A_MODEL = None
 
 
+def _load_wdl_a():
+    """The fitted Approach-A model, loaded lazily and cached on first use.
+
+    Shared by :func:`wdl_a` and :func:`wdl_a_rating_ablated` so the artifact loads once
+    and the two paths can never read a different fit.
+    """
+    global _WDL_A_MODEL
+    if _WDL_A_MODEL is None:
+        from chess_equity.wdl_regression import load_wdl_a_model
+
+        _WDL_A_MODEL = load_wdl_a_model()
+    return _WDL_A_MODEL
+
+
 def wdl_a(row: PositionRow) -> float:
     """Approach A — the rating-conditioned WDL regression (task 0004).
 
@@ -82,13 +96,39 @@ def wdl_a(row: PositionRow) -> float:
     this module stays free of the model file (and a missing artifact only bites the
     callers that actually ask for ``wdl-a``).
     """
-    global _WDL_A_MODEL
-    if _WDL_A_MODEL is None:
-        from chess_equity.wdl_regression import load_wdl_a_model
-
-        _WDL_A_MODEL = load_wdl_a_model()
-    return _WDL_A_MODEL.predict_white_equity(
+    return _load_wdl_a().predict_white_equity(
         row.cp_eval, row.white_elo, row.black_elo, row.ply, row.tc_bucket
+    )
+
+
+# The neutral rating the ablation pins both players to. It is the WDL feature *centre*:
+# ``features()`` computes ``avg_skill = (avg_elo - 1500)/400`` and
+# ``rating_delta = (white_elo - black_elo)/400``, so two equal 1500s zero BOTH rating
+# features — the model keeps its cp/ply/time-control fit but its rating-conditioning
+# carries no signal.
+RATING_ABLATION_ELO = 1500
+
+
+def wdl_a_rating_ablated(row: PositionRow) -> float:
+    """``wdl-a`` re-scored with ratings held constant — the rating-conditioning ablated.
+
+    The control for task 0138: the gate already shows ``wdl-a`` beats the rating-blind
+    ``baseline`` (0009) and slices the win by rating band (0111), but nothing isolates
+    that the edge is *caused* by the ratings rather than a generally better-fit model.
+    This pins both Elos to :data:`RATING_ABLATION_ELO` (so the rating features vanish)
+    while leaving ``cp_eval``/``ply``/``tc_bucket`` untouched. If the win is rating-
+    driven, it must shrink back toward the baseline here — see
+    ``tests/test_gate_rating_ablation.py``.
+
+    Like the negative controls (task 0130), this is a diagnostic, not a production model,
+    so it is deliberately NOT registered in :data:`PREDICTORS`.
+    """
+    return _load_wdl_a().predict_white_equity(
+        row.cp_eval,
+        RATING_ABLATION_ELO,
+        RATING_ABLATION_ELO,
+        row.ply,
+        row.tc_bucket,
     )
 
 
