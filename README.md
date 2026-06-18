@@ -85,7 +85,12 @@ into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a
 
 ## Web demo
 
-**Live:** https://theweihu.github.io/chess-equity/
+Run it locally (see [Deployment](#deployment) — this project ships **no hosted
+site**):
+
+```bash
+python3 -m http.server -d web 8000     # then open http://localhost:8000
+```
 
 A static, dependency-free page that puts the equity bar next to a centipawn bar and
 lets you drag both players' rating sliders — *move a slider and the equity bar moves
@@ -97,19 +102,24 @@ The committed demo's equity bar is **real Maia-2** output (rating-conditioned wi
 from its value head), regenerated with `python web/build_demo.py --all --model maia2`. Its
 centipawn bar, by contrast, is a deliberately **shallow material count**, not the deep
 engine — a real Stockfish *solves* this mate, so a shallow bar is what makes the
-contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games;
-see [docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md)).
+contradiction visible (`--cp-engine stockfish` is an opt-in source for positional games).
 The project's actual *"equity beats centipawns"* claim is the validation gate below,
 which compares equity against the **real, rating-blind Stockfish** eval — not this demo.
 
-```bash
-python3 -m http.server -d web 8000     # then open http://localhost:8000
-```
-
 The page reads a precomputed `web/demo-game.json` (no backend). Import a real game with
 `python web/import_game.py <lichess-url>` (or `--user <name>`), then open
-`…/chess-equity/?game=imported-game.json`. The live site publishes from `web/` on every
-push to `main` via GitHub Pages.
+`http://localhost:8000/?game=imported-game.json`.
+
+## Deployment
+
+There is **none** — this is a local-only runnable, by design. Don't add GitHub Pages
+or any other hosted-site deployment: there's no audience for a hosted page on a nukeable
+research spike, and a static host can't run the live board's Stockfish + Maia-2 backend
+anyway.
+
+- **Static demo:** `python3 -m http.server -d web 8000` → http://localhost:8000
+- **Live interactive board** (needs Stockfish + Maia-2, see [DEPENDENCIES.md](DEPENDENCIES.md)):
+  `uv run python web/server.py` → http://localhost:8000/live.html
 
 ## Models
 
@@ -154,8 +164,7 @@ numbers are a smoke test, not evidence (real evidence needs a real dump).
 **rating-blind OBJECTIVE eval** (real Stockfish) at predicting **actual human outcomes**
 — i.e. in *practical* terms. It is **not** a claim about out-tactic-ing a deep engine on
 forced lines: a deep engine is right about the board, but blind to *this* player against
-*that* one. (The web demo's material bar is a separate, shallow teaching foil — see
-[docs/web-demo-objective-bar-decision.md](docs/web-demo-objective-bar-decision.md).)
+*that* one. (The web demo's material bar is a separate, shallow teaching foil.)
 
 The gate's own answer is checked in at **[reports/validation_sample.md](reports/validation_sample.md)**:
 a **Gate verdict** line (does each rating-conditioned model strictly beat the rating-blind
@@ -168,8 +177,10 @@ wrong — though the 15-row numbers are illustrative only, not proof. Regenerate
 uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md
 ```
 
-Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is captured
-step-by-step in **[docs/validation-proof-runbook.md](docs/validation-proof-runbook.md)**.
+Running the full gate (real dump + Maia-2 + Stockfish, all attended-only) is an
+attended/GPU one-shot — `uv sync --extra data --extra maia2 --extra plots`, build a
+`--with-fen` dataset, re-fit `wdl-a`, then `chess-equity validate` against
+`baseline,wdl-a,maia2`. See [DEPENDENCIES.md](DEPENDENCIES.md) for each install.
 
 ## Architecture
 
