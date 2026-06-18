@@ -536,9 +536,19 @@ BASELINE_NAME = "baseline"
 HEADLINE_METRIC = "log_loss"
 
 
+# Below this held-out n the gate refuses to call a PASS — it reads INCONCLUSIVE instead
+# (task 0132). With only a handful of rows a lucky point win and a barely-non-straddling
+# bootstrap CI can read green by chance, overstating the thesis; the committed 15-row
+# `validation_sample.md` is far under this floor, while the real proof run is n=8000. Set
+# at the n>=2000 size the synthetic PASS fixture (task 0131) is built to clear, so an
+# honest PASS needs a sample with the statistical power to back it. Pass ``min_n=0`` to
+# :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+MIN_GATE_N = 2000
+
+
 @dataclass(frozen=True)
 class Verdict:
-    """One rating-conditioned predictor's gate result vs the baseline (task 0058/0069).
+    """One rating-conditioned predictor's gate result vs the baseline (task 0058/0069/0132).
 
     ``log_loss_delta`` / ``brier_delta`` are ``model - baseline`` on the held-out
     overall scores, so a *negative* delta is an improvement (lower is better).
@@ -549,6 +559,12 @@ class Verdict:
     then requires *both* a point win on log-loss and Brier **and** ``significant`` being
     true. ``headline_ci`` is the delta CI that drove the significance call, kept for the
     report to render inline.
+
+    ``underpowered`` is the third, distinct state (task 0132): when the held-out
+    ``held_out_n`` is below ``min_n`` the gate cannot trust *any* call, so the verdict
+    reads INCONCLUSIVE rather than PASS/FAIL and ``passed`` is forced ``False`` — a
+    tiny-n point win must not read green. ``held_out_n``/``min_n`` are kept so the report
+    and exit-code paths can name the shortfall.
 
     ``baseline_log_loss`` / ``baseline_brier`` are the baseline's overall scores, kept so
     the report can express each delta as a percent reduction relative to the baseline
@@ -562,6 +578,9 @@ class Verdict:
     significant: Optional[bool] = None
     headline_metric: Optional[str] = None
     headline_ci: Optional[DeltaCI] = None
+    underpowered: bool = False
+    held_out_n: Optional[int] = None
+    min_n: Optional[int] = None
     baseline_log_loss: Optional[float] = None
     baseline_brier: Optional[float] = None
 
@@ -572,6 +591,7 @@ def gate_verdicts(
     baseline_name: str = BASELINE_NAME,
     comparisons: Optional[Sequence[BaselineComparison]] = None,
     headline_metric: str = HEADLINE_METRIC,
+    min_n: int = 0,
 ) -> List[Verdict]:
     """The thesis gate (0009): does each non-baseline predictor beat the centipawn baseline?
 
@@ -586,12 +606,24 @@ def gate_verdicts(
     ``comparisons`` the gate stays point-only (the pre-0069 behaviour), so callers that
     can't afford a bootstrap degrade gracefully rather than silently passing on noise.
 
+    When the held-out sample is smaller than ``min_n`` the gate is *underpowered* (task
+    0132): every verdict reads INCONCLUSIVE and ``passed`` is forced ``False`` — a lucky
+    tiny-n point win must not read green. The check takes precedence over PASS/FAIL because
+    at tiny n neither direction is trustworthy. ``min_n`` defaults to ``0`` (guard off) so
+    direct callers and the logic tests keep the pre-0132 behaviour; the machine-checkable
+    gate entry point applies the real floor — the ``validate --gate`` CLI defaults
+    ``--min-n`` to :data:`MIN_GATE_N`.
+
     Returns an empty list if the run has no baseline predictor — nothing to gate against.
     """
     by_name = {r.name: r for r in reports}
     baseline = by_name.get(baseline_name)
     if baseline is None:
         return []
+    # The held-out n every predictor was scored on (same row set), so one number gates
+    # the whole run (task 0132).
+    held_out_n = baseline.overall.n
+    underpowered = min_n > 0 and held_out_n < min_n
     # model name -> {metric -> DeltaCI} for the supplied comparisons (if any).
     ci_by_name: Dict[str, Dict[str, DeltaCI]] = {}
     if comparisons is not None:
@@ -610,7 +642,8 @@ def gate_verdicts(
             # No CI for the headline metric (shouldn't happen on a normal run) reads as
             # not-significant — fail closed rather than pass on missing evidence.
             significant = bool(headline_ci is not None and headline_ci.beats_baseline)
-        passed = point_win and (significant is None or significant)
+        # Underpowered can't be a PASS — neither a tiny-n win nor a tiny-n loss is proof.
+        passed = (not underpowered) and point_win and (significant is None or significant)
         verdicts.append(
             Verdict(
                 r.name,
@@ -620,6 +653,9 @@ def gate_verdicts(
                 significant=significant,
                 headline_metric=headline_metric if comparisons is not None else None,
                 headline_ci=headline_ci,
+                underpowered=underpowered,
+                held_out_n=held_out_n,
+                min_n=min_n,
                 baseline_log_loss=baseline.overall.log_loss,
                 baseline_brier=baseline.overall.brier,
             )
@@ -710,6 +746,25 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
         out.append(
             f"_No `{baseline_name}` predictor in this run — cannot compute a gate verdict._"
         )
+        out.append("")
+        return out
+    # Underpowered run (task 0132): the held-out n is below the floor, so no verdict is
+    # trustworthy. Say so up front and render every line as INCONCLUSIVE.
+    if verdicts[0].underpowered:
+        n = verdicts[0].held_out_n
+        floor = verdicts[0].min_n
+        out.append(
+            f"**INCONCLUSIVE — underpowered.** Held-out n={n} is below the n>={floor} "
+            "floor needed to trust a gate call (task 0132); a tiny-n point win can read "
+            "green by chance, so the gate refuses to call PASS or FAIL."
+        )
+        out.append("")
+        for v in verdicts:
+            out.append(
+                f"- **{v.name}** vs {baseline_name}: "
+                f"logloss {v.log_loss_delta:+.4f}, brier {v.brier_delta:+.4f} "
+                "-> **INCONCLUSIVE**"
+            )
         out.append("")
         return out
     # Whether this run carried paired-bootstrap CIs (task 0069) — the criterion line and

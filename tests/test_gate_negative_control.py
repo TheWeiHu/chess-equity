@@ -91,7 +91,11 @@ def test_validate_gate_exit_code_fails_on_broken_model(capsys, monkeypatch):
 
     def run(models):
         # --bootstrap 0: the exit-code gate reads the point verdict, not the CIs (fast).
-        return main(["validate", "--data", str(FIXTURE), "--bootstrap", "0", "--models", models, "--gate"])
+        # --min-n 0: this asserts the PASS/FAIL teeth on the small fixture, so disable the
+        # underpowered guard (task 0132) that would otherwise read the tiny n as INCONCLUSIVE.
+        return main(
+            ["validate", "--data", str(FIXTURE), "--bootstrap", "0", "--min-n", "0", "--models", models, "--gate"]
+        )
 
     fail_rc = run("baseline,constant-0.5")
     fail_err = capsys.readouterr().err

@@ -35,6 +35,7 @@ from chess_equity.validate.harness import (
     format_verdict,
     gate_verdicts,
     head_to_head_slice_cis,
+    MIN_GATE_N,
 )
 from chess_equity.validate.leakage import (
     Leak,
@@ -61,6 +62,7 @@ __all__ = [
     "HeadToHeadCI",
     "SliceDeltaCI",
     "Verdict",
+    "MIN_GATE_N",
     "evaluate",
     "compare_to_baseline",
     "compare_ece_to_baseline",
