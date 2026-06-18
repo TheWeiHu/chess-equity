@@ -32,9 +32,21 @@ from chess_equity.validate.harness import (
     format_verdict,
     gate_verdicts,
 )
+from chess_equity.validate.leakage import (
+    Leak,
+    detect_leakage,
+    format_leakage_warning,
+    infer_month_from_path,
+    model_fit_months,
+)
 from chess_equity.validate.split import game_level_split
 
 __all__ = [
+    "Leak",
+    "detect_leakage",
+    "format_leakage_warning",
+    "infer_month_from_path",
+    "model_fit_months",
     "PREDICTORS",
     "SLICERS",
     "Scores",

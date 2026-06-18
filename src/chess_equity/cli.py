@@ -457,6 +457,29 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    # Leakage guard (task 0112): if the eval dataset's source month is a model's own
+    # training month, its scores are memorization, not held-out evidence. The month is
+    # declared via --eval-month or inferred from the dataset path; --strict refuses.
+    from chess_equity.validate.leakage import (
+        detect_leakage,
+        format_leakage_warning,
+        infer_month_from_path,
+        leakage_line,
+        model_fit_months,
+    )
+
+    eval_month = args.eval_month or infer_month_from_path(args.data)
+    leaks = detect_leakage(eval_month, model_fit_months(requested))
+    if leaks:
+        print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)
+        if args.strict:
+            print(
+                "error: refusing (--strict) — eval month overlaps a model's training "
+                "month; re-run on a held-out month",
+                file=sys.stderr,
+            )
+            return 2
+
     title = f"Validation report — {args.data}"
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
@@ -485,6 +508,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     report = format_report(reports, title=title)
+    leak_block = format_leakage_warning(leaks, eval_month)
+    if leak_block:
+        # Insert just below the H1 so the warning leads the artifact, above the gate verdict.
+        head, _, body = report.partition("\n")
+        report = f"{head}\n\n{leak_block.rstrip()}\n{body}"
 
     # Significance: paired-bootstrap CI on each model's metric delta vs the baseline,
     # so the report says whether a win clears zero or is just noise (task 0060). Needs
@@ -902,6 +930,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="N",
         help="reliability-bin count for ECE and the calibration tables (default 10); "
         "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
+    )
+    val.add_argument(
+        "--eval-month",
+        metavar="YYYY-MM",
+        help="the Lichess source month of --data, for the leakage guard (task 0112); "
+        "if omitted it is inferred from the dataset path. When it equals a model's "
+        "training month (e.g. wdl-a's 2016-05) the run is memorization, not held-out "
+        "evidence: validate warns loudly (or refuses, with --strict)",
+    )
+    val.add_argument(
+        "--strict",
+        action="store_true",
+        help="refuse the run (nonzero exit) instead of merely warning when the leakage "
+        "guard (task 0112) finds the eval month overlaps a model's training month",
     )
     val.add_argument(
         "--calibration",
