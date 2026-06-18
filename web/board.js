@@ -77,7 +77,9 @@
         if (dests[name]) { sq.classList.add("dest"); if (piece) sq.classList.add("capture"); }
         if (piece) {
           var span = document.createElement("span");
-          span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
+          // t-<type> lets CSS normalise per-glyph size (the font draws ♚/♞ a size off)
+          span.className = "piece t-" + piece.toLowerCase() +
+            " " + (piece === piece.toUpperCase() ? "white" : "black");
           span.textContent = PIECES[piece];
           if (opts.draggable && opts.draggable(name)) {
             span.draggable = true;
