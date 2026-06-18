@@ -23,8 +23,7 @@ jobs:
       # `maia2`/`plots` stay out so CI never pulls torch/matplotlib for the smoke run.
       - name: Install
         run: pip install -e ".[dev,data]"
-      # Tests live in tests/, plus the isolated baseline/, overlay/, and web/ suites.
-      # web/ holds both pytest files (test_demo.py, test_build_demo.py, test_import_game.py
-      # — collected here) and node JS tests (run separately below).
+      # Tests live in tests/, plus the isolated baseline/, overlay/, and web/ suites
+      # (web/ holds test_import_game.py — the Lichess game-import tooling).
       - name: Run tests
         run: pytest tests baseline overlay web -q

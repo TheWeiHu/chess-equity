@@ -188,7 +188,8 @@ main {
 
 /* ---- chart ---- */
 .chart-block { margin-bottom: 0; }
-.chart-block figcaption { font-size: .88rem; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+.chart-block figcaption { font-size: .88rem; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: .6rem; }
+.chart-progress { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend { display: inline-flex; gap: .7rem; }
 .key { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; }
 .key::before { content: ""; width: 14px; height: 3px; border-radius: 2px; }

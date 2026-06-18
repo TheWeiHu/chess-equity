@@ -58,6 +58,71 @@
     renderBars();
     renderStatus();
     renderMoves();
+    renderChart();
+  }
+
+  // ---- across-the-game chart (objective cp vs calibrated equity, White win%) ----
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  function hasFresh(n) { return n.resp && n.resp._we === state.we && n.resp._be === state.be; }
+
+  function renderChart() {
+    var svg = $("chart"); if (!svg) return;
+    var n = state.line.length, W = 480, H = 150, pad = 22;
+    var innerW = W - 2 * pad, innerH = H - 2 * pad;
+    function xFor(i) { return n <= 1 ? pad + innerW / 2 : pad + (i / (n - 1)) * innerW; }
+    function yFor(p) { return pad + (1 - p / 100) * innerH; }
+    var eq = [], cp = [], dots = [];
+    state.line.forEach(function (nd, i) {
+      if (!hasFresh(nd)) return;
+      var e = nd.resp.equity_white, c = cpToWhite(nd.resp.cp) * 100;
+      eq.push(xFor(i) + "," + yFor(e)); cp.push(xFor(i) + "," + yFor(c));
+      dots.push({ i: i, x: xFor(i), y: yFor(e), e: e, c: c, san: nd.san });
+    });
+    svg.innerHTML = "";
+    svg.appendChild(svgEl("line", { x1: pad, y1: yFor(50), x2: W - pad, y2: yFor(50), class: "chart-mid" }));
+    var cx = xFor(state.ply);
+    svg.appendChild(svgEl("line", { x1: cx, y1: pad, x2: cx, y2: H - pad, class: "chart-cursor" }));
+    if (cp.length) svg.appendChild(svgEl("polyline", { points: cp.join(" "), class: "chart-cp" }));
+    if (eq.length) svg.appendChild(svgEl("polyline", { points: eq.join(" "), class: "chart-eq" }));
+    dots.forEach(function (d) {
+      var dot = svgEl("circle", { cx: d.x, cy: d.y, r: d.i === state.ply ? 4 : 2, class: "chart-dot" + (d.i === state.ply ? " current" : "") });
+      var t = svgEl("title", {});
+      t.textContent = (d.i === 0 ? "start" : d.san) + ": equity " + Math.round(d.e) + "% · cp-bar " + Math.round(d.c) + "%";
+      dot.appendChild(t);
+      dot.addEventListener("click", function () { goPly(d.i); });
+      svg.appendChild(dot);
+    });
+  }
+
+  // Progressively evaluate every ply in the background so the chart fills in over the
+  // whole game. A generation token cancels the run when the game or ratings change.
+  var fillGen = 0;
+  function startFill() {
+    var gen = ++fillGen, i = 0;
+    function step() {
+      if (gen !== fillGen) return;
+      while (i < state.line.length && hasFresh(state.line[i])) i++;
+      updateProgress();
+      if (i >= state.line.length) return;
+      var p = i, nd = state.line[p];
+      postPlay({ fen: nd.fen }, function (j, ok) {
+        if (gen !== fillGen) return;
+        if (ok) { j._we = state.we; j._be = state.be; nd.resp = j; renderChart(); if (state.ply === p) { renderBars(); renderStatus(); } }
+        i = p + 1; setTimeout(step, 0);
+      });
+    }
+    step();
+  }
+  function updateProgress() {
+    var el = $("chart-progress"); if (!el) return;
+    var done = state.line.filter(hasFresh).length, total = state.line.length;
+    el.textContent = done < total ? "charting " + done + "/" + total + "…" : "";
   }
 
   function renderControls() {
@@ -269,7 +334,7 @@
     state.line = [{ fen: START, san: "(start)", last: null, resp: null }];
     state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
-    renderPlayers(); goPly(0);
+    renderPlayers(); goPly(0); startFill();
   }
 
   function loadGame(id) {
@@ -282,7 +347,7 @@
       state.branched = false;
       state.ply = 0; state.sel = null;
       state.meta = { name: g.name, white: g.white, black: g.black, year: g.year };
-      renderPlayers(); goPly(0);
+      renderPlayers(); goPly(0); startFill();
     });
   }
 
@@ -290,7 +355,7 @@
     state.line = [{ fen: fen, san: "(start)", last: null, resp: null }];
     state.ply = 0; state.sel = null; state.meta = null; state.branched = false;
     $("game-select").value = "";
-    renderPlayers(); goPly(0);
+    renderPlayers(); goPly(0); startFill();
   }
 
   function postGet(url, cb) {
@@ -320,7 +385,8 @@
       el.addEventListener("input", function () {
         state[key] = parseInt(el.value, 10);
         $(outId).textContent = el.value;
-        ensureEval(state.ply);   // equity is rating-conditioned → re-score this position
+        ensureEval(state.ply);   // re-score the current position now…
+        startFill();             // …and re-chart the whole game at the new ratings
       });
     }
     slider("white-elo", "white-elo-out", "we");
@@ -349,4 +415,5 @@
   loadLibrary();
   renderPlayers();
   goPly(0);   // start position, evaluated live
+  startFill();
 })();

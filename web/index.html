@@ -84,6 +84,16 @@
         <p id="divergence" class="divergence" hidden></p>
       </div>
 
+      <figure class="card chart-block">
+        <figcaption>Across the game — White win%
+          <span class="legend"><span class="key eq">equity</span>
+            <span class="key cp">centipawn</span></span>
+          <span id="chart-progress" class="chart-progress"></span>
+        </figcaption>
+        <svg id="chart" class="chart" viewBox="0 0 480 150" role="img"
+             aria-label="equity vs centipawn win-percent across the game"></svg>
+      </figure>
+
       <div class="card fen-card">
         <label for="fen">Position (FEN)</label>
         <div class="fen-row">
