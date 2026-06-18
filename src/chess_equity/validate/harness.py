@@ -27,10 +27,12 @@ from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
 from chess_equity.types import lichess_win_percent
 from chess_equity.validate.bootstrap import (
+    METRIC_TERMS,
     DeltaCI,
     EceCI,
     compare_predictions,
     ece_bootstrap_ci,
+    paired_bootstrap_ci,
 )
 from chess_equity.validate.metrics import (
     brier_score,
@@ -741,5 +743,183 @@ def format_head_to_head(h2h: HeadToHead) -> str:
         out.append(
             f"| {d.slicer} | {d.value} | {d.n} | "
             f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
+        )
+    return "\n".join(out)
+
+
+# --- per-slice significance: a confidence interval on each head-to-head delta -------
+#
+# The head-to-head table above ranks the slices by a *point* delta — but the wedge's
+# actual thesis ("equity wins in the off-2300 bands and under time pressure") lives in
+# those per-slice numbers, and a bare point estimate can't tell a real band-level win
+# from small-n noise (task 0068). The overall significance section (task 0060) only puts
+# a CI on the *aggregate* delta. This section closes the gap: it reuses the same paired
+# bootstrap (:func:`~chess_equity.validate.bootstrap.paired_bootstrap_ci`) on the per-row
+# metric terms *restricted to each slice*, so every rating / clock / phase band gets its
+# own 95% CI and a `equity` / `baseline` / `inconclusive` verdict. Slices below a small-n
+# floor are labelled `small-n` and get no CI, so a 3-row slice can't read as significant.
+
+# Default minimum rows for a per-slice bootstrap CI: below this a resampled CI is too
+# unstable to trust, so the slice is reported as `small-n` rather than significant.
+H2H_SLICE_MIN_N = 30
+
+
+@dataclass(frozen=True)
+class SliceDeltaCI:
+    """One slice's head-to-head delta with a paired-bootstrap confidence interval (0068).
+
+    ``delta`` keeps the head-to-head sign convention — ``baseline`` metric minus ``model``
+    metric on that slice's rows, so **Δ > 0 means equity wins**. ``lo``/``hi`` are the
+    confidence bounds on that delta; they are ``None`` for a below-floor slice (fewer than
+    the floor's rows), where no CI is computed and the verdict is forced to
+    ``inconclusive`` so a tiny slice can never read as significant. ``verdict`` is one of
+    ``equity`` (whole CI above zero — a significant equity win), ``baseline`` (whole CI
+    below zero — baseline significantly better), or ``inconclusive`` (CI straddles zero,
+    or the slice was below the small-n floor — then ``lo``/``hi`` is ``None``).
+    """
+
+    slicer: str
+    value: str
+    n: int
+    delta: float
+    lo: Optional[float]
+    hi: Optional[float]
+    verdict: str
+
+
+@dataclass(frozen=True)
+class HeadToHeadCI:
+    """Per-slice head-to-head deltas with CIs, baseline vs the best challenger (0068)."""
+
+    baseline: str
+    model: str
+    metric: str
+    min_n: int
+    confidence: float
+    n_resamples: int
+    slices: List[SliceDeltaCI]  # every comparable (slicer, value), sorted by delta desc
+
+
+def head_to_head_slice_cis(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline_name: str = "baseline",
+    metric: str = "log_loss",
+    slicers: Dict[str, Callable[[PositionRow], str]] = SLICERS,
+    min_n: int = H2H_SLICE_MIN_N,
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> Optional[HeadToHeadCI]:
+    """Paired-bootstrap CI on the head-to-head ``metric`` delta *within each slice* (0068).
+
+    Picks ``baseline_name`` as the rating-blind reference and the non-baseline predictor
+    with the lowest *overall* ``metric`` as its challenger — the same "best rating-
+    conditioned model" :func:`head_to_head_deltas` ranks against — then, for every slice
+    of every slicer, bootstraps a ``confidence`` CI on ``baseline − model`` using the
+    per-row metric terms restricted to that slice (Δ > 0 = equity wins, matching the
+    head-to-head table). Slices with fewer than ``min_n`` rows are reported as ``small-n``
+    with no CI, so a tiny slice can't read as significant. Returns the slices sorted by Δ
+    descending, or ``None`` when there is no baseline or no challenger to compare against.
+
+    Pure computation; ``seed`` makes the CIs byte-reproducible (each slice gets its own
+    seed offset so the resamples are independent across slices). Raises ``KeyError`` if
+    ``metric`` is not a per-row term metric (only ``log_loss`` / ``brier``).
+    """
+    if baseline_name not in predictors:
+        return None
+    challengers = [n for n in predictors if n != baseline_name]
+    if not challengers:
+        return None
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    term_fn = METRIC_TERMS[metric]
+
+    base_preds = [predictors[baseline_name](r) for r in rows]
+    preds_by_name = {n: [predictors[n](r) for r in rows] for n in challengers}
+    # The challenger with the lowest overall metric (mean of per-row terms); min() keeps
+    # the first on a tie, matching head_to_head_deltas' predictor-order tie-break.
+    def _overall(name: str) -> float:
+        t = term_fn(preds_by_name[name], labels)
+        return sum(t) / len(t)
+
+    best = min(challengers, key=_overall)
+    base_terms = term_fn(base_preds, labels)
+    model_terms = term_fn(preds_by_name[best], labels)
+
+    slice_cis: List[SliceDeltaCI] = []
+    offset = 0
+    for slicer_name, slicer in slicers.items():
+        grouped: Dict[str, List[int]] = {}
+        for i, row in enumerate(rows):
+            grouped.setdefault(slicer(row), []).append(i)
+        for value, idxs in sorted(grouped.items()):
+            n = len(idxs)
+            # baseline − model, in the head-to-head sign convention (Δ > 0 = equity wins).
+            point = sum(base_terms[i] - model_terms[i] for i in idxs) / n
+            if n < min_n:
+                # Below the floor a resampled CI is untrustworthy; report the point delta
+                # but force `inconclusive` (no CI) so a tiny slice can't read significant.
+                slice_cis.append(
+                    SliceDeltaCI(slicer_name, value, n, point, None, None, "inconclusive")
+                )
+                offset += 1
+                continue
+            ci = paired_bootstrap_ci(
+                [model_terms[i] for i in idxs],
+                [base_terms[i] for i in idxs],
+                metric,
+                n_resamples=n_resamples,
+                confidence=confidence,
+                seed=seed + offset,
+            )
+            offset += 1
+            # paired_bootstrap_ci's delta is model − baseline (negative = model wins);
+            # flip it (and swap the bounds) into the head-to-head's baseline − model.
+            lo, hi = -ci.hi, -ci.lo
+            if ci.beats_baseline:
+                verdict = "equity"
+            elif ci.worse_than_baseline:
+                verdict = "baseline"
+            else:
+                verdict = "inconclusive"
+            slice_cis.append(SliceDeltaCI(slicer_name, value, n, point, lo, hi, verdict))
+
+    slice_cis.sort(key=lambda d: d.delta, reverse=True)
+    return HeadToHeadCI(
+        baseline=baseline_name,
+        model=best,
+        metric=metric,
+        min_n=min_n,
+        confidence=confidence,
+        n_resamples=n_resamples,
+        slices=slice_cis,
+    )
+
+
+def format_head_to_head_cis(h2h: HeadToHeadCI) -> str:
+    """Render the per-slice head-to-head CIs as a Markdown table (equity-wins first, 0068)."""
+    conf_pct = round(h2h.confidence * 100)
+    metric_label = h2h.metric.replace("_", "-")
+    out: List[str] = []
+    out.append(
+        f"## Head-to-head significance: per-slice CIs ({h2h.baseline} vs {h2h.model})"
+    )
+    out.append("")
+    out.append(
+        f"Paired bootstrap ({h2h.n_resamples} resamples) on the per-row {metric_label} "
+        f"delta *within each slice*. Δ = `{h2h.baseline}` − `{h2h.model}` "
+        f"(**Δ > 0 = equity wins**); `equity` means the whole {conf_pct}% CI clears zero, "
+        f"so the band-level win is real and not small-n noise. Slices below n={h2h.min_n} "
+        "read `small-n` (too few rows for a trustworthy CI). Sorted by Δ, biggest win first."
+    )
+    out.append("")
+    out.append(f"| slice | value | n | Δ {metric_label} | {conf_pct}% CI | verdict |")
+    out.append("|---|---|--:|--:|:--:|:--:|")
+    for d in h2h.slices:
+        ci_str = f"n<{h2h.min_n}" if d.lo is None else f"[{d.lo:+.4f}, {d.hi:+.4f}]"
+        out.append(
+            f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {d.verdict} |"
         )
     return "\n".join(out)

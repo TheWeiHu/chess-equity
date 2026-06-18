@@ -519,6 +519,26 @@ def _run_validate(args: argparse.Namespace) -> int:
         if ece_section:
             report = report + "\n" + ece_section
 
+    # Per-slice significance: a paired-bootstrap CI on the head-to-head log-loss delta
+    # within each rating / clock / phase slice (task 0068), so the report can tell a real
+    # band-level equity win from small-n noise — the overall CI (0060) can't. Same
+    # --bootstrap budget / seed; needs the baseline plus at least one challenger.
+    if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
+        from chess_equity.validate.harness import (
+            format_head_to_head_cis,
+            head_to_head_slice_cis,
+        )
+
+        h2h_ci = head_to_head_slice_cis(
+            rows,
+            predictors,
+            baseline_name=baseline_name,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+        if h2h_ci is not None and h2h_ci.slices:
+            report = report + "\n" + format_head_to_head_cis(h2h_ci)
+
     if args.out:
         from pathlib import Path
 
