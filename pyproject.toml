@@ -56,4 +56,8 @@ build-backend = "hatchling.build"
 packages = ["src/chess_equity"]
 
 [tool.pytest.ini_options]
+# Front-load this worktree's own src so a stray editable install elsewhere
+# (e.g. a sibling nightshift worktree) can never shadow the code under test —
+# otherwise pytest imports a stale chess_equity and new symbols look "missing".
+pythonpath = ["src"]
 testpaths = ["tests"]
