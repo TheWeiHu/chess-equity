@@ -11,6 +11,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 # Needed only for building/loading full-scale datasets: decompressing Lichess .zst
 # dumps and reading/writing Parquet (+ pandas frames). The CSV path and the parser

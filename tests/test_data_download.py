@@ -121,6 +121,7 @@ def test_cli_build_month_downloads_then_builds(tmp_path, monkeypatch):
         return sample  # stand in for the streamed dump (plain PGN, no zstandard needed)
 
     monkeypatch.setattr(dl, "download_month", fake_download)
+    monkeypatch.setattr(dl, "data_extra_available", lambda: True)
     out_dir = tmp_path / "out"
     rc = cli.main(["data", "build", "--month", "2026-05", "--out", str(out_dir)])
     assert rc == 0

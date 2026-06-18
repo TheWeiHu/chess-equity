@@ -9,7 +9,10 @@ Scope (deliberately narrow, per the 0045 follow-up): extras only, by exact name.
 NOT grep prose for `brew install` / binary references — that's too brittle to gate on.
 """
 import re
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # 3.9/3.10 — tomli backport (dev dep)
+    import tomli as tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
