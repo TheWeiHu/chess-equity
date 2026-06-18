@@ -58,6 +58,10 @@ def headline_namespace(
         ece_bins=10,
         calibration=None,
         plots=None,
+        # The headline run produces the thesis *report*; the machine-checkable PASS/FAIL
+        # gate (task 0115) is a separate opt-in concern, so it stays off here. _run_validate
+        # reads args.gate, so the attribute must exist on the Namespace.
+        gate=False,
     )
 
 
