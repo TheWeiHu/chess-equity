@@ -163,20 +163,31 @@
   }
 
   function renderMoves() {
-    var ol = $("moves");
-    ol.innerHTML = "";
-    state.line.forEach(function (nd, i) {
-      if (i === 0) return;
-      var li = document.createElement("li");
-      var label = document.createElement("span");
-      label.textContent = (i % 2 === 1 ? Math.ceil(i / 2) + ". " : "") + nd.san;
-      li.appendChild(label);
-      if (i === state.ply) li.classList.add("current");
-      li.addEventListener("click", function () { goPly(i); });
-      ol.appendChild(li);
-    });
-    var cur = ol.querySelector("li.current");
-    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+    var box = $("moves");
+    box.innerHTML = "";
+    // one row per full move: number, White ply, Black ply — a vertical scroller.
+    for (var i = 1; i < state.line.length; i += 2) {
+      var row = document.createElement("div");
+      row.className = "mv-row";
+      var num = document.createElement("span");
+      num.className = "mv-num";
+      num.textContent = Math.ceil(i / 2) + ".";
+      row.appendChild(num);
+      [i, i + 1].forEach(function (p) {
+        var cell = document.createElement("span");
+        if (p < state.line.length) {
+          cell.className = "mv-ply" + (p === state.ply ? " current" : "");
+          cell.textContent = state.line[p].san;
+          cell.addEventListener("click", function () { goPly(p); });
+        } else {
+          cell.className = "mv-ply empty";
+        }
+        row.appendChild(cell);
+      });
+      box.appendChild(row);
+    }
+    var cur = box.querySelector(".mv-ply.current");
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
   }
 
   function renderPlayers() {
