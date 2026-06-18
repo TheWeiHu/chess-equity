@@ -105,6 +105,7 @@ with its install command, which tasks need it, and whether CI needs it (it never
 uv run chess-equity eval                                    # startpos, 1500 vs 1500
 uv run chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600
 uv run chess-equity eval --pgn game.pgn                     # annotate every move
+uv run chess-equity eval "<fen>" --json                     # structured payload (one object; --pgn -> one per ply)
 uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
 uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move equity
 uv run chess-equity eval --white-profile magnuscarlsen      # personalize to a Lichess player
