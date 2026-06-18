@@ -66,7 +66,15 @@ function resolved(val) {
 const sandbox = {
   window: { location: { search: "" }, ChessEquityDemo: null },
   document,
-  fetch() { return resolved({ json: () => game }); },
+  // app.js fetches games.json (the catalog) at load before fetching the game itself.
+  // Return a one-entry manifest for it so setupGamePicker populates the dropdown
+  // instead of hitting its "no catalog" hide-path; any other URL resolves to the game.
+  fetch(url) {
+    if (url === "games.json") {
+      return resolved({ ok: true, json: () => ({ games: [{ file: "demo-game.json", name: "Demo" }] }) });
+    }
+    return resolved({ json: () => game });
+  },
   URLSearchParams,
   Math,
   parseInt,
@@ -124,6 +132,27 @@ check("mousemove repositions the floating preview", () => {
   assert.strictEqual(preview.style.top, "96px");
 });
 
+check("preview flips to the other side of the cursor near the right/bottom edge", () => {
+  // 200x200 viewport, 160x160 preview, 16px offset. At cursor (190,190) the default
+  // cursor+offset would put it at 206 — off-screen — so it must flip to the left/above:
+  // 190 - 16 - 160 = 14 (>= the 16px min? no -> clamped to 16).
+  const pos = sandbox.window.ChessEquityDemo.clampPreviewPos(190, 190, 160, 160, 200, 200, 16);
+  assert.ok(pos.left + 160 <= 200, "preview right edge must stay within the viewport");
+  assert.ok(pos.top + 160 <= 200, "preview bottom edge must stay within the viewport");
+  assert.ok(pos.left >= 16 && pos.top >= 16, "preview must not spill off the top/left");
+});
+
+check("preview keeps the plain cursor+offset placement when there is room", () => {
+  // With room (or no viewport measurement), it stays at cursor + 16 — the old behaviour.
+  // (Compare fields, not the object: it crosses the vm realm so its prototype differs.)
+  const roomy = sandbox.window.ChessEquityDemo.clampPreviewPos(100, 80, 160, 160, 1000, 800, 16);
+  assert.strictEqual(roomy.left, 116);
+  assert.strictEqual(roomy.top, 96);
+  const unmeasured = sandbox.window.ChessEquityDemo.clampPreviewPos(100, 80, 0, 0, 0, 0, 16);
+  assert.strictEqual(unmeasured.left, 116);
+  assert.strictEqual(unmeasured.top, 96);
+});
+
 check("mouseleave hides the preview again", () => {
   dots[5].dispatchEvent({ type: "mouseleave" });
   assert.strictEqual(preview.hidden, true);
@@ -137,6 +166,43 @@ check("click-scrub still works (main board ply changes, unchanged behaviour)", (
   const shown = mainBoard.children.filter((sq) => sq.children.length > 0).length;
   assert.strictEqual(shown, expected, "main board reflects clicked ply");
 });
+
+// ---- touch + keyboard parity (task 0101) -----------------------------------
+
+check("tapping a dot pops the preview at the tap point (touch path)", () => {
+  hidePreview_via_mouseleave();
+  // A touch-generated click carries clientX/clientY; the preview should show + position.
+  dots[6].dispatchEvent({ type: "click", clientX: 200, clientY: 120 });
+  assert.strictEqual(preview.hidden, false, "tap should reveal the preview");
+  assert.strictEqual(previewBoard.children.length, 64, "preview board renders on tap");
+  assert.strictEqual(preview.style.left, "216px", "preview positioned at the tap x+16");
+  assert.strictEqual(preview.style.top, "136px", "preview positioned at the tap y+16");
+});
+
+check("chart dots are keyboard-focusable (tabindex=0)", () => {
+  assert.strictEqual(dots[6].getAttribute("tabindex"), "0");
+});
+
+check("focusing a dot shows that ply's preview (keyboard path)", () => {
+  hidePreview_via_mouseleave();
+  dots[4].dispatchEvent({ type: "focus" });
+  assert.strictEqual(preview.hidden, false, "focus should reveal the preview");
+  const expectedPieces = game.moves[4].fen.split(" ")[0].replace(/[^a-zA-Z]/g, "").length;
+  const shownPieces = previewBoard.children.filter((sq) => sq.children.length > 0).length;
+  assert.strictEqual(shownPieces, expectedPieces, "focused dot previews its own ply");
+});
+
+check("blur hides the preview (keyboard dismiss)", () => {
+  dots[4].dispatchEvent({ type: "focus" });
+  dots[4].dispatchEvent({ type: "blur" });
+  assert.strictEqual(preview.hidden, true, "blur should dismiss the preview");
+});
+
+// A tiny helper: reset the preview to hidden between cases via the public mouseleave path
+// (the fake DOM has no global listeners, so we reset through a dot we already have).
+function hidePreview_via_mouseleave() {
+  dots[6].dispatchEvent({ type: "mouseleave" });
+}
 
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("ok - hover board preview");

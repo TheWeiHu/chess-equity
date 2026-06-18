@@ -200,20 +200,19 @@ class Maia2Equity(EquityModel):
         self.draw_scale = draw_scale
 
     def evaluate(self, fen: str, white_elo: int, black_elo: int) -> Equity:
-        is_white = white_to_move(fen)
-        # Terminal positions have no legal moves, which Maia-2's preprocessing can't encode
-        # (it builds an empty move-index tensor and raises). The outcome is already settled,
-        # so read the equity straight off the rules instead of calling the model: a
-        # checkmated side-to-move has lost (equity 0); any other no-move position
-        # (stalemate / insufficient material) is a draw (equity 0.5).
         board = chess.Board(fen)
-        if not any(board.legal_moves):
-            equity = 0.0 if board.is_checkmate() else 0.5
-            wdl = wdl_from_equity(equity, draw_scale=self.draw_scale)
-            return Equity.from_side_to_move(wdl, white_to_move=is_white, source=self.SOURCE)
-        elo_self, elo_oppo = (white_elo, black_elo) if is_white else (black_elo, white_elo)
-        _, win_prob = self._backend(fen, elo_self, elo_oppo)
-        wdl = wdl_from_equity(win_prob, draw_scale=self.draw_scale)
+        is_white = board.turn == chess.WHITE
+        # Maia-2's value head needs at least one legal move; a terminal position
+        # (no legal moves) would crash its preprocessing. Resolve those directly
+        # and decisively: the side to move is mated (a loss) or stalemated (a draw).
+        if board.is_checkmate():
+            wdl = WDL(p_win=0.0, p_draw=0.0, p_loss=1.0)
+        elif board.is_stalemate():
+            wdl = WDL(p_win=0.0, p_draw=1.0, p_loss=0.0)
+        else:
+            elo_self, elo_oppo = (white_elo, black_elo) if is_white else (black_elo, white_elo)
+            _, win_prob = self._backend(fen, elo_self, elo_oppo)
+            wdl = wdl_from_equity(win_prob, draw_scale=self.draw_scale)
         return Equity.from_side_to_move(
             wdl,
             white_to_move=is_white,

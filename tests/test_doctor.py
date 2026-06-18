@@ -65,3 +65,33 @@ def test_doctor_nonzero_when_one_injected_probe_raises():
 
     rc = doctor(out=io.StringIO(), probes={"stockfish": lambda: "ok", "maia2": broken})
     assert rc == 1
+
+
+def test_doctor_engines_filter_checks_only_the_named_engine():
+    # A binary-only CI runner has Stockfish but no torch/Maia-2: restricting to
+    # stockfish must skip the (would-fail) maia2 probe and exit 0.
+    def maia_missing():
+        raise RuntimeError("pip install maia2")
+
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok", "maia2": maia_missing},
+        engines=["stockfish"],
+    )
+    assert rc == 0
+    text = out.getvalue()
+    assert "[PASS] stockfish" in text
+    assert "maia2" not in text
+    assert "1/1 engines OK" in text
+
+
+def test_doctor_engines_none_checks_all():
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok", "maia2": lambda: "ok"},
+        engines=None,
+    )
+    assert rc == 0
+    assert out.getvalue().count("[PASS]") == 2

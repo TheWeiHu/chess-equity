@@ -21,14 +21,20 @@ Three pieces compose:
   its tracker, and emits events. Survives transient feed errors (reconnects).
 
 Equity comes from any :class:`~chess_equity.adapters.EquityModel`; today that is the
-placeholder baseline, but Maia-2 (task 0005) drops in unchanged. Clock is parsed and
-carried on every event so a clock-aware model (task 0015) can use it later — this
-module does not yet feed the clock *into* the equity computation.
+placeholder baseline, but Maia-2 (task 0005) drops in unchanged. The clock is parsed,
+carried on every event, **and** (task 0097) fed into the emitted bar: when a game has
+``[%clk]`` tags, :class:`GameTracker` warps the published ``equity`` by the side-to-move's
+time pressure via :func:`chess_equity.clock.clock_adjusted_white_equity`, so a won
+position with seconds left reads as less safe on the live overlay. Gate with
+``clock_aware`` (CLI ``--clock-aware`` / ``--no-clock-aware``); it is a no-op when no
+clocks are present or for correspondence time controls.
 """
 
 from __future__ import annotations
 
+import http.server
 import io
+import json
 import re
 import time
 import urllib.error
@@ -39,7 +45,9 @@ from typing import Callable, Dict, Iterator, List, Optional
 import chess
 import chess.pgn
 
-from chess_equity.adapters import EquityModel
+from chess_equity.adapters import EquityModel, ObjectiveEngine
+from chess_equity.clock import clock_adjusted_white_equity
+from chess_equity.data.schema import tc_bucket
 
 # --------------------------------------------------------------------------- #
 # Event + move grading
@@ -260,11 +268,23 @@ class GameTracker:
         *,
         white_elo: Optional[int],
         black_elo: Optional[int],
+        clock_aware: bool = True,
+        engine: Optional[ObjectiveEngine] = None,
     ) -> None:
         self.game_id = game_id
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
+        self.clock_aware = clock_aware
+        # Time-control bucket for the clock warp, read once from the PGN's TimeControl
+        # header on first ingest. None until then; missing/unknown -> "correspondence",
+        # whose flag multiplier is 0, so the warp is a safe no-op.
+        self.tc_bucket: Optional[str] = None
+        # Optional objective engine to fill the centipawn eval when the equity model
+        # exposes none (e.g. Maia-2's win-prob has no cp), so the overlay's classic
+        # ghost tick + human-edge divergence badge work on a maia2 feed (task 0103).
+        # Only consulted when ``equity.cp is None``; models that carry cp are untouched.
+        self.engine = engine
         self.emitted_ply = 0
 
     def _elos(self) -> tuple[int, int]:
@@ -283,6 +303,8 @@ class GameTracker:
             self.white_elo = _parse_elo(game.headers, "WhiteElo")
         if self.black_elo is None:
             self.black_elo = _parse_elo(game.headers, "BlackElo")
+        if self.tc_bucket is None:
+            self.tc_bucket = tc_bucket(game.headers.get("TimeControl", "-"))
 
         nodes = list(game.mainline())
         resync = False
@@ -303,6 +325,9 @@ class GameTracker:
 
         for ply, node in enumerate(nodes, start=1):
             mover_white = node.parent.board().turn == chess.WHITE
+            # The mover's clock *before* this move — the time pressure they were under
+            # while facing the prior position (the "before" bar for the clock-aware delta).
+            prev_mover_clock = white_clock if mover_white else black_clock
             clock = node.clock()
             if clock is not None:
                 if mover_white:
@@ -323,18 +348,31 @@ class GameTracker:
             equity = self.model.evaluate(fen, white_elo, black_elo)
             compute_ms = (time.perf_counter() - t0) * 1000.0
             equity_white = equity.equity_white
-            # ``equity.cp`` is side-to-move POV; ``fen`` is post-move, so the side to
-            # move is the mover's opponent. Flip to White POV to match equity_white.
-            cp = (
-                None
-                if equity.cp is None
-                else (equity.cp if not mover_white else -equity.cp)
+            cp = self._white_pov_cp(equity, fen, mover_white)
+
+            # The published bar reflects the side-to-move's time pressure (task 0097): in
+            # the post-move FEN the side to move is the mover's opponent, so warp by their
+            # remaining clock. A no-op without clocks / for correspondence / clock-blind.
+            bar_equity = self._clock_warp(
+                equity_white, white_clock, black_clock, stm_white=not mover_white
             )
 
-            # Δequity from the mover's POV: White reads equity_white directly, Black
-            # reads its complement.
-            after = equity_white if mover_white else 100.0 - equity_white
-            before = prev_equity_white if mover_white else 100.0 - prev_equity_white
+            # Δequity from the mover's POV (task 0106): grade the swing in *practical*
+            # win chance, so a low-clock survival reads as the save it is rather than the
+            # raw positional dip. Both bars are clock-warped at their own ply/clock state —
+            # the "before" position faced the mover (warp by their pre-move clock), the
+            # "after" position faces the opponent (the already-warped published bar). When
+            # clock-blind (no tc_bucket / no clocks / clock_aware off) ``_clock_warp`` is a
+            # no-op, so this degrades to the plain raw-equity delta. White reads the
+            # White-POV bar directly; Black reads its complement.
+            before_bar_white = self._clock_warp(
+                prev_equity_white,
+                prev_mover_clock if mover_white else white_clock,
+                black_clock if mover_white else prev_mover_clock,
+                stm_white=mover_white,
+            )
+            after = bar_equity if mover_white else 100.0 - bar_equity
+            before = before_bar_white if mover_white else 100.0 - before_bar_white
             delta = after - before
 
             events.append(
@@ -349,7 +387,7 @@ class GameTracker:
                     black_clock=black_clock,
                     white_elo=self.white_elo,
                     black_elo=self.black_elo,
-                    equity=equity_white,
+                    equity=bar_equity,
                     delta_equity=delta,
                     last_move_grade=grade_delta(delta),
                     source=self.model.__class__.__name__,
@@ -365,6 +403,48 @@ class GameTracker:
 
     def _equity_white(self, fen: str, white_elo: int, black_elo: int) -> float:
         return self.model.evaluate(fen, white_elo, black_elo).equity_white
+
+    def _clock_warp(
+        self,
+        equity_white: float,
+        white_clock: Optional[float],
+        black_clock: Optional[float],
+        *,
+        stm_white: bool,
+    ) -> float:
+        """Warp a White-POV bar (in [0, 100]%) by the side-to-move's time pressure.
+
+        Returns ``equity_white`` unchanged when clock-awareness is off, no tc_bucket has
+        been read yet, or the side to move has no recorded clock — so clock-blind feeds
+        and correspondence games pass through untouched. Otherwise scales through
+        :func:`chess_equity.clock.clock_adjusted_white_equity` (which works in [0, 1]).
+        """
+        if not self.clock_aware or self.tc_bucket is None:
+            return equity_white
+        stm_clock = white_clock if stm_white else black_clock
+        if stm_clock is None:
+            return equity_white
+        adjusted = clock_adjusted_white_equity(
+            equity_white / 100.0, stm_clock, self.tc_bucket, white_to_move=stm_white
+        )
+        return adjusted * 100.0
+
+    def _white_pov_cp(self, equity, fen: str, mover_white: bool) -> Optional[float]:
+        """The classic centipawn eval for ``fen``, from White's POV (matches equity).
+
+        Prefer the equity model's own ``cp``; when it has none (e.g. Maia-2's win-prob
+        model) fall back to the optional objective ``engine`` so the overlay's cp ghost
+        tick + divergence badge still work (task 0103). Both the model cp and the engine
+        eval are *side-to-move* POV of the post-move ``fen`` (whose side to move is the
+        mover's opponent), so the flip to White POV is the same for either source. A mate
+        (engine returns ``cp=None``) stays ``None`` — the overlay then hides the tick.
+        """
+        cp_stm = equity.cp
+        if cp_stm is None and self.engine is not None:
+            cp_stm = self.engine.eval(fen).cp
+        if cp_stm is None:
+            return None
+        return cp_stm if not mover_white else -cp_stm
 
 
 # --------------------------------------------------------------------------- #
@@ -526,11 +606,17 @@ class BroadcastIngestor:
         *,
         white_elo: Optional[int] = None,
         black_elo: Optional[int] = None,
+        clock_aware: bool = True,
+        engine: Optional[ObjectiveEngine] = None,
     ) -> None:
         self.feed = feed
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
+        self.clock_aware = clock_aware
+        # Objective engine for the cp fallback on cp-less models (task 0103); threaded
+        # to every per-game tracker.
+        self.engine = engine
         self._trackers: Dict[str, GameTracker] = {}
         self.stats = IngestStats()
         # Fired once per game, the first time it is seen, with its :class:`GameEvent`
@@ -548,6 +634,8 @@ class BroadcastIngestor:
                 self.model,
                 white_elo=self.white_elo,
                 black_elo=self.black_elo,
+                clock_aware=self.clock_aware,
+                engine=self.engine,
             )
             self._trackers[game_id] = tracker
         return tracker
@@ -582,13 +670,20 @@ class BroadcastIngestor:
         max_polls: Optional[int] = None,
         max_idle_polls: Optional[int] = 1,
         sleep: Callable[[float], None] = time.sleep,
-    ) -> Iterator[MoveEvent]:
+        heartbeat: bool = False,
+    ) -> Iterator[Optional[MoveEvent]]:
         """Yield events as they arrive. Generator so callers control the sink.
 
         ``interval`` seconds between polls; ``max_polls`` caps total polls (None =
         unbounded, for a true live stream); ``max_idle_polls`` stops after that many
         consecutive polls produced no PGN (so a finished replay or a dead round ends).
         ``sleep`` is injectable for tests.
+
+        With ``heartbeat=True`` an idle poll that does *not* end the stream yields
+        ``None`` — a tick the SSE bridge turns into a keep-alive comment so an
+        early-tuned-in connection (a round that hasn't started) isn't dropped. Default
+        ``False`` keeps the historical ``Iterator[MoveEvent]`` contract for the JSONL
+        path and existing callers.
         """
         polls = 0
         idle = 0
@@ -608,11 +703,15 @@ class BroadcastIngestor:
                     # Keep retrying live feeds; only give up if we never connected.
                     if not self._trackers:
                         break
+                if heartbeat:
+                    yield None
                 continue
             if not snapshot:
                 idle += 1
                 if max_idle_polls is not None and idle >= max_idle_polls:
                     break
+                if heartbeat:
+                    yield None
                 continue
             idle = 0
             for event in self.ingest_snapshot(snapshot):
@@ -634,5 +733,141 @@ class BroadcastIngestor:
             max_idle_polls=max_idle_polls,
             sleep=sleep,
         ):
-            emit(event)
+            if event is not None:  # heartbeat is off here, but stay type-safe
+                emit(event)
         return self.stats
+
+
+# --------------------------------------------------------------------------- #
+# Live SSE bridge: a round straight into the overlay (task 0094)
+# --------------------------------------------------------------------------- #
+
+
+# Sentinel yielded by overlay_events on an idle poll — the SSE bridge turns it into a
+# keep-alive comment (": ...\n\n"), which EventSource ignores, so an idle connection
+# (a round that hasn't started) stays open instead of being dropped by a proxy/OBS.
+HEARTBEAT = object()
+
+
+def sse_frame(event: Dict[str, object]) -> str:
+    """Format one overlay event as a Server-Sent-Events ``data:`` frame.
+
+    Matches what ``overlay/feed.js`` (``EventSource.onmessage``) parses: a single
+    ``data: <json>`` line terminated by a blank line.
+    """
+    return "data: " + json.dumps(event) + "\n\n"
+
+
+def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[object]:
+    """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
+
+    Yields overlay-shaped dicts in the order ``overlay.js`` expects: a one-time
+    ``game`` event (player name-plates) before each game's first ``position`` event,
+    then a ``position`` event per move. This is :meth:`BroadcastIngestor.stream`
+    re-serialized through :meth:`MoveEvent.to_overlay_event` /
+    :meth:`GameEvent.to_overlay` — the same bridge the JSONL path uses, but as a
+    generator the SSE server can write frame-by-frame as moves arrive.
+
+    ``stream_kwargs`` pass straight through to ``stream`` (``interval`` / ``max_polls``
+    / ``max_idle_polls`` / ``sleep`` / ``heartbeat``). With ``heartbeat=True`` an idle
+    poll yields the :data:`HEARTBEAT` sentinel instead of a ``position`` dict.
+    """
+    queued: List[Dict[str, object]] = []
+    ingestor.on_game = lambda game: queued.append(game.to_overlay())
+    for move_event in ingestor.stream(**stream_kwargs):
+        if move_event is None:  # idle-poll heartbeat tick from stream()
+            yield HEARTBEAT
+            continue
+        while queued:  # game announcements fire during the poll, before their moves
+            yield queued.pop(0)
+        yield move_event.to_overlay_event()
+    while queued:
+        yield queued.pop(0)
+
+
+def _sse_handler(event_source: Callable[[], Iterator[object]], directory: Optional[str]):
+    """Build a request handler that serves ``/sse`` as a live event stream.
+
+    ``event_source`` is a zero-arg factory returning a *fresh* iterator of overlay
+    events per connection (so each browser source replays/streams from the start).
+    When ``directory`` is set the handler also serves the overlay's static files, so
+    ``http://host:port/?src=/sse`` is a one-command overlay; otherwise only ``/sse``
+    is served.
+    """
+
+    class _Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            if directory is not None:
+                super().__init__(*args, directory=directory, **kwargs)
+            else:
+                super().__init__(*args, **kwargs)
+
+        def do_GET(self):  # noqa: N802 (stdlib API)
+            if self.path.split("?")[0] == "/sse":
+                return self._stream_sse()
+            if directory is None:
+                self.send_error(404, "only /sse is served")
+                return None
+            return super().do_GET()
+
+        def _stream_sse(self) -> None:
+            # One stream per connection; close the socket when it ends (a finite replay
+            # terminates, a live feed runs until the round ends) so clients see EOF.
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                for event in event_source():
+                    if isinstance(event, dict):
+                        self.wfile.write(sse_frame(event).encode("utf-8"))
+                    else:
+                        # HEARTBEAT sentinel → an SSE comment: ignored by EventSource,
+                        # just keeps the idle socket warm.
+                        self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the overlay / OBS closed the source — normal.
+
+        def log_message(self, format, *args):  # quieter console
+            pass
+
+    return _Handler
+
+
+def make_sse_server(
+    event_source: Callable[[], Iterator[object]],
+    *,
+    port: int = 0,
+    host: str = "127.0.0.1",
+    directory: Optional[str] = None,
+) -> "http.server.ThreadingHTTPServer":
+    """Build (but don't start) a threaded SSE server. ``port=0`` lets the OS pick one
+    (the bound port is then ``server.server_address[1]`` — handy for tests)."""
+    return http.server.ThreadingHTTPServer((host, port), _sse_handler(event_source, directory))
+
+
+def serve_sse(
+    event_source: Callable[[], Iterator[object]],
+    *,
+    port: int,
+    host: str = "127.0.0.1",
+    directory: Optional[str] = None,
+    log: Callable[[str], None] = print,
+) -> None:
+    """Serve overlay events as SSE on ``host:port`` until interrupted (Ctrl-C)."""
+    httpd = make_sse_server(event_source, port=port, host=host, directory=directory)
+    bound = httpd.server_address[1]
+    log(f"chess-equity SSE bridge: http://localhost:{bound}/sse")
+    if directory is not None:
+        log(f"  one-command overlay : http://localhost:{bound}/?src=/sse")
+    log("Ctrl-C to stop.")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()

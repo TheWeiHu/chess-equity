@@ -107,6 +107,7 @@ main {
 
 footer { padding: 0 1.5rem 2rem; color: var(--muted); font-size: 0.8rem; }
 footer code { color: var(--ink); }
+footer .caveat { border-left: 2px solid var(--muted); padding-left: 0.6rem; opacity: 0.9; }
 
 /* across-the-game chart (task 0038) */
 .chart-block { margin: 0.4rem 0 0.2rem; }

@@ -121,7 +121,28 @@ def test_cli_build_month_downloads_then_builds(tmp_path, monkeypatch):
         return sample  # stand in for the streamed dump (plain PGN, no zstandard needed)
 
     monkeypatch.setattr(dl, "download_month", fake_download)
+    monkeypatch.setattr(dl, "data_extra_available", lambda: True)
     out_dir = tmp_path / "out"
     rc = cli.main(["data", "build", "--month", "2026-05", "--out", str(out_dir)])
     assert rc == 0
     assert (out_dir / "dataset.csv").exists()
+
+
+def test_cli_build_month_missing_extra_fails_before_fetch(tmp_path, monkeypatch, capsys):
+    """Without the 'data' extra, `--month` errors with the install hint and never fetches."""
+    from chess_equity import cli
+
+    monkeypatch.setattr(dl, "data_extra_available", lambda: False)
+
+    def no_download(*args, **kwargs):  # the early exit must precede any download
+        raise AssertionError("must not download when the data extra is missing")
+
+    def no_network(req):  # ...and certainly never open a socket
+        raise AssertionError("must not touch the network when the data extra is missing")
+
+    monkeypatch.setattr(dl, "download_month", no_download)
+    monkeypatch.setattr(dl, "_urlopen", no_network)
+
+    rc = cli.main(["data", "build", "--month", "2026-05", "--out", str(tmp_path / "out")])
+    assert rc == 1
+    assert "chess-equity[data]" in capsys.readouterr().err

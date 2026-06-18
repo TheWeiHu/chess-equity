@@ -745,7 +745,7 @@ def test_validate_cli_scores_maia_search_against_baseline(tmp_path, monkeypatch,
 def test_runbook_validate_cli_end_to_end(tmp_path, capsys):
     """Drive the documented runbook command path end to end on the committed fixture.
 
-    Mirrors docs/validation-proof-runbook.md's smoke command — the dependency-free
+    Mirrors the `validation-proof-runbook` devbrain page's smoke command — the dependency-free
     `baseline,wdl-a` gate with a game-level holdout — plus the `--out`/`--calibration`
     artifact flags. Guards the real CLI invocation: a broken flag, a renamed report
     section, or a dropped metric column fails here before the attended multi-GB run.

@@ -207,3 +207,29 @@ def test_real_backend_converts_white_pov_to_side_to_move(monkeypatch):
     assert backend(white_fen, 1500, 1500)[1] == pytest.approx(0.80)
     # Black to move: side-to-move == Black, so it must become 1 - 0.80.
     assert backend(black_fen, 1500, 1500)[1] == pytest.approx(0.20)
+
+
+def _exploding_backend(fen, elo_self, elo_oppo):
+    """A backend that must never be reached — terminal positions skip the value head."""
+    raise AssertionError(f"value head called on terminal position {fen!r}")
+
+
+def test_evaluate_checkmate_is_a_decisive_loss_without_calling_the_net():
+    """Maia-2's value head crashes on a position with no legal moves; the wrapper must
+    resolve a checkmate directly (the side to move has lost) and never call the backend."""
+    model = Maia2Equity(backend=_exploding_backend)
+    # Fool's Mate: White is checkmated, White to move.
+    mate = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+    eq = model.evaluate(mate, 1500, 1500)
+    assert eq.source == "maia2"
+    assert eq.equity_white == pytest.approx(0.0)  # mated White has zero equity
+    assert eq.wdl.p_loss == pytest.approx(1.0)
+
+
+def test_evaluate_stalemate_is_a_draw_without_calling_the_net():
+    model = Maia2Equity(backend=_exploding_backend)
+    # Classic K+Q stalemate: Black to move, no legal moves, not in check.
+    stale = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
+    eq = model.evaluate(stale, 1500, 1500)
+    assert eq.equity_white == pytest.approx(50.0)
+    assert eq.wdl.p_draw == pytest.approx(1.0)

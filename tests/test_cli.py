@@ -88,3 +88,44 @@ def test_grade_depth_defaults_to_two(tmp_path, monkeypatch):
     rc = main(["grade", "--pgn", str(pgn)])
     assert rc == 0
     assert calls[0][1].get("depth") == 2
+
+
+# --- --depth threads through highlights/precompute (task 0070) ------------------
+# highlights/precompute used to call build_model(args.model) with no depth, leaving
+# their Stockfish baseline stuck at depth=2 once a real engine is in use (0064 fixed
+# grade/broadcast but missed these two).
+
+def test_highlights_threads_depth_through(tmp_path, monkeypatch):
+    calls = _spy_build_model(monkeypatch)
+    pgn = tmp_path / "g.pgn"
+    pgn.write_text("1. e4 e5 2. Nf3 Nc6 *\n")
+    rc = main(["highlights", "--pgn", str(pgn), "--depth", "9"])
+    assert rc == 0
+    assert calls and calls[0][1].get("depth") == 9
+
+
+def test_highlights_depth_defaults_to_two(tmp_path, monkeypatch):
+    calls = _spy_build_model(monkeypatch)
+    pgn = tmp_path / "g.pgn"
+    pgn.write_text("1. e4 e5 2. Nf3 Nc6 *\n")
+    rc = main(["highlights", "--pgn", str(pgn)])
+    assert rc == 0
+    assert calls[0][1].get("depth") == 2
+
+
+def test_precompute_threads_depth_through(tmp_path, monkeypatch):
+    calls = _spy_build_model(monkeypatch)
+    pgn = tmp_path / "g.pgn"
+    pgn.write_text("1. e4 e5 2. Nf3 Nc6 *\n")
+    rc = main(["precompute", "--pgn", str(pgn), "--depth", "7"])
+    assert rc == 0
+    assert calls and calls[0][1].get("depth") == 7
+
+
+def test_precompute_depth_defaults_to_two(tmp_path, monkeypatch):
+    calls = _spy_build_model(monkeypatch)
+    pgn = tmp_path / "g.pgn"
+    pgn.write_text("1. e4 e5 2. Nf3 Nc6 *\n")
+    rc = main(["precompute", "--pgn", str(pgn)])
+    assert rc == 0
+    assert calls[0][1].get("depth") == 2

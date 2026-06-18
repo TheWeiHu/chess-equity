@@ -19,7 +19,9 @@ from chess_equity.broadcast import (
     grade_delta,
     split_games,
 )
+from chess_equity.adapters import EquityModel
 from chess_equity.models import LichessBaselineModel
+from chess_equity.types import Equity, WDL
 
 # A short game with clock tags and ratings — the shape a Lichess broadcast emits.
 GAME_PGN = """[Event "Test Broadcast"]
@@ -396,3 +398,372 @@ def test_move_event_is_json_serializable():
     blob = json.dumps(events[0].to_dict())
     assert "fen" in blob
     assert isinstance(events[0], MoveEvent)
+
+
+# --------------------------------------------------------------------------- #
+# SSE bridge: a round straight into the overlay (task 0094)
+# --------------------------------------------------------------------------- #
+
+
+def test_sse_frame_is_a_single_data_line_with_blank_terminator():
+    from chess_equity.broadcast import sse_frame
+
+    frame = sse_frame({"type": "position", "ply": 3})
+    assert frame == 'data: {"type": "position", "ply": 3}\n\n'
+
+
+def test_overlay_events_emits_game_metadata_before_its_positions():
+    from chess_equity.broadcast import overlay_events
+
+    ingestor = BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model())
+    events = list(overlay_events(ingestor, interval=0, max_polls=None, max_idle_polls=1))
+    # First the one-time game event, then a position per ply (4 in GAME_PGN).
+    assert events[0]["type"] == "game"
+    assert events[0]["players"]["white"]["name"] == "Carlsen"
+    positions = [e for e in events if e["type"] == "position"]
+    assert [e["ply"] for e in positions] == [1, 2, 3, 4]
+    # Overlay schema: White-POV equity in [0, 1], not the flat [0, 100] internal form.
+    assert all(0.0 <= e["equity"] <= 1.0 for e in positions)
+
+
+def test_serve_sse_streams_a_replay_to_an_eventsource_client():
+    import json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    def make_events():
+        return overlay_events(
+            BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()),
+            interval=0,
+            max_polls=None,
+            max_idle_polls=1,
+        )
+
+    server = make_sse_server(make_events, port=0)  # OS-assigned port
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=10).read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    frames = [f for f in body.split("\n\n") if f.strip()]
+    parsed = [json.loads(f[len("data: "):]) for f in frames]
+    assert parsed[0]["type"] == "game"
+    assert [e["type"] for e in parsed[1:]] == ["position"] * 4
+
+
+def test_sse_server_404s_non_sse_paths_when_no_static_dir():
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        directory=None,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/index.html", timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# SSE live-wait + heartbeat (task 0099)
+# --------------------------------------------------------------------------- #
+
+
+class _ScriptedFeed(BroadcastFeed):
+    """A feed that returns a fixed sequence of snapshots ('' = idle), then nothing."""
+
+    def __init__(self, snapshots):
+        self._snaps = list(snapshots)
+        self._i = 0
+
+    def poll(self):
+        if self._i < len(self._snaps):
+            snap = self._snaps[self._i]
+            self._i += 1
+            return snap
+        return None
+
+
+def test_stream_emits_heartbeat_tick_on_idle_poll_when_enabled():
+    feed = _ScriptedFeed(["", GAME_PGN])  # poll 1 idle, poll 2 has the game
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        ingestor.stream(
+            interval=0, max_polls=2, max_idle_polls=None, heartbeat=True, sleep=lambda s: None
+        )
+    )
+    assert items[0] is None  # idle poll → heartbeat tick (doesn't end the stream)
+    assert any(isinstance(i, MoveEvent) for i in items)  # then the real moves arrive
+
+
+def test_stream_has_no_heartbeat_tick_by_default():
+    # Default heartbeat=False keeps the historical MoveEvent-only contract.
+    feed = _ScriptedFeed(["", GAME_PGN])
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        ingestor.stream(interval=0, max_polls=2, max_idle_polls=None, sleep=lambda s: None)
+    )
+    assert all(isinstance(i, MoveEvent) for i in items)
+
+
+def test_overlay_events_maps_idle_poll_to_heartbeat_sentinel():
+    from chess_equity.broadcast import HEARTBEAT, overlay_events
+
+    feed = _ScriptedFeed(["", GAME_PGN])
+    ingestor = BroadcastIngestor(feed, _model())
+    items = list(
+        overlay_events(
+            ingestor, interval=0, max_polls=2, max_idle_polls=None, heartbeat=True, sleep=lambda s: None
+        )
+    )
+    assert items[0] is HEARTBEAT
+    assert any(isinstance(i, dict) and i.get("type") == "position" for i in items)
+
+
+def test_serve_sse_sends_keepalive_comment_during_idle():
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    def make_events():
+        feed = _ScriptedFeed(["", GAME_PGN])
+        return overlay_events(
+            BroadcastIngestor(feed, _model()),
+            interval=0,
+            max_polls=2,
+            max_idle_polls=None,
+            heartbeat=True,
+            sleep=lambda s: None,
+        )
+
+    server = make_sse_server(make_events, port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/sse", timeout=10).read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ": keepalive" in body  # the idle-poll heartbeat comment
+    assert '"type": "position"' in body  # and the real move frames
+
+
+# --------------------------------------------------------------------------- #
+# Clock-aware equity warp (task 0097)
+# --------------------------------------------------------------------------- #
+
+# A bullet game (TimeControl -> bullet bucket, the deadliest multiplier) whose clocks
+# fall to a few seconds — the regime where time pressure dominates practical results.
+LOW_CLOCK_PGN = """[Event "Time scramble"]
+[Site "https://lichess.org/lc000001"]
+[White "A"]
+[Black "B"]
+[Round "1"]
+[WhiteElo "2000"]
+[BlackElo "2000"]
+[TimeControl "60+0"]
+[Result "*"]
+
+1. e4 { [%clk 0:00:05] } e5 { [%clk 0:00:04] } 2. Nf3 { [%clk 0:00:03] } *
+"""
+
+
+def _last_equity(pgn, *, clock_aware):
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=clock_aware)
+    return tracker.ingest(pgn)[-1].equity
+
+
+def test_clock_aware_shifts_equity_on_low_clock():
+    # Acceptance: a low-clock position's published bar differs from the clock-blind value.
+    blind = _last_equity(LOW_CLOCK_PGN, clock_aware=False)
+    aware = _last_equity(LOW_CLOCK_PGN, clock_aware=True)
+    assert abs(aware - blind) > 1.0, "seconds-left bullet position should move the bar"
+    assert 0.0 <= aware <= 100.0
+    # After 2.Nf3 Black is to move with ~4s: Black's practical chances fall, so the
+    # White-POV bar rises above the clock-blind reading.
+    assert aware > blind
+
+
+def test_clock_aware_is_default_on():
+    # The flag defaults on, so the plain tracker already warps a low-clock bar.
+    default = _last_equity(LOW_CLOCK_PGN, clock_aware=True)
+    explicit_off = _last_equity(LOW_CLOCK_PGN, clock_aware=False)
+    assert default != explicit_off
+
+
+def test_clock_aware_negligible_with_minutes_left():
+    # The comfortable-clock GAME_PGN (3 minutes) should warp essentially not at all —
+    # it's the *low* clock that matters, not merely the presence of clocks.
+    blind = _last_equity(GAME_PGN, clock_aware=False)
+    aware = _last_equity(GAME_PGN, clock_aware=True)
+    assert abs(aware - blind) < 0.5
+
+
+def test_clock_blind_when_no_clk_tags():
+    # No [%clk] tags -> the side-to-move clock is None -> a no-op even with clock_aware on.
+    no_clk = LOW_CLOCK_PGN.replace(" { [%clk 0:00:05] }", "").replace(
+        " { [%clk 0:00:04] }", ""
+    ).replace(" { [%clk 0:00:03] }", "")
+    assert _last_equity(no_clk, clock_aware=True) == _last_equity(no_clk, clock_aware=False)
+
+
+# --------------------------------------------------------------------------- #
+# Objective cp fallback for cp-less models (task 0103)
+# --------------------------------------------------------------------------- #
+
+from chess_equity.adapters import EquityModel, ObjectiveEngine, ObjectiveEval
+from chess_equity.types import WDL, Equity
+
+
+class _CpLessModel(EquityModel):
+    """A rating-blind model whose Equity carries no cp (mimics maia2's win-prob)."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        wdl = WDL.from_unnormalized(p_win=1 / 3, p_draw=1 / 3, p_loss=1 / 3)
+        return Equity(wdl=wdl, equity_white=50.0, source="cpless", cp=None)
+
+
+class _StubEngine(ObjectiveEngine):
+    """Counts calls and returns a fixed side-to-move cp (or a mate -> cp None)."""
+
+    def __init__(self, cp_value):
+        self.cp_value = cp_value
+        self.calls = 0
+
+    def eval(self, fen):
+        self.calls += 1
+        return ObjectiveEval(cp=self.cp_value)
+
+
+def test_cp_fallback_populates_cp_for_cpless_model():
+    # Acceptance: a cp-less model + an objective engine -> every event carries a cp,
+    # so the overlay's ghost tick + divergence badge work on a maia2-style feed.
+    engine = _StubEngine(123.0)
+    tracker = GameTracker("g", _CpLessModel(), white_elo=2000, black_elo=2000, engine=engine)
+    events = tracker.ingest(GAME_PGN)
+    assert events
+    assert all(e.cp is not None for e in events)
+    # cp is rendered White-POV (the engine's side-to-move cp is flipped per ply), so the
+    # magnitude is the stub value while the sign alternates.
+    assert all(abs(e.cp) == 123.0 for e in events)
+    assert engine.calls == len(events)
+
+
+def test_cpless_model_without_engine_leaves_cp_none():
+    # No engine -> nothing to fall back to; cp stays None (unchanged behaviour).
+    tracker = GameTracker("g", _CpLessModel(), white_elo=2000, black_elo=2000)
+    events = tracker.ingest(GAME_PGN)
+    assert events and all(e.cp is None for e in events)
+
+
+def test_model_with_cp_does_not_consult_engine():
+    # A model that already exposes cp (the baseline) must not call the fallback engine.
+    engine = _StubEngine(123.0)
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, engine=engine)
+    events = tracker.ingest(GAME_PGN)
+    assert events
+    assert engine.calls == 0
+    assert any(e.cp is not None for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# Clock-aware Δequity move grade (task 0106)
+# --------------------------------------------------------------------------- #
+
+
+def _last_delta(pgn, *, clock_aware):
+    tracker = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=clock_aware)
+    return tracker.ingest(pgn)[-1].delta_equity
+
+
+def test_clock_aware_delta_differs_from_blind_on_low_clock():
+    # The grade is computed from delta_equity, so a clock-warped delta is the grade going
+    # clock-aware. In the bullet scramble the warp is live, so the mover's swing -- the
+    # practical win-chance change the grade reflects -- differs from the clock-blind delta.
+    blind = _last_delta(LOW_CLOCK_PGN, clock_aware=False)
+    aware = _last_delta(LOW_CLOCK_PGN, clock_aware=True)
+    assert blind is not None and aware is not None
+    assert abs(aware - blind) > 0.5, "seconds-left bullet move should move the graded swing"
+
+
+# --------------------------------------------------------------------------- #
+# Scramble drama reachable on a low-clock broadcast replay (task 0108)
+# --------------------------------------------------------------------------- #
+
+# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6 <
+# SLIP_DELTA=12), so to land in that band reliably we drive a stub model with a
+# controlled ~7pt swing rather than a real engine (which on these toy positions only
+# returns 0 or a large swing that escalates to clutch/escape). The point under test is
+# the wiring: clocks now ride on every MoveEvent (0097), so the clock-gated scramble
+# branch in chess_equity.drama is finally reachable on a replay.
+class _ScrambleStubModel(EquityModel):
+    """Returns 50% everywhere except the post-Nf3 position (knight on f3 -> '5N2' in the
+    FEN), which reads 57% — a +7pt White swing for that one ply."""
+
+    def evaluate(self, fen, white_elo, black_elo):
+        equity_white = 57.0 if "5N2" in fen.split(" ")[0] else 50.0
+        wdl = WDL.from_unnormalized(equity_white / 100.0, 0.0, 1.0 - equity_white / 100.0)
+        return Equity(wdl=wdl, equity_white=equity_white, source="stub")
+
+
+# White is down to 8s when it plays the +7pt Nf3; Black has comfortable time on its move.
+SCRAMBLE_PGN = """[Event "Bullet scramble"]
+[White "A"]
+[Black "B"]
+[WhiteElo "2000"]
+[BlackElo "2000"]
+[TimeControl "60+0"]
+[Result "*"]
+
+1. e4 { [%clk 0:00:10] } e5 { [%clk 0:00:30] } 2. Nf3 { [%clk 0:00:08] } *
+"""
+
+
+def test_low_clock_replay_surfaces_scramble_drama():
+    # Clock-blind delta keeps the swing positional (clock_aware warps the bar itself,
+    # which on a seconds-left game escalates every move to escape/clutch and swamps the
+    # modest scramble band — see drama.py). The clock still rides on the MoveEvent, so
+    # the clock-gated scramble branch fires.
+    from chess_equity.drama import detect
+
+    tracker = GameTracker(
+        "g", _ScrambleStubModel(), white_elo=2000, black_elo=2000, clock_aware=False
+    )
+    events = tracker.ingest(SCRAMBLE_PGN)
+    dramas = detect(events)
+    kinds = {(d.ply, d.kind) for d in dramas}
+    assert (3, "scramble") in kinds, f"expected a scramble on the low-clock Nf3, got {kinds}"
+    scramble = next(d for d in dramas if d.kind == "scramble")
+    assert scramble.mover_clock is not None and scramble.mover_clock < 20
+    assert scramble.headline  # caster-facing one-liner
+
+
+def test_clock_aware_grade_degrades_to_raw_when_blind():
+    # The clock-blind path must still grade the *raw* equity delta unchanged: with the
+    # warp off, before/after both pass through _clock_warp untouched, so the delta (and
+    # thus the grade) is exactly the positional swing -- no clock contribution leaks in.
+    blind = GameTracker("g", _model(), white_elo=2000, black_elo=2000, clock_aware=False)
+    events = blind.ingest(LOW_CLOCK_PGN)
+    last = events[-1]
+    assert last.last_move_grade == grade_delta(last.delta_equity)
+    # And a clock-blind run equals a no-[%clk] run's delta: clocks only ever enter via warp.
+    no_clk = LOW_CLOCK_PGN.replace(" { [%clk 0:00:05] }", "").replace(
+        " { [%clk 0:00:04] }", ""
+    ).replace(" { [%clk 0:00:03] }", "")
+    assert _last_delta(no_clk, clock_aware=True) == last.delta_equity

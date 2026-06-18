@@ -32,6 +32,21 @@
     return move.equity[key];
   }
 
+  // Place the floating board-preview near the cursor without spilling off-screen.
+  // Default is cursor + `off`; if that would overflow the right/bottom viewport edge,
+  // flip the box to the other side of the cursor, then clamp so it never leaves the
+  // top/left. `vw`/`vh` of 0 (no measurement available) means "don't clamp" — the
+  // plain cursor+off placement, the historical behaviour. Pure → unit-testable.
+  function clampPreviewPos(cx, cy, w, h, vw, vh, off) {
+    var left = cx + off;
+    if (vw && left + w + off > vw) left = cx - off - w;
+    if (vw && left < off) left = off;
+    var top = cy + off;
+    if (vh && top + h + off > vh) top = cy - off - h;
+    if (vh && top < off) top = off;
+    return { left: left, top: top };
+  }
+
   // Geometry for the across-the-game chart: equity (rating-conditioned) vs the classic
   // centipawn bar, both as White win% per ply. Pure (no DOM) so it is unit-testable;
   // renderChart() turns it into SVG. Y is flipped (0% at the bottom).
@@ -129,13 +144,39 @@
   function movePreview(ev) {
     var preview = $("board-preview");
     if (!preview || preview.hidden) return;
-    preview.style.left = ev.clientX + 16 + "px";
-    preview.style.top = ev.clientY + 16 + "px";
+    var rect = preview.getBoundingClientRect ? preview.getBoundingClientRect() : null;
+    var pos = clampPreviewPos(
+      ev.clientX, ev.clientY,
+      rect ? rect.width : 0, rect ? rect.height : 0,
+      window.innerWidth || 0, window.innerHeight || 0,
+      16
+    );
+    preview.style.left = pos.left + "px";
+    preview.style.top = pos.top + "px";
   }
 
   function hidePreview() {
     var preview = $("board-preview");
     if (preview) preview.hidden = true;
+  }
+
+  // Position the (already-shown) preview for a tap or a keyboard focus — touch/keyboard
+  // users have no moving pointer, so place it from the tap's coordinates when present,
+  // else next to the focused dot. Mouse hover keeps using movePreview, untouched.
+  function placePreview(ev, el) {
+    var preview = $("board-preview");
+    if (!preview || preview.hidden) return;
+    var x, y;
+    if (ev && ev.clientX != null) {
+      x = ev.clientX; y = ev.clientY;
+    } else if (el && el.getBoundingClientRect) {
+      var r = el.getBoundingClientRect();
+      x = r.left; y = r.bottom;
+    } else {
+      return;
+    }
+    preview.style.left = x + 16 + "px";
+    preview.style.top = y + 16 + "px";
   }
 
   // ---- bars ----------------------------------------------------------------
@@ -214,6 +255,13 @@
       dot.addEventListener("mouseenter", function () { showPreview(p.ply); });
       dot.addEventListener("mousemove", movePreview);
       dot.addEventListener("mouseleave", hidePreview);
+      // Touch + keyboard parity (task 0101): tap pops the preview at the tap point, and
+      // making the dot focusable lets tab-through reveal it; dismissal is wired globally
+      // (outside tap / Escape) plus blur here. Mouse hover above is unchanged.
+      dot.setAttribute("tabindex", "0");
+      dot.addEventListener("click", function (ev) { showPreview(p.ply); placePreview(ev, dot); });
+      dot.addEventListener("focus", function () { showPreview(p.ply); placePreview(null, dot); });
+      dot.addEventListener("blur", hidePreview);
       svg.appendChild(dot);
     });
   }
@@ -303,6 +351,15 @@
     document.addEventListener("keydown", function (e) {
       if (e.key === "ArrowLeft") goto(state.ply - 1);
       if (e.key === "ArrowRight") goto(state.ply + 1);
+      if (e.key === "Escape") hidePreview();  // dismiss the tap/focus preview (task 0101)
+    });
+    // Dismiss the preview on a tap/click outside any chart dot. A dot's own click fires
+    // first (showing the preview) and this bubbles after; ignore taps on a chart dot so
+    // they don't immediately re-hide it.
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      var onDot = t && t.classList && t.classList.contains && t.classList.contains("chart-dot");
+      if (!onDot) hidePreview();
     });
     render();
   }
@@ -360,6 +417,6 @@
   // Expose pure helpers for testing.
   window.ChessEquityDemo = {
     cpToWhite: cpToWhite, nearestBand: nearestBand, equityAt: equityAt,
-    chartGeometry: chartGeometry,
+    chartGeometry: chartGeometry, clampPreviewPos: clampPreviewPos,
   };
 })();
