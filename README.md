@@ -58,12 +58,6 @@ calibration curves in **[reports/calibration_real.md](reports/calibration_real.m
 (A no-download, illustrative 15-row stand-in is kept at
 [reports/validation_sample.md](reports/validation_sample.md) for the offline smoke path.)
 
-The thesis has a second, *positive* half — "good moves read as good, not just less bad."
-**[reports/failure_modes_fixed.md](reports/failure_modes_fixed.md)** is the before/after on
-the two named 0003 failure modes: the rating-conditioned bar refuses the rating-blind
-baseline's dogmas (a hard `0.00` no longer reads exactly 50/50; a +1000 study eval is
-discounted toward a club-level conversion).
-
 Reproduce the real proof in one pinned command, then read the report it writes:
 
 ```bash
