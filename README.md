@@ -105,10 +105,32 @@ with its install command, which tasks need it, and whether CI needs it (it never
 uv run chess-equity eval                                    # startpos, 1500 vs 1500
 uv run chess-equity eval "<fen>" --white-elo 1800 --black-elo 1600
 uv run chess-equity eval --pgn game.pgn                     # annotate every move
+uv run chess-equity score --pgn game.pgn                    # one-game scorecard: score vs real result
 uv run chess-equity grade --pgn game.pgn --white-elo 1200 --black-elo 1200
 uv run chess-equity broadcast --pgn game.pgn --interval 0   # stream per-move equity
 uv run chess-equity eval --white-profile magnuscarlsen      # personalize to a Lichess player
 uv run chess-equity eval --white-profile "Alice@games.pgn"  # ...or profile offline from a PGN
+```
+
+`score` is the CLI-first way to interrogate the thesis on a **single game** — no
+browser, no demo build. Feed it a PGN and it answers, in one block, the four questions
+you actually ask: *here is a game → here is the score* (the embedded `[%eval]`, what a
+rating-blind engine bar shows) *→ what's the real score?* (the actual result) *→ what
+are we predicting?* (rating-conditioned equity from `--model`). It prints a per-move
+table and a single-game Brier of equity vs the rating-blind baseline — **illustrative
+tracking, never proof**; the powered statistical gate stays `validate`/`headline`. Pass
+`--model wdl-a` (or `maia2`) to see rating-conditioned equity diverge from the blind bar:
+
+```
+# alice (1600) vs bob (1550)
+# predicting: P(White wins) + 0.5*P(draw), White POV, via wdl-a
+ ply move         cp   win%  equity
+             (score) (blind)  (pred)
+   1 e4       +0.20   51.8    53.4%
+   ...
+# real score: 1-0  (White scored 1.0)
+#   equity   0.1182
+#   baseline 0.1948   -> equity tracks the result better on THIS game
 ```
 
 ```
@@ -235,6 +257,7 @@ attended/GPU one-shot — `uv sync --extra data --extra maia2 --extra plots`, bu
 | `HumanPolicy` | `fen, elo -> P(move)` — Maia plugs in here |
 | `data/` | Lichess dump → `(eval, ratings, outcome)` dataset |
 | `validate/` | score predictors vs real outcomes — log-loss/Brier/ECE |
+| `scorecard.py` | single-game CLI scorecard — score vs real result vs prediction |
 | `grading.py` | Δequity move grading |
 | `broadcast.py` | live feeds + per-move equity event stream |
 | `cli.py` | `chess-equity` entry point; depends only on `EquityModel` |
