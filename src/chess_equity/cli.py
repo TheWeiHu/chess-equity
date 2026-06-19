@@ -4,6 +4,7 @@ Commands:
 
     chess-equity eval "<fen>" --white-elo 1500 --black-elo 1500
     chess-equity eval --pgn game.pgn --white-elo 1500 --black-elo 1500
+    chess-equity score --pgn game.pgn              # one-game scorecard: score vs real result
     chess-equity grade --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity broadcast --round <id>            # live Lichess broadcast round
     chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
@@ -209,6 +210,29 @@ def _run_grade(args: argparse.Namespace) -> int:
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _run_score(args: argparse.Namespace) -> int:
+    """Scorecard one game: the score, the real result, and what we predict (task 0129)."""
+    from chess_equity.scorecard import build_scorecard_from_pgn, render_scorecard
+
+    model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
+    try:
+        with open(args.pgn, encoding="utf-8") as fh:
+            pgn_text = fh.read()
+        card = build_scorecard_from_pgn(
+            pgn_text,
+            _apply_profiles(model, args),
+            model_name=args.model,
+            white_elo=args.white_elo,
+            black_elo=args.black_elo,
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for line in render_scorecard(card):
+        print(line)
     return 0
 
 
@@ -931,6 +955,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     add_model_arg(gr)
 
+    sc = sub.add_parser(
+        "score",
+        help="scorecard one game: the score, the real result, and what equity predicts",
+    )
+    sc.add_argument("--pgn", required=True, help="PGN file (uses its [%%eval] + result)")
+    sc.add_argument(
+        "--white-elo", type=int, default=None,
+        help="override White rating (default: the PGN's WhiteElo, else 1500)",
+    )
+    sc.add_argument(
+        "--black-elo", type=int, default=None,
+        help="override Black rating (default: the PGN's BlackElo, else 1500)",
+    )
+    sc.add_argument(
+        "--n", type=int, default=500, help="rollout count for --model maia-rollout"
+    )
+    sc.add_argument(
+        "--seed", type=int, default=None, help="RNG seed for --model maia-rollout"
+    )
+    sc.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
+    sc.add_argument(
+        "--k", type=int, default=4, help="top Maia moves kept per node for --model maia-search"
+    )
+    add_profile_args(sc)
+    add_model_arg(sc)
+
     bc = sub.add_parser(
         "broadcast",
         help="stream per-move equity events from a live (or replayed) broadcast",
@@ -1180,6 +1233,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_eval(args)
     if args.command == "grade":
         return _run_grade(args)
+    if args.command == "score":
+        return _run_score(args)
     if args.command == "broadcast":
         try:
             return _run_broadcast(args, build_model(args.model, depth=args.depth), sys.stdout)

@@ -33,6 +33,33 @@ def test_eval_pgn_annotates_every_move(tmp_path, capsys):
     assert "e4" in out and "Nf3" in out
 
 
+def test_score_reports_real_result_and_prediction(capsys):
+    rc = main(["score", "--pgn", "data/sample/sample_games.pgn"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Answers the four questions: a game, the score (cp), the real result, a prediction.
+    assert "alice (1500) vs bob (1480)" in out
+    assert "real score: 1-0" in out
+    assert "equity" in out and "cp" in out
+    assert "validate" in out  # stays honest about what one game proves
+
+
+def test_score_rating_overrides(capsys):
+    rc = main([
+        "score", "--pgn", "data/sample/sample_games.pgn",
+        "--white-elo", "800", "--black-elo", "2400",
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "alice (800) vs bob (2400)" in out
+
+
+def test_score_missing_pgn_errors_cleanly(capsys):
+    rc = main(["score", "--pgn", "does-not-exist.pgn"])
+    assert rc == 1
+    assert "error:" in capsys.readouterr().err
+
+
 def test_precompute_warns_default_model_is_placeholder(tmp_path, capsys):
     """precompute on the default baseline tells the user the bar is NOT Maia (task 0081)."""
     pgn = tmp_path / "game.pgn"
