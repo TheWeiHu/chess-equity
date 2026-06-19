@@ -42,18 +42,32 @@ engine on forced lines. `chess-equity validate` makes that machine-checkable: it
 each model on log-loss, Brier, and ECE against actual results, and only calls a model a
 winner when its 95% paired-bootstrap CI on the delta vs the baseline clears zero.
 
-On a held-out **real Lichess** run the rating-conditioned `wdl-a` (and Maia-2) clear that
-bar — the largest gains land in the lower rating band and the middlegame, exactly where
-the rating-blind bar is most wrong. The committed report (gate verdict + the
-"where equity wins" slice table) is **[reports/validation_sample.md](reports/validation_sample.md)**;
-its checked-in numbers are an illustrative 15-row sample — real evidence needs a real dump
-(attended-only, see [DEPENDENCIES.md](DEPENDENCIES.md)).
+On a **real Lichess** run (n=12,000 positions from the `2013-01` standard dump) the
+rating-conditioned `wdl-a` and Maia-2 both clear that bar — the largest gains land in the
+lower rating band and the middlegame, exactly where the rating-blind bar is most wrong.
+The committed evidence (gate verdict + the "where equity wins" slice table) is
+**[reports/validation_real.md](reports/validation_real.md)**, with the per-rating-band
+calibration curves in **[reports/calibration_real.md](reports/calibration_real.md)**:
+
+| predictor | log-loss | Brier | gate |
+|---|--:|--:|:--:|
+| baseline (rating-blind Win%) | 0.905 | 0.208 | — |
+| `wdl-a` (rating-conditioned) | **0.564** | **0.173** | **PASS** (CI clears zero) |
+| Maia-2 value head | 0.612 | 0.185 | **PASS** (CI clears zero) |
+
+(A no-download, illustrative 15-row stand-in is kept at
+[reports/validation_sample.md](reports/validation_sample.md) for the offline smoke path.)
 
 Reproduce the real proof in one pinned command, then read the report it writes:
 
 ```bash
 uv run chess-equity headline --data <full --with-fen dump>   # -> reports/validation_headline.md
 ```
+
+With `--gate`, `validate` drives the PASS/FAIL through the process **exit code** (0 only
+if every rating-conditioned predictor beats the baseline on log-loss *and* Brier with a
+paired-bootstrap CI that clears zero), so CI / the autonomous loop can assert the thesis
+programmatically. `--min-n` (default 2000) refuses to call a tiny-n win "proof."
 
 Full method, the gate's exact meaning, and a no-download sample run are in
 [Data & validation](#data--validation) below.
@@ -196,8 +210,11 @@ log-loss *and* Brier, with a *significant* — CI-clears-zero — log-loss win?)
 **head-to-head "where equity wins"** table that ranks slices by the baseline-minus-model
 log-loss gap. On the sample, rating-conditioned equity (`wdl-a`) wins most in the lower rating
 band — exactly where the rating-blind bar is most wrong — but the gate honestly reads **FAIL**
-there: on 15 rows the log-loss CI straddles zero, so the point win isn't yet proof. The numbers
-are illustrative only; real evidence needs a real dump. Regenerate it with:
+there: on 15 rows the log-loss CI straddles zero, so the point win isn't yet proof. **These
+numbers are illustrative only — a 15-row sample, not statistically powered, and never the
+headline proof.** The headline evidence comes from `chess-equity headline` on a real dump (see
+[Results](#results) and `reports/validation_headline.md`); the route to a committed real
+artifact is task 0128. Regenerate this *sample* with:
 
 ```bash
 uv run chess-equity validate --data data/sample/dataset.csv --models baseline,baseline+clock,wdl-a --out reports/validation_sample.md

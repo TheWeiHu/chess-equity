@@ -19,8 +19,8 @@ which reads each row's ``fen`` — present only when the dataset was built with
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
@@ -38,6 +38,7 @@ from chess_equity.validate.metrics import (
     brier_score,
     expected_calibration_error,
     log_loss,
+    reliability_table,
 )
 
 # A predictor: a position row -> predicted White expected-score in [0, 1].
@@ -72,6 +73,16 @@ def baseline_cp_clock(row: PositionRow) -> float:
 _WDL_A_MODEL = None
 
 
+def _load_wdl_a():
+    """The fitted Approach-A model, loaded lazily and cached on first use."""
+    global _WDL_A_MODEL
+    if _WDL_A_MODEL is None:
+        from chess_equity.wdl_regression import load_wdl_a_model
+
+        _WDL_A_MODEL = load_wdl_a_model()
+    return _WDL_A_MODEL
+
+
 def wdl_a(row: PositionRow) -> float:
     """Approach A — the rating-conditioned WDL regression (task 0004).
 
@@ -81,12 +92,7 @@ def wdl_a(row: PositionRow) -> float:
     this module stays free of the model file (and a missing artifact only bites the
     callers that actually ask for ``wdl-a``).
     """
-    global _WDL_A_MODEL
-    if _WDL_A_MODEL is None:
-        from chess_equity.wdl_regression import load_wdl_a_model
-
-        _WDL_A_MODEL = load_wdl_a_model()
-    return _WDL_A_MODEL.predict_white_equity(
+    return _load_wdl_a().predict_white_equity(
         row.cp_eval, row.white_elo, row.black_elo, row.ply, row.tc_bucket
     )
 
@@ -223,12 +229,32 @@ def clock_band(row: PositionRow) -> str:
     return "comfortable(60s+)"
 
 
+def rating_gap_band(row: PositionRow) -> str:
+    """Coarse band on the *absolute rating gap* between the two players (task 0144).
+
+    The thesis conditions on BOTH ratings, so the rating-conditioned model's edge over
+    the rating-blind centipawn baseline should be largest exactly where the two players
+    are most mismatched: the cp-only Win% can't tell a 2400-vs-1500 game (the strong side
+    converts) from a 1500-vs-1500 one. :func:`rating_band` slices by the *average* skill
+    level; this slices the orthogonal axis — ``|white_elo - black_elo|`` — so the
+    head-to-head section can show the win concentrating in the high-gap band. Bands mirror
+    the other slicers' ``<lo`` / range / ``hi+`` shape.
+    """
+    gap = abs(row.white_elo - row.black_elo)
+    if gap < 100:
+        return "<100"
+    if gap < 300:
+        return "100-299"
+    return "300+"
+
+
 # The slicings reported alongside the overall number.
 SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "rating": rating_band,
     "high_rating": high_rating_band,
     "phase": lambda row: row.phase,
     "clock": clock_band,
+    "rating_gap": rating_gap_band,
 }
 
 
@@ -251,13 +277,26 @@ def _score(preds: Sequence[float], labels: Sequence[float], *, bins: int = 10) -
     )
 
 
+# One reliability bucket: (bin_lo, mean_pred, mean_obs, count) — the binned empirical
+# White win-rate vs the predicted win-rate that backs the scalar ECE (task 0118).
+ReliabilityRow = Tuple[float, float, float, int]
+
+
 @dataclass(frozen=True)
 class PredictorReport:
-    """A predictor's overall scores plus per-slice breakdowns."""
+    """A predictor's overall scores plus per-slice breakdowns.
+
+    ``reliability`` is the overall reliability curve (task 0118): one
+    ``(bin_lo, mean_pred, mean_obs, count)`` per non-empty prediction bin, the binned
+    empirical win-rate that backs the scalar ``overall.ece`` — so the report can show
+    *why* a bar reading 70% is (or isn't) honest, not just the one-number ECE. Defaults
+    to empty so a hand-built report stays valid; :func:`evaluate` always fills it.
+    """
 
     name: str
     overall: Scores
     slices: Dict[str, Dict[str, Scores]]  # slicer name -> slice value -> scores
+    reliability: List[ReliabilityRow] = field(default_factory=list)
 
 
 def evaluate(
@@ -289,7 +328,12 @@ def evaluate(
                 for value, idxs in sorted(grouped.items())
             }
         reports.append(
-            PredictorReport(name=name, overall=_score(preds, labels, bins=bins), slices=slices)
+            PredictorReport(
+                name=name,
+                overall=_score(preds, labels, bins=bins),
+                slices=slices,
+                reliability=reliability_table(preds, labels, bins=bins),
+            )
         )
     return reports
 
@@ -517,9 +561,19 @@ BASELINE_NAME = "baseline"
 HEADLINE_METRIC = "log_loss"
 
 
+# Below this held-out n the gate refuses to call a PASS — it reads INCONCLUSIVE instead
+# (task 0132). With only a handful of rows a lucky point win and a barely-non-straddling
+# bootstrap CI can read green by chance, overstating the thesis; the committed 15-row
+# `validation_sample.md` is far under this floor, while the real proof run is n=8000. Set
+# at the n>=2000 size the synthetic PASS fixture (task 0131) is built to clear, so an
+# honest PASS needs a sample with the statistical power to back it. Pass ``min_n=0`` to
+# :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+MIN_GATE_N = 2000
+
+
 @dataclass(frozen=True)
 class Verdict:
-    """One rating-conditioned predictor's gate result vs the baseline (task 0058/0069).
+    """One rating-conditioned predictor's gate result vs the baseline (task 0058/0069/0132).
 
     ``log_loss_delta`` / ``brier_delta`` are ``model - baseline`` on the held-out
     overall scores, so a *negative* delta is an improvement (lower is better).
@@ -530,6 +584,16 @@ class Verdict:
     then requires *both* a point win on log-loss and Brier **and** ``significant`` being
     true. ``headline_ci`` is the delta CI that drove the significance call, kept for the
     report to render inline.
+
+    ``underpowered`` is the third, distinct state (task 0132): when the held-out
+    ``held_out_n`` is below ``min_n`` the gate cannot trust *any* call, so the verdict
+    reads INCONCLUSIVE rather than PASS/FAIL and ``passed`` is forced ``False`` — a
+    tiny-n point win must not read green. ``held_out_n``/``min_n`` are kept so the report
+    and exit-code paths can name the shortfall.
+
+    ``baseline_log_loss`` / ``baseline_brier`` are the baseline's overall scores, kept so
+    the report can express each delta as a percent reduction relative to the baseline
+    (task 0133) — the one human-legible number that sells the thesis.
     """
 
     name: str
@@ -539,6 +603,11 @@ class Verdict:
     significant: Optional[bool] = None
     headline_metric: Optional[str] = None
     headline_ci: Optional[DeltaCI] = None
+    underpowered: bool = False
+    held_out_n: Optional[int] = None
+    min_n: Optional[int] = None
+    baseline_log_loss: Optional[float] = None
+    baseline_brier: Optional[float] = None
 
 
 def gate_verdicts(
@@ -547,6 +616,7 @@ def gate_verdicts(
     baseline_name: str = BASELINE_NAME,
     comparisons: Optional[Sequence[BaselineComparison]] = None,
     headline_metric: str = HEADLINE_METRIC,
+    min_n: int = 0,
 ) -> List[Verdict]:
     """The thesis gate (0009): does each non-baseline predictor beat the centipawn baseline?
 
@@ -561,12 +631,24 @@ def gate_verdicts(
     ``comparisons`` the gate stays point-only (the pre-0069 behaviour), so callers that
     can't afford a bootstrap degrade gracefully rather than silently passing on noise.
 
+    When the held-out sample is smaller than ``min_n`` the gate is *underpowered* (task
+    0132): every verdict reads INCONCLUSIVE and ``passed`` is forced ``False`` — a lucky
+    tiny-n point win must not read green. The check takes precedence over PASS/FAIL because
+    at tiny n neither direction is trustworthy. ``min_n`` defaults to ``0`` (guard off) so
+    direct callers and the logic tests keep the pre-0132 behaviour; the machine-checkable
+    gate entry point applies the real floor — the ``validate --gate`` CLI defaults
+    ``--min-n`` to :data:`MIN_GATE_N`.
+
     Returns an empty list if the run has no baseline predictor — nothing to gate against.
     """
     by_name = {r.name: r for r in reports}
     baseline = by_name.get(baseline_name)
     if baseline is None:
         return []
+    # The held-out n every predictor was scored on (same row set), so one number gates
+    # the whole run (task 0132).
+    held_out_n = baseline.overall.n
+    underpowered = min_n > 0 and held_out_n < min_n
     # model name -> {metric -> DeltaCI} for the supplied comparisons (if any).
     ci_by_name: Dict[str, Dict[str, DeltaCI]] = {}
     if comparisons is not None:
@@ -585,7 +667,8 @@ def gate_verdicts(
             # No CI for the headline metric (shouldn't happen on a normal run) reads as
             # not-significant — fail closed rather than pass on missing evidence.
             significant = bool(headline_ci is not None and headline_ci.beats_baseline)
-        passed = point_win and (significant is None or significant)
+        # Underpowered can't be a PASS — neither a tiny-n win nor a tiny-n loss is proof.
+        passed = (not underpowered) and point_win and (significant is None or significant)
         verdicts.append(
             Verdict(
                 r.name,
@@ -595,18 +678,60 @@ def gate_verdicts(
                 significant=significant,
                 headline_metric=headline_metric if comparisons is not None else None,
                 headline_ci=headline_ci,
+                underpowered=underpowered,
+                held_out_n=held_out_n,
+                min_n=min_n,
+                baseline_log_loss=baseline.overall.log_loss,
+                baseline_brier=baseline.overall.brier,
             )
         )
     return verdicts
 
 
+def _percent_reduction(delta: Optional[float], baseline: Optional[float]) -> Optional[float]:
+    """Percent reduction of a (model − baseline) ``delta`` relative to ``baseline``.
+
+    A *negative* delta is an improvement (lower log-loss/Brier is better), so the
+    reduction is ``-delta / baseline * 100`` — positive when the model beats the baseline.
+    Returns ``None`` if either value is missing or the baseline is non-positive (no
+    meaningful percentage to report).
+    """
+    if delta is None or baseline is None or baseline <= 0:
+        return None
+    return -delta / baseline * 100.0
+
+
 def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE_NAME) -> List[str]:
-    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069)."""
+    """Render the top-line PASS/FAIL gate block as Markdown lines (task 0058/0069).
+
+    For each *passing* predictor, the line also states the percent reduction in log-loss
+    (and Brier) relative to the baseline (task 0133) — the human-legible "equity cuts
+    log-loss by X%" headline that sells the thesis, alongside the absolute deltas + CI.
+    """
     out: List[str] = ["## Gate verdict", ""]
     if not verdicts:
         out.append(
             f"_No `{baseline_name}` predictor in this run — cannot compute a gate verdict._"
         )
+        out.append("")
+        return out
+    # Underpowered run (task 0132): the held-out n is below the floor, so no verdict is
+    # trustworthy. Say so up front and render every line as INCONCLUSIVE.
+    if verdicts[0].underpowered:
+        n = verdicts[0].held_out_n
+        floor = verdicts[0].min_n
+        out.append(
+            f"**INCONCLUSIVE — underpowered.** Held-out n={n} is below the n>={floor} "
+            "floor needed to trust a gate call (task 0132); a tiny-n point win can read "
+            "green by chance, so the gate refuses to call PASS or FAIL."
+        )
+        out.append("")
+        for v in verdicts:
+            out.append(
+                f"- **{v.name}** vs {baseline_name}: "
+                f"logloss {v.log_loss_delta:+.4f}, brier {v.brier_delta:+.4f} "
+                "-> **INCONCLUSIVE**"
+            )
         out.append("")
         return out
     # Whether this run carried paired-bootstrap CIs (task 0069) — the criterion line and
@@ -641,6 +766,12 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
             # Gated run but no CI for this predictor — surface the missing evidence.
             line += f"; {v.headline_metric} CI unavailable"
         line += f" -> **{status}**"
+        if v.passed:
+            # The thesis-selling headline: how much does equity cut the loss, in percent?
+            ll_pct = _percent_reduction(v.log_loss_delta, v.baseline_log_loss)
+            br_pct = _percent_reduction(v.brier_delta, v.baseline_brier)
+            if ll_pct is not None and br_pct is not None:
+                line += f" — cuts log-loss {ll_pct:.1f}% (Brier {br_pct:.1f}%) vs {baseline_name}"
         out.append(line)
     out.append("")
     return out
@@ -648,6 +779,36 @@ def format_verdict(verdicts: Sequence[Verdict], *, baseline_name: str = BASELINE
 
 def _scores_row(label: str, s: Scores) -> str:
     return f"| {label} | {s.n} | {s.log_loss:.4f} | {s.brier:.4f} | {s.ece:.4f} |"
+
+
+def format_reliability(reports: Sequence[PredictorReport]) -> str:
+    """Render each predictor's overall reliability curve as Markdown (task 0118).
+
+    One table per predictor: for each prediction bin, the mean predicted White
+    expected-score vs the **empirical** White win-rate observed in that bin, the per-bin
+    count, and their gap. This is what makes the scalar ECE honest to a reader — a bar
+    reading 70% is only a real P(win)+½P(draw) if the ``mean obs`` of the 0.70 bin is
+    ~0.70. A well-calibrated predictor hugs the diagonal (``gap ≈ 0``) in every bin.
+    """
+    out: List[str] = ["## Reliability curve (is the equity bar an honest probability?)", ""]
+    out.append(
+        "For each predicted-probability bin: mean predicted vs **observed** White "
+        "expected-score, the bin's row count, and the gap (obs − pred). A calibrated "
+        "predictor has `gap ≈ 0` in every bin; the count-weighted mean `|gap|` is the ECE."
+    )
+    for r in reports:
+        out.append("")
+        out.append(f"### {r.name}  (n={r.overall.n}, ECE={r.overall.ece:.4f})")
+        out.append("")
+        out.append("| pred ≥ | mean pred | mean obs | n | gap (obs−pred) |")
+        out.append("|--:|--:|--:|--:|--:|")
+        for bin_lo, mean_pred, mean_obs, count in r.reliability:
+            out.append(
+                f"| {bin_lo:.2f} | {mean_pred:.3f} | {mean_obs:.3f} | {count} "
+                f"| {mean_obs - mean_pred:+.3f} |"
+            )
+    out.append("")
+    return "\n".join(out)
 
 
 def format_report(
@@ -684,6 +845,10 @@ def format_report(
         for r in reports:
             for value, s in r.slices[slicer_name].items():
                 out.append(f"| {r.name} | {value} " + _scores_row("", s)[2:])
+
+    if reports and any(r.reliability for r in reports):
+        out.append("")
+        out.append(format_reliability(reports))
 
     h2h = head_to_head_deltas(reports)
     if h2h is not None:
