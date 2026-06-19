@@ -362,7 +362,28 @@ def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
     return 0
 
 
+def _run_data_stamp(args: argparse.Namespace) -> int:
+    """Backfill the source-month sidecar on an already-built dataset (task 0127)."""
+    from pathlib import Path
+
+    from chess_equity.data.source_month import write_source_month
+
+    if not Path(args.path).exists():
+        print(f"error: dataset not found: {args.path}", file=sys.stderr)
+        return 1
+    try:
+        side = write_source_month(args.path, args.month)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"stamped {args.month} -> {side}")
+    return 0
+
+
 def _run_data(args: argparse.Namespace) -> int:
+    if args.data_command == "stamp":
+        return _run_data_stamp(args)
+
     # Imported lazily so the common ``eval`` path never pays for the data deps.
     from chess_equity.data.build import build_dataset, month_url
 
@@ -420,6 +441,9 @@ def _run_data(args: argparse.Namespace) -> int:
             fmt=args.format,
             include_fen=args.with_fen,
             partition=args.partition,
+            # Stamp the source month when the dump came from --month, so the leakage
+            # guard can read it back from the sidecar (task 0127).
+            source_month=args.month,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -458,7 +482,47 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    # The dataset's own source month, read from its sidecar (task 0127): the recorded
+    # truth of which Lichess month --data was drawn from. It is what the leakage guard
+    # uses to default --eval-month (so the operator can't silently get it wrong), and is
+    # surfaced in the report title.
+    from chess_equity.data.source_month import read_source_month
+
+    data_month = read_source_month(args.data)
+
+    # Leakage guard (task 0112): if the eval dataset's source month is a model's own
+    # training month, its scores are memorization, not held-out evidence. Eval-month
+    # precedence: explicit --eval-month, else the dataset's stamped source month (task
+    # 0127), else inferred from the dataset path; --strict refuses. Resolved once so the
+    # detection and the report's warning block agree.
+    from chess_equity.validate.leakage import (
+        detect_leakage,
+        format_leakage_warning,
+        infer_month_from_path,
+        leakage_line,
+        model_fit_months,
+    )
+
+    eval_month = (
+        getattr(args, "eval_month", None)
+        or data_month
+        or infer_month_from_path(args.data)
+    )
+    leaks = detect_leakage(eval_month, model_fit_months(requested))
+    if leaks:
+        print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)
+        if getattr(args, "strict", False):
+            print(
+                "error: refusing (--strict) — eval month overlaps a model's training "
+                "month; re-run on a held-out month",
+                file=sys.stderr,
+            )
+            return 2
+
     title = f"Validation report — {args.data}"
+    if data_month:
+        title += f" (data month: {data_month})"
+
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
 
@@ -502,6 +566,11 @@ def _run_validate(args: argparse.Namespace) -> int:
         )
 
     report = format_report(reports, title=title, comparisons=comparisons)
+    leak_block = format_leakage_warning(leaks, eval_month)
+    if leak_block:
+        # Insert just below the H1 so the warning leads the artifact, above the gate verdict.
+        head, _, body = report.partition("\n")
+        report = f"{head}\n\n{leak_block.rstrip()}\n{body}"
 
     if comparisons:
         section = format_baseline_comparison(comparisons)
@@ -547,8 +616,9 @@ def _run_validate(args: argparse.Namespace) -> int:
     if args.out:
         from pathlib import Path
 
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(report + "\n", encoding="utf-8")
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report + "\n", encoding="utf-8")
         print(f"wrote {args.out}")
     else:
         print(report)
@@ -608,7 +678,10 @@ def _run_validate(args: argparse.Namespace) -> int:
     # point-only gate.
     if args.gate:
         verdicts = gate_verdicts(
-            reports, baseline_name=baseline_name, comparisons=comparisons
+            reports,
+            baseline_name=baseline_name,
+            comparisons=comparisons,
+            min_n=args.min_n,
         )
         if not verdicts:
             print(
@@ -617,6 +690,17 @@ def _run_validate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 3
+        # Underpowered (task 0132): the held-out sample is below the n floor, so a PASS
+        # would be untrustworthy. Distinct exit code 4 (INCONCLUSIVE) so CI / the loop can
+        # tell "couldn't conclude" apart from PASS (0) and FAIL (2).
+        if verdicts[0].underpowered:
+            print(
+                f"GATE: INCONCLUSIVE — held-out n={verdicts[0].held_out_n} is below the "
+                f"n>={args.min_n} floor; a tiny-n win is not proof (pass --min-n 0 to "
+                "override)",
+                file=sys.stderr,
+            )
+            return 4
         gated = bool(comparisons)
         criterion = (
             "log-loss AND Brier with a significant (CI-clears-zero) log-loss win"
@@ -789,6 +873,7 @@ def _run_personal(args: argparse.Namespace) -> int:
     return 0
 
 
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -926,7 +1011,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="cache dir for downloaded --month dumps (default: ~/.cache/chess-equity/dumps)",
     )
 
+    stamp = data_sub.add_parser(
+        "stamp",
+        help="backfill the source-month sidecar on an existing dataset (task 0127)",
+    )
+    stamp.add_argument("path", help="path to a built dataset (csv/parquet file or partitioned dir)")
+    stamp.add_argument("month", help="the YYYY-MM Lichess month the dataset was drawn from")
+
     val = sub.add_parser("validate", help="score predictors against real outcomes (task 0009)")
+    # The underpowered-sample floor's default (task 0132) — imported here so the help text
+    # shows the real number without pulling the heavy validate package at startup.
+    from chess_equity.validate.harness import MIN_GATE_N
     val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     val.add_argument(
         "--models",
@@ -965,11 +1060,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
     )
     val.add_argument(
+        "--eval-month",
+        metavar="YYYY-MM",
+        help="the Lichess source month of --data, for the leakage guard (task 0112); "
+        "if omitted it is inferred from the dataset path. When it equals a model's "
+        "training month (e.g. wdl-a's 2016-05) the run is memorization, not held-out "
+        "evidence: validate warns loudly (or refuses, with --strict)",
+    )
+    val.add_argument(
+        "--strict",
+        action="store_true",
+        help="refuse the run (nonzero exit) instead of merely warning when the leakage "
+        "guard (task 0112) finds the eval month overlaps a model's training month",
+    )
+    val.add_argument(
         "--gate",
         action="store_true",
         help="make the thesis gate machine-checkable (task 0115): exit 0 only if every "
         "rating-conditioned predictor beats `baseline` on log-loss AND Brier, exit 2 if "
-        "any FAILS (exit 3 if no challenger to gate). For CI / the autonomous loop",
+        "any FAILS, exit 3 if no challenger to gate, exit 4 if INCONCLUSIVE (held-out n "
+        "below --min-n; task 0132). For CI / the autonomous loop",
+    )
+    val.add_argument(
+        "--min-n",
+        type=int,
+        default=MIN_GATE_N,
+        help="underpowered-sample floor for the gate (task 0132): when the held-out n is "
+        f"below this, --gate reads INCONCLUSIVE (exit 4) instead of PASS so a lucky tiny-n "
+        f"win can't read green (default {MIN_GATE_N}; 0 disables the guard)",
     )
     val.add_argument(
         "--calibration",
