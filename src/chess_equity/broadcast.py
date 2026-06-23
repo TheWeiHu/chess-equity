@@ -315,6 +315,11 @@ class MoveEvent:
         """
         event: Dict[str, object] = {
             "type": "position",
+            # The board this move belongs to, so the overlay's multi-board switcher
+            # (task 0185) can route only the selected board's moves. Single-board
+            # rounds carry it too but the overlay accepts everything until a roster
+            # arrives, so the default behaviour is unchanged.
+            "game_id": self.game_id,
             "ply": self.ply,
             "move": {"san": self.san},
             "white_to_move": self.white_to_move,
@@ -2010,6 +2015,11 @@ def overlay_events(
                     "index": game.board,
                     "game_id": game.game_id,
                     "players": ev["players"],
+                    # Flat name plates too (task 0185 producer test): the overlay reads
+                    # `players`, but a flat white/black pair keeps the roster self-describing
+                    # for any consumer that just wants the board's name plate.
+                    "white": game.white_name or "White",
+                    "black": game.black_name or "Black",
                 }
             )
             # Announce the full roster (in board order — games appear in index order in

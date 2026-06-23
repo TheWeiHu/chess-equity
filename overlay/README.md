@@ -231,6 +231,7 @@ values are **seconds remaining**.
 // one-time metadata
 {
   "type": "game",
+  "game_id": "abcd1234",                     // optional — board identity (multi-board rounds)
   "format": "bullet",                       // optional label
   "board": 0,                               // optional — 0-based board index in a multi-game round (task 0185)
   "model": "Maia-2",                        // optional — human-readable bar-model badge (task 0222); omitted -> no badge
@@ -240,9 +241,20 @@ values are **seconds remaining**.
   }
 }
 
+// board roster — emitted only for a multi-game round (>1 board), so the overlay can
+// show a live board switcher (task 0185). A single-board feed never emits it.
+{
+  "type": "boards",
+  "boards": [
+    { "index": 0, "game_id": "abcd1234", "white": "Carlsen", "black": "Nakamura" },
+    { "index": 1, "game_id": "wxyz5678", "white": "Caruana", "black": "Firouzja" }
+  ]
+}
+
 // per-move update
 {
   "type": "position",
+  "game_id": "abcd1234",                    // which board this move is on (for routing)
   "ply": 44,
   "board": 0,                               // optional — board index (multi-game round); omitted for a single game
   "move": { "san": "Rxd5??" },              // optional, for display
@@ -320,6 +332,7 @@ from the equity swing itself, so it works on any feed.
 
 ```bash
 python3 test_overlay.py        # or: pytest overlay/test_overlay.py
+node test_routing.js           # multi-board switcher routing (task 0185)
 ```
 
 Validates the schema and asserts the headline acceptance criterion — that the

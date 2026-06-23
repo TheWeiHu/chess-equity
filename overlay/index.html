@@ -28,15 +28,19 @@
     ?stale=N        seconds of feed silence before showing the STALE/reconnecting
                     state (live SSE/WS feeds only; default 10). 0 disables it.
 
+  Multi-board rounds: when the feed emits a `boards` event (a round with >1 game),
+  a small board selector appears so a caster can flip boards live (task 0185).
+  Single-board feeds emit no `boards` event and show no selector.
+
   Event schema is documented in README.md (SCHEMA section) — this is the
   contract that the live ingestion task (0018) must emit.
 -->
 <body class="theme-dark">
   <div id="overlay" class="overlay layout-horizontal" aria-live="polite">
-    <!-- Board selector (task 0185): hidden for a single-game feed; revealed and
-         populated when the feed announces a multi-game round so a caster can flip
-         which board the bar follows live. -->
-    <select class="board-select" data-board-select aria-label="board" hidden></select>
+    <!-- Live board switcher (task 0185): hidden for a single-game feed; revealed and
+         populated when the feed announces a multi-game round (`boards` event) so a caster
+         can flip which board the bar follows live, without restarting the overlay. -->
+    <select class="board-select" data-board-select aria-label="select board" hidden></select>
 
     <div class="player player-white">
       <span class="name" data-white-name>White</span>
