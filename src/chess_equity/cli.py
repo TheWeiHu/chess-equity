@@ -512,6 +512,25 @@ def _run_validate(args: argparse.Namespace) -> int:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
 
+    # Seed-stability (task 0156): --seeds re-runs the gate under each seed so a PASS can be
+    # shown to survive re-sampling, not just hold at the committed seed 0. Parse the list
+    # now (before the holdout split reassigns `rows`) and keep the full row set for it.
+    seed_list: List[int] = []
+    if getattr(args, "seeds", None):
+        try:
+            seed_list = [int(s) for s in args.seeds.split(",") if s.strip() != ""]
+        except ValueError:
+            print(
+                f"error: --seeds must be a comma-separated list of integers, got "
+                f"{args.seeds!r}",
+                file=sys.stderr,
+            )
+            return 1
+        if not seed_list:
+            print("error: --seeds was empty", file=sys.stderr)
+            return 1
+    full_rows = list(rows)
+
     # The dataset's own source month, read from its sidecar (task 0127): the recorded
     # truth of which Lichess month --data was drawn from. It is what the leakage guard
     # uses to default --eval-month (so the operator can't silently get it wrong), and is
@@ -665,6 +684,30 @@ def _run_validate(args: argparse.Namespace) -> int:
     good_section = format_good_moves(good_moves, baseline=baseline_name)
     if good_section:
         report = report + "\n" + good_section
+
+    # Seed stability (task 0156): if --seeds was given, re-run the gate under each seed and
+    # append a stability section so the committed-seed PASS is shown to survive re-sampling
+    # (not a cherry-picked draw). Uses the full pre-split rows, re-drawing the --holdout
+    # split and bootstrap per seed; same --bootstrap budget, --ece-bins, and --min-n floor.
+    if seed_list:
+        from chess_equity.validate.seed_stability import (
+            format_seed_stability,
+            reseed_stability,
+        )
+
+        stability = reseed_stability(
+            full_rows,
+            predictors,
+            seeds=seed_list,
+            holdout=args.holdout,
+            baseline_name=baseline_name,
+            n_resamples=args.bootstrap,
+            ece_bins=args.ece_bins,
+            min_n=args.min_n,
+        )
+        stability_section = format_seed_stability(stability)
+        if stability_section:
+            report = report + "\n" + stability_section
 
     if args.out:
         from pathlib import Path
@@ -1159,6 +1202,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=int,
         default=0,
         help="RNG seed for the --holdout game split and the bootstrap resampling",
+    )
+    val.add_argument(
+        "--seeds",
+        metavar="S1,S2,...",
+        help="seed-stability check (task 0156): re-run the gate under each of these "
+        "comma-separated seeds (e.g. 0,1,2,3,4) and append a stability section reporting "
+        "the fraction of seeds that PASS and the spread of the log-loss delta + CI. Hardens "
+        "the proof by showing PASS survives re-sampling, not just the committed seed 0",
     )
     val.add_argument(
         "--bootstrap",
