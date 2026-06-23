@@ -23,7 +23,9 @@ a committed PGN) and it emits the reel with no extra model calls.
 from __future__ import annotations
 
 import html
+import io
 import json
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from chess_equity.drama import DramaEvent, detect
@@ -44,6 +46,66 @@ _KIND_LABEL = {
 # 0..1 drama magnitude) so a clutch p90 swing flashes briefly while a missed win holds.
 _CAPTION_MIN_S = 3.0
 _CAPTION_MAX_S = 6.0
+
+
+# --- Cross-game round recap (task 0198) --------------------------------------
+#
+# A tournament round PGN holds many games; a caster wants the round's biggest swings
+# pooled across ALL boards, each moment naming its source game. The pooling itself is
+# free — ``BroadcastIngestor.ingest_snapshot`` already tags every ``MoveEvent`` with
+# its ``game_id`` and ``drama.score_event`` is stateless, so ``detect()`` over a
+# multi-game event list already ranks correctly across games. What a round recap adds
+# is *labeling*: map each ``game_id`` back to its board number + players so a pooled
+# moment reads "Board 2 · carol vs dave", not a bare game id. The label threads through
+# the existing renderers as an optional ``sources`` map (``None`` ⇒ single-game output
+# is byte-identical to before).
+
+
+@dataclass(frozen=True)
+class GameSource:
+    """Where a pooled moment came from: its 1-based board # and the pairing."""
+
+    game_id: str
+    board: int
+    white: str
+    black: str
+
+    @property
+    def label(self) -> str:
+        return f"Board {self.board} · {self.white} vs {self.black}"
+
+
+def game_sources(pgn_text: str) -> Dict[str, GameSource]:
+    """Map each game's ``game_id`` to its round source (board #, players).
+
+    Reuses the same ``split_games`` + ``_game_id`` the broadcast ingestor uses, so the
+    keys line up exactly with the ``game_id`` carried on every ``MoveEvent``/``DramaEvent``.
+    Board numbers are 1-based in PGN order.
+    """
+    import chess.pgn
+
+    from chess_equity.broadcast import _game_id, split_games
+
+    sources: Dict[str, GameSource] = {}
+    for index, game_pgn in enumerate(split_games(pgn_text)):
+        headers = chess.pgn.read_headers(io.StringIO(game_pgn))
+        if headers is None:
+            continue
+        gid = _game_id(headers, index)
+        sources[gid] = GameSource(
+            game_id=gid,
+            board=index + 1,
+            white=headers.get("White", "?"),
+            black=headers.get("Black", "?"),
+        )
+    return sources
+
+
+def _source_text(d: DramaEvent, sources: Optional[Dict[str, GameSource]]) -> str:
+    """Human-readable source label for one moment ('Board N · W vs B' or 'game <id>')."""
+    if sources and d.game_id in sources:
+        return sources[d.game_id].label
+    return f"game {d.game_id}"
 
 
 def _rank_key(d: DramaEvent) -> Tuple[float, int, int]:
@@ -72,14 +134,36 @@ def by_kind(reel: Iterable[DramaEvent]) -> Dict[str, int]:
     return tally
 
 
-def reel_payload(reel: List[DramaEvent], *, title: str = "Highlight reel") -> Dict[str, object]:
-    """The structured JSON-ready payload for a ranked reel."""
-    return {
+def reel_payload(
+    reel: List[DramaEvent],
+    *,
+    title: str = "Highlight reel",
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> Dict[str, object]:
+    """The structured JSON-ready payload for a ranked reel.
+
+    When ``sources`` is given (a round recap), each moment gains a ``source`` label and
+    ``board`` number, and a top-level ``games`` count is added so downstream tooling can
+    see the pool spanned multiple boards. Without it, the payload is unchanged.
+    """
+    moments: List[Dict[str, object]] = []
+    for d in reel:
+        m = d.to_dict()
+        if sources is not None:
+            src = sources.get(d.game_id)
+            m["source"] = _source_text(d, sources)
+            m["board"] = src.board if src is not None else None
+        moments.append(m)
+    payload: Dict[str, object] = {
         "title": title,
         "count": len(reel),
         "by_kind": by_kind(reel),
-        "moments": [d.to_dict() for d in reel],
+        "moments": moments,
     }
+    if sources is not None:
+        # How many distinct boards actually contributed a moment to the pool.
+        payload["games"] = len({d.game_id for d in reel})
+    return payload
 
 
 def _caption_duration(magnitude: float) -> float:
@@ -125,16 +209,29 @@ def render_captions(
     return json.dumps(caption_payload(reel, title=title), indent=indent)
 
 
-def render_json(reel: List[DramaEvent], *, title: str = "Highlight reel", indent: int = 2) -> str:
+def render_json(
+    reel: List[DramaEvent],
+    *,
+    title: str = "Highlight reel",
+    indent: int = 2,
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> str:
     """Render the reel as a JSON string (structured payload)."""
-    return json.dumps(reel_payload(reel, title=title), indent=indent)
+    return json.dumps(reel_payload(reel, title=title, sources=sources), indent=indent)
 
 
-def render_markdown(reel: List[DramaEvent], *, title: str = "Highlight reel") -> str:
+def render_markdown(
+    reel: List[DramaEvent],
+    *,
+    title: str = "Highlight reel",
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> str:
     """Render the reel as caster-facing markdown.
 
     A numbered top-moments list (ranked) followed by a by-drama-type breakdown.
     Stays graceful on an empty reel (a quiet game) rather than emitting an empty doc.
+    When ``sources`` is given (a round recap), each top moment names its source board +
+    pairing and the summary line reports how many boards the pool spans.
     """
     lines: List[str] = [f"# {title}", ""]
     if not reel:
@@ -146,16 +243,24 @@ def render_markdown(reel: List[DramaEvent], *, title: str = "Highlight reel") ->
 
     tally = by_kind(reel)
     summary = ", ".join(f"{n} {kind}" for kind, n in sorted(tally.items()))
-    lines.append(f"> {len(reel)} moment(s), ranked by drama magnitude · {summary}")
+    headline = f"> {len(reel)} moment(s), ranked by drama magnitude · {summary}"
+    if sources is not None:
+        n_games = len({d.game_id for d in reel})
+        headline = (
+            f"> {len(reel)} moment(s) across {n_games} board(s), "
+            f"ranked by drama magnitude · {summary}"
+        )
+    lines.append(headline)
     lines.append("")
 
     lines.append("## Top moments")
     lines.append("")
     for i, d in enumerate(reel, start=1):
         emoji, _ = _KIND_LABEL.get(d.kind, ("", d.kind))
+        loc = f"{_source_text(d, sources)}, ply {d.ply}"
         lines.append(
             f"{i}. {emoji} **{d.kind}** · `{d.magnitude:.2f}` — {d.headline} "
-            f"_(game {d.game_id}, ply {d.ply})_"
+            f"_({loc})_"
         )
     lines.append("")
 
@@ -213,14 +318,21 @@ def _board_html(fen: Optional[str]) -> str:
     return '<div class="board" role="img" aria-label="board position">' + "".join(cells) + "</div>"
 
 
-def _moment_card_html(index: int, d: DramaEvent) -> str:
-    """One ranked-moment card: board + kind/emoji + caption + equity swing."""
+def _moment_card_html(
+    index: int, d: DramaEvent, sources: Optional[Dict[str, GameSource]] = None
+) -> str:
+    """One ranked-moment card: board + kind/emoji + caption + equity swing.
+
+    With ``sources`` (a round recap), the location line names the source board + pairing
+    instead of a bare game id.
+    """
     emoji, label = _KIND_LABEL.get(d.kind, ("", d.kind))
     cap = str(caption(d)["text"])
     side = "White" if d.mover_white else "Black"
     swing = (
         f"{d.delta_equity:+.0f} pts → {d.equity:.0f}% (White POV)"
     )
+    loc = f"{_source_text(d, sources)}, ply {d.ply}"
     return (
         '<article class="moment">'
         f'<div class="rank">#{index}</div>'
@@ -232,7 +344,7 @@ def _moment_card_html(index: int, d: DramaEvent) -> str:
         f'<div class="caption">{html.escape(cap)}</div>'
         f'<div class="headline">{html.escape(d.headline)}</div>'
         f'<div class="swing">{html.escape(side)} · {html.escape(swing)} '
-        f'<span class="loc">game {html.escape(str(d.game_id))}, ply {d.ply}</span></div>'
+        f'<span class="loc">{html.escape(loc)}</span></div>'
         "</div>"
         "</article>"
     )
@@ -269,13 +381,19 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 """.strip()
 
 
-def render_html(reel: List[DramaEvent], *, title: str = "Highlight reel") -> str:
+def render_html(
+    reel: List[DramaEvent],
+    *,
+    title: str = "Highlight reel",
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> str:
     """Render the ranked reel as ONE self-contained HTML clip player.
 
     No external dependencies, CDNs, or scripts — opens offline straight from disk.
     Each ranked moment is a card with a Unicode board (from the FEN), the drama
     kind/emoji, the caster caption, and the equity swing. Stays graceful on an
-    empty reel (a quiet game).
+    empty reel (a quiet game). With ``sources`` (a round recap), each card names its
+    source board + pairing and the subtitle reports how many boards the pool spans.
     """
     esc_title = html.escape(title)
     if not reel:
@@ -287,8 +405,16 @@ def render_html(reel: List[DramaEvent], *, title: str = "Highlight reel") -> str
     else:
         tally = by_kind(reel)
         summary = ", ".join(f"{n} {kind}" for kind, n in sorted(tally.items()))
-        sub = f'<p class="sub">{len(reel)} moment(s), ranked by drama magnitude · {html.escape(summary)}</p>'
-        body = "\n".join(_moment_card_html(i, d) for i, d in enumerate(reel, start=1))
+        span = ""
+        if sources is not None:
+            span = f"across {len({d.game_id for d in reel})} board(s), "
+        sub = (
+            f'<p class="sub">{len(reel)} moment(s), {span}ranked by drama magnitude '
+            f"· {html.escape(summary)}</p>"
+        )
+        body = "\n".join(
+            _moment_card_html(i, d, sources) for i, d in enumerate(reel, start=1)
+        )
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
