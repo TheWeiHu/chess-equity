@@ -1694,6 +1694,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     dr.add_argument(
         "--token", default=None, help="Lichess API token for --broadcast round feeds (optional)"
     )
+    dr.add_argument(
+        "--overlay",
+        action="store_true",
+        help="also run a go-live preflight on the streaming overlay bundle: its "
+        "HTML/JS assets parse and the bundled replay + live overlay events conform to "
+        "the documented event schema (no torch/engine/network needed).",
+    )
 
     pp = sub.add_parser(
         "personal",
@@ -1755,7 +1762,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":
-        from chess_equity.doctor import doctor, probe_broadcast
+        from chess_equity.doctor import doctor, probe_broadcast, probe_overlay
 
         broadcast_probe = None
         if args.broadcast:
@@ -1763,7 +1770,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             feed = feed_from_spec(args.broadcast, token=args.token)
             broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
-        return doctor(engines=args.engine, broadcast_probe=broadcast_probe)
+        overlay_probe = probe_overlay if args.overlay else None
+        return doctor(
+            engines=args.engine,
+            broadcast_probe=broadcast_probe,
+            overlay_probe=overlay_probe,
+        )
     if args.command == "personal":
         return _run_personal(args)
 
