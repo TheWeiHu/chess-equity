@@ -308,6 +308,14 @@ def _caption_cues(
     output valid even when two clock readings collide. Both :func:`build_captions_vtt` and
     :func:`build_captions_srt` render these exact cues so the two tracks stay cue-for-cue
     identical and only differ in container/timestamp dialect.
+
+    For a multi-game feed (a multi-game ``--pgn``) the timeline **resets per game**:
+    clocks reset each game, so accumulating elapsed time across game boundaries would
+    push a later board's cues to ever-growing (wrong) timestamps. Whenever ``game_id``
+    changes the running clocks and elapsed time restart from zero, so each board's first
+    cue lands near ``t=0`` keyed to its own clock. Cue numbering stays globally
+    sequential. A single-game feed has one ``game_id``, so nothing resets and the output
+    is byte-identical to before.
     """
     prev_white: Optional[float] = None
     prev_black: Optional[float] = None
@@ -316,7 +324,16 @@ def _caption_cues(
     texts: List[str] = []
     last_start = -1.0
     min_step = 0.001
+    cur_game_id: Optional[str] = None
     for event in events:
+        # Game boundary: clocks reset per game, so restart the timeline rather than
+        # piling a later board's deltas onto the prior board's accumulated elapsed.
+        if event.game_id != cur_game_id:
+            cur_game_id = event.game_id
+            prev_white = None
+            prev_black = None
+            elapsed = 0.0
+            last_start = -1.0
         mover_white = not event.white_to_move
         if mover_white:
             cur = event.white_clock
