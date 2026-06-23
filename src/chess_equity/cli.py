@@ -512,6 +512,33 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         print(f"wrote {cues} caption cue(s) to {args.captions_vtt}", file=sys.stderr)
         return 0
 
+    # --captions-srt: same finished-PGN replay as --captions-vtt, but writes the caster
+    # cues as an SRT (SubRip) subtitle track for non-web editors (task 0229). Reuses the
+    # exact same _caption_cues timeline, so the SRT is cue-for-cue identical to the VTT.
+    if getattr(args, "captions_srt", None) is not None:
+        if not args.pgn:
+            print("# broadcast --captions-srt requires --pgn (no live feed)", file=sys.stderr)
+            return 2
+        from chess_equity.broadcast import build_captions_srt
+
+        ingestor = BroadcastIngestor(
+            _build_broadcast_feed(args),
+            model,
+            white_elo=args.white_elo,
+            black_elo=args.black_elo,
+            clock_aware=args.clock_aware,
+            engine=cp_engine,
+            select=selector,
+        )
+        with open(args.pgn, encoding="utf-8") as fh:
+            events = ingestor.ingest_snapshot(fh.read())
+        srt = build_captions_srt(events)
+        with open(args.captions_srt, "w", encoding="utf-8") as fh:
+            fh.write(srt)
+        cues = srt.count(" --> ")
+        print(f"wrote {cues} caption cue(s) to {args.captions_srt}", file=sys.stderr)
+        return 0
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -1707,6 +1734,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "clock-less PGNs fall back to even move-index spacing) so the caster line "
         "becomes a real caption/TTS track for the recorded stream (task 0211). Requires "
         "--pgn (no live feed).",
+    )
+    bc.add_argument(
+        "--captions-srt",
+        metavar="OUT",
+        default=None,
+        help="like --captions-vtt but writes the caster captions as an SRT (SubRip) "
+        "subtitle track to OUT — same cues, numbered with comma-millisecond timestamps "
+        "and raw text, for non-web editors (Premiere/Resolve/CapCut) that can't ingest "
+        "WebVTT (task 0229). Requires --pgn (no live feed).",
     )
     add_profile_args(bc)
     add_model_arg(bc)
