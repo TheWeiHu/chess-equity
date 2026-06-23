@@ -453,19 +453,33 @@ def round_leaderboard(
     return scores
 
 
+def _worst_cell(worst: Optional[MoveGrade]) -> str:
+    """Compact worst-move cell for the leaderboard: ``SAN Δpeer`` (e.g. ``Qd7 -3.2``),
+    or ``-`` when the player has no moves. Last column, so longer SAN just overflows
+    its pad rather than breaking the numeric columns' alignment."""
+    if worst is None:
+        return "-"
+    return f"{worst.san} {worst.grade_peer:+.1f}"
+
+
 def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
-    """A ranked accuracy table (one row per player), as text lines."""
+    """A ranked accuracy table (one row per player), as text lines.
+
+    The trailing ``worst`` column shows each player's biggest single drop as
+    ``SAN Δpeer`` (or ``-`` for an empty player); it's display-only and does not change
+    the CSV/JSON export schema.
+    """
     rows: List[str] = []
     header = (
         f"{'#':>2}  {'player':<14}{'acc%':>6}{'moves':>7}"
-        f"{'blun':>6}{'mist':>6}{'meanΔ':>8}"
+        f"{'blun':>6}{'mist':>6}{'meanΔ':>8}  {'worst':<16}"
     )
     rows.append(header)
     rows.append("-" * len(header))
     for i, s in enumerate(scores, start=1):
         rows.append(
             f"{i:>2}  {s.name:<14}{s.accuracy:>6.1f}{s.n_moves:>7}"
-            f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}"
+            f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}  {_worst_cell(s.worst):<16}"
         )
     return rows
 
