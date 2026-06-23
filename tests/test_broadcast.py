@@ -706,8 +706,9 @@ def test_clock_aware_delta_differs_from_blind_on_low_clock():
 # Scramble drama reachable on a low-clock broadcast replay (task 0108)
 # --------------------------------------------------------------------------- #
 
-# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6 <
-# SLIP_DELTA=12), so to land in that band reliably we drive a stub model with a
+# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6.5 <
+# CLUTCH_DELTA=10, calibrated in task 0170), so to land in that band reliably we drive a
+# stub model with a
 # controlled ~7pt swing rather than a real engine (which on these toy positions only
 # returns 0 or a large swing that escalates to clutch/escape). The point under test is
 # the wiring: clocks now ride on every MoveEvent (0097), so the clock-gated scramble

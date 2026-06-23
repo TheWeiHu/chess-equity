@@ -76,8 +76,8 @@ def test_each_trigger_type_surfaces_in_reel():
 def test_rank_breaks_ties_by_kind_priority_then_ply():
     # Two equal-magnitude events of different kinds: missed_win outranks clutch.
     same = [
-        ev(ply=4, equity=66.0, delta_equity=16.0),    # clutch, mag 16/40
-        ev(ply=2, equity=64.0, delta_equity=-16.0),   # missed_win, mag 16/40
+        ev(ply=4, equity=70.0, delta_equity=20.0),    # clutch, mag 20/40
+        ev(ply=2, equity=64.0, delta_equity=-20.0),   # missed_win, mag 20/40
     ]
     ranked = rank([score_event(e) for e in same])
     assert ranked[0].magnitude == ranked[1].magnitude

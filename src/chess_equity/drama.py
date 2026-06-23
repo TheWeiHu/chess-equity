@@ -49,17 +49,32 @@ from chess_equity.broadcast import MoveEvent
 # --------------------------------------------------------------------------- #
 # Tunable thresholds (equity in percentage points; clock in seconds)
 # --------------------------------------------------------------------------- #
+#
+# The Δequity cutoffs below are calibrated to tail percentiles of the REAL per-move
+# practical-equity swing distribution (task 0170), not hand-set: on the cached real
+# Lichess dump ``lichess_db_standard_rated_2016-05`` (n=295,140 per-move transitions /
+# 4,860 games), each derived from the |Δequity| magnitude quantile shown. See
+# ``reports/drama_thresholds_real.md`` and ``scripts/calibrate_drama_thresholds.py``.
+# They are the *defaults*; callers may still override (monkeypatch the constants or pass
+# their own annotated-game tuning via :data:`THRESHOLDS`).
+#
+# NOTE on clutch: under a rating-BLIND best-play eval the mover almost never raises their
+# own eval (positive Δ is bounded by depth-noise), so CLUTCH_DELTA is calibrated on the
+# |Δequity| magnitude scale (a "real" positive swing), a notch below SLIP — not on the
+# degenerate positive-only quantiles. It reads as a clutch *find* on a rating-conditioned
+# model (Maia-2), where below-rating-typical play makes a strong move genuinely lift equity.
 
-# A move this much better than the mover's rating-typical play is a clutch find.
-CLUTCH_DELTA = 8.0
-# A swing of this size (either direction) is a "real" practical swing.
-SLIP_DELTA = 12.0
+# A clutch find: a positive swing in the top ~10% of moves by magnitude (p90 ≈ 9.9 → 10).
+CLUTCH_DELTA = 10.0
+# A "real" let-it-slip / claw-back swing: top ~5% by magnitude (p95 ≈ 17.9 → 18).
+SLIP_DELTA = 18.0
 # "Practically winning" / "practically losing" from the mover's POV, before the move.
+# Equity LEVELS (not swing magnitudes) — kept as principled round numbers (task 0170).
 WIN_LEVEL = 70.0
 LOSS_LEVEL = 30.0
-# A notable swing during time pressure (lower bar than SLIP_DELTA — the clock is the
-# story here, not the size of the swing).
-SCRAMBLE_DELTA = 6.0
+# A notable swing during time pressure: top ~15% by magnitude (p85 ≈ 6.6 → 6.5) — a lower
+# bar than SLIP_DELTA, because here the clock is the story, not the size of the swing.
+SCRAMBLE_DELTA = 6.5
 # The mover is "in time trouble" under this many seconds.
 SCRAMBLE_SECS = 20.0
 # A swing of this many points is maximally dramatic (magnitude saturates at 1.0).
