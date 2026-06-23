@@ -299,6 +299,126 @@ def _probe_to_overlay_event() -> str:
     return f"ply {event.get('ply')}, equity {event.get('equity')}"
 
 
+# --- evidence gate preflight (task 0195) -----------------------------------------------
+#
+# `doctor` verifies the optional engines and the go-live bundle, but not the project's
+# actual headline claim: that the committed real-data gate reports are present and still
+# passing. Without this a repo could ship with a missing or regressed proof and doctor
+# would stay green. `probe_evidence` reads `reports/SUMMARY.md` — the canonical gate index,
+# whose verdicts are quoted/parsed from each report's own header — and confirms every listed
+# report exists on disk and corroborates its stated verdict.
+#
+# Scope boundary with task 0194 (guards SUMMARY's verdicts MATCH the report headers): this
+# trusts SUMMARY's verdict column and guards (a) no listed proof is missing and (b) no gate
+# report has silently regressed to FAIL except the one deliberate negative result.
+
+# The only report SUMMARY may legitimately mark FAIL: the end-to-end board→WDL net, kept on
+# purpose as a negative result (Approach D loses to the centipawn baseline). Any *other* FAIL
+# is a regression doctor must catch.
+EVIDENCE_FAIL_ALLOWLIST = frozenset({"wdl_net_real.md"})
+
+# A row whose verdict is PASS must have its report corroborate it. Markers differ across
+# reports: most say "PASS"; goodmoves_real states its pass in prose with a "✅". Accept either.
+_PASS_MARKERS = ("PASS", "✅")
+
+
+def reports_dir() -> Optional[Path]:
+    """The repo's ``reports/`` dir, or ``None`` from an installed wheel without assets."""
+    candidate = Path(__file__).resolve().parents[2] / "reports"
+    return candidate if candidate.is_dir() else None
+
+
+def _parse_summary_rows(summary_text: str) -> list:
+    """Extract ``(filename, verdict)`` for each report row in ``SUMMARY.md``'s table.
+
+    ``verdict`` is normalised to ``PASS`` / ``FAIL`` / ``info`` (``PASS (caveat)`` → ``PASS``).
+    Only table rows that link a ``*.md`` report are returned; prose and the header row are
+    skipped. Raises if the table has no parseable rows (a gutted/renamed SUMMARY).
+    """
+    import re
+
+    rows = []
+    for line in summary_text.splitlines():
+        line = line.strip()
+        if not line.startswith("| ["):
+            continue
+        cols = [c.strip() for c in line.strip("|").split("|")]
+        if len(cols) < 4:
+            continue
+        link = re.search(r"\(([^)]+\.md)\)", cols[0])
+        if not link:
+            continue
+        filename = link.group(1)
+        verdict_col = cols[-1].upper()
+        if "**FAIL**" in verdict_col or verdict_col.startswith("FAIL"):
+            verdict = "FAIL"
+        elif "**PASS**" in verdict_col or "PASS" in verdict_col:
+            verdict = "PASS"
+        else:
+            verdict = "info"
+        rows.append((filename, verdict))
+    if not rows:
+        raise ValueError("SUMMARY.md has no parseable report rows (gate index empty or renamed?)")
+    return rows
+
+
+def probe_evidence(directory: Optional[Path] = None) -> str:
+    """Assert the committed real-data gate reports are present and still passing (task 0195).
+
+    Reads ``reports/SUMMARY.md`` (the gate index) and, for every report it lists:
+
+    * confirms the linked ``*_real.md`` file exists on disk — a missing proof fails here;
+    * for a **PASS** verdict, confirms the report itself states a pass (a ``PASS`` token or
+      the prose ``✅`` goodmoves uses) — a report that regressed to no-longer-passing while
+      SUMMARY still claims PASS is caught;
+    * for a **FAIL** verdict, confirms the file is the one allowlisted deliberate negative
+      result (:data:`EVIDENCE_FAIL_ALLOWLIST`) and that the report states ``FAIL`` — any
+      *other* FAIL is an unintended regression;
+    * **info** rows (calibration/disagreement/threshold reports that state no gate) are
+      existence-checked only.
+
+    Reads report text but no datasets — safe to run unattended. Raises on the first problem
+    so :func:`check` reports a FAIL with the offending detail.
+    """
+    directory = directory or reports_dir()
+    if directory is None or not directory.is_dir():
+        raise ValueError("reports/ dir not found (running from a wheel without assets?)")
+    summary = directory / "SUMMARY.md"
+    if not summary.is_file():
+        raise ValueError("missing reports/SUMMARY.md (the gate index)")
+
+    rows = _parse_summary_rows(summary.read_text(encoding="utf-8"))
+    pass_n = fail_n = info_n = 0
+    for filename, verdict in rows:
+        report = directory / filename
+        if not report.is_file():
+            raise ValueError(f"gate report listed in SUMMARY.md is missing on disk: {filename}")
+        text = report.read_text(encoding="utf-8")
+        if verdict == "PASS":
+            if not any(marker in text for marker in _PASS_MARKERS):
+                raise ValueError(
+                    f"{filename}: SUMMARY.md marks it PASS but the report states no pass "
+                    "(regressed proof?)"
+                )
+            pass_n += 1
+        elif verdict == "FAIL":
+            if filename not in EVIDENCE_FAIL_ALLOWLIST:
+                raise ValueError(
+                    f"{filename}: gate report regressed to FAIL (only "
+                    f"{sorted(EVIDENCE_FAIL_ALLOWLIST)} is an allowed deliberate FAIL)"
+                )
+            if "FAIL" not in text.upper():
+                raise ValueError(f"{filename}: SUMMARY.md marks it FAIL but the report says no FAIL")
+            fail_n += 1
+        else:
+            info_n += 1
+
+    return (
+        f"SUMMARY.md gate index OK — {len(rows)} report(s) present: "
+        f"{pass_n} PASS, {fail_n} deliberate FAIL, {info_n} info"
+    )
+
+
 def check(name: str, probe: Probe) -> Check:
     """Run one probe, mapping success/exception to a :class:`Check`.
 
@@ -334,6 +454,7 @@ def doctor(
     engines: Optional[List[str]] = None,
     broadcast_probe: Optional[Probe] = None,
     overlay_probe: Optional[Probe] = None,
+    evidence_probe: Optional[Probe] = None,
 ) -> int:
     """Probe the optional engines with the real backends (override ``probes`` in tests).
 
@@ -348,6 +469,11 @@ def doctor(
     bundle the streamer loads is shippable: its HTML/JS assets parse and the bundled
     replay + live ``to_overlay_event`` output conform to the documented event schema
     (task 0192). Static + schema only — no torch/network.
+
+    ``evidence_probe`` (set by ``doctor --evidence``) appends a check that the committed
+    real-data gate reports listed in ``reports/SUMMARY.md`` are present and still state
+    their expected verdict (task 0195) — so a missing/regressed proof turns doctor red.
+    Reads report text but no datasets — safe to run unattended.
     """
     probes = probes or {"stockfish": _probe_stockfish, "maia2": _probe_maia2}
     if engines:
@@ -357,4 +483,6 @@ def doctor(
         checks.append(check("broadcast", broadcast_probe))
     if overlay_probe is not None:
         checks.append(check("overlay", overlay_probe))
+    if evidence_probe is not None:
+        checks.append(check("evidence", evidence_probe))
     return run_doctor(checks, out=out)
