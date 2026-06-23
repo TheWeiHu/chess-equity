@@ -35,6 +35,7 @@ from __future__ import annotations
 import http.server
 import io
 import json
+import os
 import re
 import time
 import urllib.error
@@ -609,6 +610,26 @@ class UrlPgnFeed(BroadcastFeed):
 
 class FeedError(RuntimeError):
     """A transient feed failure the ingestor should retry rather than crash on."""
+
+
+def feed_from_spec(
+    spec: str, *, token: Optional[str] = None, moves_per_poll: int = 1
+) -> BroadcastFeed:
+    """Build the right :class:`BroadcastFeed` from a single source string.
+
+    One front door for "point me at a feed" callers (e.g. the ``doctor`` go-live
+    preflight) so they don't re-implement the --pgn/--round/--url dispatch:
+
+    * an existing **file path** → :class:`LocalPgnFeed` (offline replay),
+    * an **http(s):// URL** → :class:`UrlPgnFeed`,
+    * anything else → a Lichess broadcast **round id** → :class:`LichessRoundFeed`.
+    """
+    if os.path.exists(spec):
+        with open(spec, encoding="utf-8") as fh:
+            return LocalPgnFeed(fh.read(), moves_per_poll=moves_per_poll)
+    if spec.startswith("http://") or spec.startswith("https://"):
+        return UrlPgnFeed(spec)
+    return LichessRoundFeed(spec, token=token)
 
 
 # --------------------------------------------------------------------------- #
