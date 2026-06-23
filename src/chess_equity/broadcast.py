@@ -165,11 +165,17 @@ class MoveEvent:
         ``cp`` is the White-POV objective centipawn eval (the overlay's classic
         ghost tick and the human-edge divergence badge), or ``None`` when no engine
         cp is available — the overlay then simply hides the tick.
+
+        ``white_to_move`` is the authoritative side-to-move in the position this
+        event describes (the post-move FEN's turn). The overlay's ``?pov=stm``
+        readout reads it directly instead of guessing from ply parity, which is only
+        a fallback for replay feeds that omit the flag.
         """
         event: Dict[str, object] = {
             "type": "position",
             "ply": self.ply,
             "move": {"san": self.san},
+            "white_to_move": self.white_to_move,
             "equity": self.equity / 100.0,
             "cp": self.cp,
             "clock": {"white": self.white_clock, "black": self.black_clock},
