@@ -91,6 +91,10 @@ def test_ledger_row_fields_track_the_event():
         assert row["grade"], row
         # Mover side: in the post-move FEN the side to move is the opponent.
         assert row["side"] == ("white" if not event.white_to_move else "black")
+        # Model attribution (task 0224): the ledger stamps which equity model
+        # produced the row, sourced from event.source. The engine-free replay uses
+        # the baseline model, so every row names it.
+        assert row["model"] == event.source == "LichessBaselineModel"
     assert [r["san"] for r in rows] == sans
 
     # The scholar's-mate finisher is a clutch swing → its drama columns are populated.
