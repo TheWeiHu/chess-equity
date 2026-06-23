@@ -309,3 +309,44 @@ def test_round_leaderboard_render_has_a_row_per_player():
     assert "player" in lines[0] and "acc%" in lines[0]
     for s in scores:
         assert any(s.name in line for line in lines[2:])
+
+
+def test_round_leaderboard_player_carries_rating():
+    from chess_equity.grading import round_leaderboard
+
+    scores = round_leaderboard(_round_games())
+    # The fixture sets WhiteElo/BlackElo per board; every row carries a positive rating
+    # equal to the modal mover_elo of that player's pooled moves.
+    for s in scores:
+        assert isinstance(s.rating, int) and s.rating > 0
+
+
+def test_leaderboard_export_rows_schema_and_rank():
+    import csv
+
+    from chess_equity.grading import (
+        LEADERBOARD_COLUMNS,
+        leaderboard_export_rows,
+        render_leaderboard_csv,
+        round_leaderboard,
+    )
+
+    scores = round_leaderboard(_round_games())
+    rows = leaderboard_export_rows(scores)
+    # One row per player, exactly the stable broadcast-facing columns.
+    assert len(rows) == len(scores)
+    for r in rows:
+        assert set(r) == set(LEADERBOARD_COLUMNS)
+        assert isinstance(r["accuracy"], float) and 0.0 <= r["accuracy"] <= 100.0
+        assert isinstance(r["avg_delta"], float)
+        assert isinstance(r["rating"], int)
+    # rank is 1-based and monotonic, matching the already-ranked order.
+    assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1))
+    assert [r["player"] for r in rows] == [s.name for s in scores]
+
+    # CSV exports the same columns and same rows, header-first and parseable.
+    csv_text = render_leaderboard_csv(scores)
+    parsed = list(csv.DictReader(csv_text.splitlines()))
+    assert [list(p.keys()) for p in parsed][0] == LEADERBOARD_COLUMNS
+    assert len(parsed) == len(rows)
+    assert [p["player"] for p in parsed] == [r["player"] for r in rows]
