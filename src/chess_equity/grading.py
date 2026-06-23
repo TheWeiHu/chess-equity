@@ -53,6 +53,46 @@ BASE_BANDS = [
 ]
 
 
+# Game phases for the per-phase accuracy breakdown (task 0220). Order is opening →
+# middlegame → endgame; every breakdown reports a bucket for each so the schema is stable.
+PHASES = ["opening", "middlegame", "endgame"]
+
+# Endgame threshold: when both sides combined have this few non-king, non-pawn pieces
+# (knights/bishops/rooks/queens) left, the position is materially an endgame regardless
+# of move number. The standard starting position has 14 such pieces.
+_ENDGAME_MINOR_MAJOR_MAX = 6
+# Opening cutoff: the development phase is the first ~10 full moves while material is high.
+_OPENING_FULLMOVE_MAX = 10
+
+# Non-king, non-pawn piece types that count toward the endgame material test.
+_MINOR_MAJOR = (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+
+
+def position_phase(board: chess.Board) -> str:
+    """Classify a position as ``opening`` / ``middlegame`` / ``endgame`` (simple heuristic).
+
+    A deliberately-simple, documented ply+material rule (the task asks for exactly this,
+    not engine-grade phase detection):
+
+    - **endgame** when both sides together have ``<= 6`` non-king, non-pawn pieces left
+      (queens/rooks/minors) — materially an endgame however early it happens;
+    - else **opening** for the first 10 full moves (the development phase, material high);
+    - else **middlegame**.
+
+    The endgame test wins over the opening test, so an early massacre is still an endgame.
+    """
+    minor_major = sum(
+        len(board.pieces(piece_type, color))
+        for piece_type in _MINOR_MAJOR
+        for color in (chess.WHITE, chess.BLACK)
+    )
+    if minor_major <= _ENDGAME_MINOR_MAJOR_MAX:
+        return "endgame"
+    if board.fullmove_number <= _OPENING_FULLMOVE_MAX:
+        return "opening"
+    return "middlegame"
+
+
 def scaled_bands(elo: int) -> List[tuple]:
     """Rating-aware grade bands: wider tolerance at lower ratings.
 
@@ -100,6 +140,7 @@ class MoveGrade:
     uci: str
     mover_white: bool
     mover_elo: int
+    phase: str  # game phase the move was played in: opening/middlegame/endgame (task 0220)
     equity_after: float
     expected_equity: float
     equity_best: float
@@ -146,6 +187,7 @@ class EquityGrader:
         mover_white = board.turn == chess.WHITE
         mover_elo = white_elo if mover_white else black_elo
         san = board.san(move)
+        phase = position_phase(board)  # the position the move is played in (before the push)
 
         # Equity (mover POV) and mover-POV cp of every legal move.
         equities: Dict[str, float] = {}
@@ -186,6 +228,7 @@ class EquityGrader:
             uci=played,
             mover_white=mover_white,
             mover_elo=mover_elo,
+            phase=phase,
             equity_after=equity_after,
             expected_equity=expected_equity,
             equity_best=equity_best,
@@ -281,6 +324,38 @@ def scoreline(grades: List[MoveGrade]) -> GameScoreline:
 ACCURATE_LABELS = {"brilliant", "good", "ok"}
 
 
+def _accuracy(grades: List[MoveGrade]) -> float:
+    """Share of ``grades`` graded ok-or-better (:data:`ACCURATE_LABELS`), 0..100."""
+    if not grades:
+        return 0.0
+    accurate = sum(1 for g in grades if g.label in ACCURATE_LABELS)
+    return 100.0 * accurate / len(grades)
+
+
+def phase_breakdown(grades: List[MoveGrade]) -> Dict[str, Dict[str, object]]:
+    """Split a player's moves by game phase and score each phase (task 0220).
+
+    Returns a stable dict keyed by every :data:`PHASES` entry (a phase with no moves
+    reports ``n_moves=0``, ``accuracy``/``avg_delta`` ``0.0``), where each value carries
+    that phase's move count, accuracy % (same ok-or-better definition as the overall
+    leaderboard), and mean Δpeer. Pure reduction over already-computed grades — no model
+    calls. The per-phase ``n_moves`` sum to ``len(grades)``.
+    """
+    by_phase: Dict[str, List[MoveGrade]] = {phase: [] for phase in PHASES}
+    for g in grades:
+        by_phase.setdefault(g.phase, []).append(g)
+    out: Dict[str, Dict[str, object]] = {}
+    for phase in PHASES:
+        gs = by_phase[phase]
+        mean_peer = sum(g.grade_peer for g in gs) / len(gs) if gs else 0.0
+        out[phase] = {
+            "n_moves": len(gs),
+            "accuracy": round(_accuracy(gs), 1),
+            "avg_delta": round(mean_peer, 2),
+        }
+    return out
+
+
 @dataclass(frozen=True)
 class PlayerScore:
     """One player's pooled move quality across every game they played this round."""
@@ -294,6 +369,9 @@ class PlayerScore:
     mean_peer: float  # mean grade_peer (signed Δequity; positive = beat rating peers)
     rating: int  # the player's rating this round (modal mover_elo of their pooled moves)
     worst: Optional[MoveGrade]  # the move with the minimum grade_peer (biggest drop)
+    # Per-phase accuracy/Δpeer split (task 0220), keyed by every PHASES entry. Each value:
+    # {"n_moves", "accuracy", "avg_delta"}; the per-phase n_moves sum to n_moves.
+    phases: Dict[str, Dict[str, object]]
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -306,6 +384,7 @@ class PlayerScore:
             "mean_peer": self.mean_peer,
             "rating": self.rating,
             "worst": None if self.worst is None else self.worst.to_dict(),
+            "phases": {phase: dict(stat) for phase, stat in self.phases.items()},
         }
 
 
@@ -328,6 +407,7 @@ def _player_score(name: str, grades: List[MoveGrade]) -> PlayerScore:
         mean_peer=mean_peer,
         rating=_modal_rating(grades),
         worst=worst,
+        phases=phase_breakdown(grades),
     )
 
 
@@ -395,13 +475,21 @@ def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
 # `player`/`avg_delta` are the broadcast-facing names, plus `rating` and a 1-based `rank`.
 LEADERBOARD_COLUMNS = ["rank", "player", "rating", "n_moves", "accuracy", "avg_delta"]
 
+# Flat CSV columns for the per-phase breakdown (task 0220): two per phase, appended after
+# the base columns so the existing schema is a stable prefix. `{phase}_acc` is that phase's
+# accuracy %, `{phase}_moves` its move count (the move counts sum to `n_moves`).
+PHASE_CSV_COLUMNS = [f"{phase}_{stat}" for phase in PHASES for stat in ("acc", "moves")]
+LEADERBOARD_CSV_COLUMNS = LEADERBOARD_COLUMNS + PHASE_CSV_COLUMNS
+
 
 def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]]:
     """Flat, stable per-player rows for JSON/CSV export, ranked in list order.
 
     ``scores`` is the already-ranked output of :func:`round_leaderboard`; ``rank`` is its
     1-based position. Accuracy is rounded to 1 decimal and ``avg_delta`` (== ``mean_peer``)
-    to 2, so the export is stable and lower-third-friendly. Pure projection — no model calls.
+    to 2, so the export is stable and lower-third-friendly. ``phases`` is the nested
+    per-phase breakdown (task 0220): ``{phase: {n_moves, accuracy, avg_delta}}`` for every
+    :data:`PHASES` entry. Pure projection — no model calls.
     """
     return [
         {
@@ -411,21 +499,33 @@ def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]
             "n_moves": s.n_moves,
             "accuracy": round(s.accuracy, 1),
             "avg_delta": round(s.mean_peer, 2),
+            "phases": {phase: dict(stat) for phase, stat in s.phases.items()},
         }
         for i, s in enumerate(scores, start=1)
     ]
 
 
 def render_leaderboard_csv(scores: List[PlayerScore]) -> str:
-    """The leaderboard export as CSV text (header + one row per player, trailing newline)."""
+    """The leaderboard export as CSV text (header + one row per player, trailing newline).
+
+    The nested ``phases`` breakdown is flattened into the :data:`PHASE_CSV_COLUMNS`
+    (``opening_acc``/``opening_moves``/…) appended after the base columns, so CSV stays a
+    flat, machine-readable table while still carrying the per-phase accuracy split.
+    """
     import csv
     import io
 
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=LEADERBOARD_COLUMNS)
+    writer = csv.DictWriter(buf, fieldnames=LEADERBOARD_CSV_COLUMNS)
     writer.writeheader()
-    for row in leaderboard_export_rows(scores):
-        writer.writerow(row)
+    rows = leaderboard_export_rows(scores)
+    for row, score in zip(rows, scores):
+        flat = {col: row[col] for col in LEADERBOARD_COLUMNS}
+        for phase in PHASES:
+            stat = score.phases[phase]
+            flat[f"{phase}_acc"] = stat["accuracy"]
+            flat[f"{phase}_moves"] = stat["n_moves"]
+        writer.writerow(flat)
     return buf.getvalue()
 
 

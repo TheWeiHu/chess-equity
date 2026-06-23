@@ -326,6 +326,7 @@ def test_leaderboard_export_rows_schema_and_rank():
 
     from chess_equity.grading import (
         LEADERBOARD_COLUMNS,
+        LEADERBOARD_CSV_COLUMNS,
         leaderboard_export_rows,
         render_leaderboard_csv,
         round_leaderboard,
@@ -333,10 +334,10 @@ def test_leaderboard_export_rows_schema_and_rank():
 
     scores = round_leaderboard(_round_games())
     rows = leaderboard_export_rows(scores)
-    # One row per player, exactly the stable broadcast-facing columns.
+    # One row per player: the stable broadcast columns plus the nested phase breakdown.
     assert len(rows) == len(scores)
     for r in rows:
-        assert set(r) == set(LEADERBOARD_COLUMNS)
+        assert set(r) == set(LEADERBOARD_COLUMNS) | {"phases"}
         assert isinstance(r["accuracy"], float) and 0.0 <= r["accuracy"] <= 100.0
         assert isinstance(r["avg_delta"], float)
         assert isinstance(r["rating"], int)
@@ -344,9 +345,68 @@ def test_leaderboard_export_rows_schema_and_rank():
     assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1))
     assert [r["player"] for r in rows] == [s.name for s in scores]
 
-    # CSV exports the same columns and same rows, header-first and parseable.
+    # CSV exports the base columns + flattened phase columns, header-first and parseable.
     csv_text = render_leaderboard_csv(scores)
     parsed = list(csv.DictReader(csv_text.splitlines()))
-    assert [list(p.keys()) for p in parsed][0] == LEADERBOARD_COLUMNS
+    assert [list(p.keys()) for p in parsed][0] == LEADERBOARD_CSV_COLUMNS
+    # The base columns are a stable prefix of the CSV schema (back-compat for consumers).
+    assert LEADERBOARD_CSV_COLUMNS[: len(LEADERBOARD_COLUMNS)] == LEADERBOARD_COLUMNS
     assert len(parsed) == len(rows)
     assert [p["player"] for p in parsed] == [r["player"] for r in rows]
+
+
+def test_position_phase_heuristic():
+    from chess_equity.grading import position_phase
+
+    # Opening: starting position, full material, move 1.
+    assert position_phase(chess.Board()) == "opening"
+    # Middlegame: still plenty of material but past the opening cutoff (fullmove 15).
+    mid = chess.Board()
+    mid.set_fen("r1bq1rk1/pp2bppp/2n1pn2/3p4/3P4/2N1PN2/PP2BPPP/R1BQ1RK1 w - - 0 15")
+    assert position_phase(mid) == "middlegame"
+    # Endgame: K+R vs K+R — only 2 non-king/non-pawn pieces, well under the threshold.
+    end = chess.Board()
+    end.set_fen("8/5k2/8/8/8/3r4/5K2/3R4 w - - 0 40")
+    assert position_phase(end) == "endgame"
+    # Endgame wins over opening: few pieces even at a low move number.
+    early_end = chess.Board()
+    early_end.set_fen("4k3/8/8/8/8/8/8/4K2R w K - 0 5")
+    assert position_phase(early_end) == "endgame"
+
+
+def test_phase_breakdown_sums_and_bounds():
+    from chess_equity.grading import PHASES, round_leaderboard
+
+    for s in round_leaderboard(_round_games()):
+        # Every phase bucket is present and the per-phase move counts sum to the total.
+        assert set(s.phases) == set(PHASES)
+        assert sum(p["n_moves"] for p in s.phases.values()) == s.n_moves
+        for stat in s.phases.values():
+            assert set(stat) == {"n_moves", "accuracy", "avg_delta"}
+            assert 0.0 <= stat["accuracy"] <= 100.0
+            # An empty phase reports zeroed accuracy/avg_delta, not an error.
+            if stat["n_moves"] == 0:
+                assert stat["accuracy"] == 0.0 and stat["avg_delta"] == 0.0
+
+
+def test_phase_breakdown_in_json_and_csv():
+    import csv
+
+    from chess_equity.grading import (
+        PHASES,
+        leaderboard_export_rows,
+        render_leaderboard_csv,
+        round_leaderboard,
+    )
+
+    scores = round_leaderboard(_round_games())
+    # JSON export carries the nested per-phase breakdown.
+    for r in leaderboard_export_rows(scores):
+        assert set(r["phases"]) == set(PHASES)
+    # CSV export carries flat per-phase columns whose move counts sum to n_moves.
+    parsed = list(csv.DictReader(render_leaderboard_csv(scores).splitlines()))
+    for p in parsed:
+        phase_moves = sum(int(p[f"{phase}_moves"]) for phase in PHASES)
+        assert phase_moves == int(p["n_moves"])
+        for phase in PHASES:
+            assert 0.0 <= float(p[f"{phase}_acc"]) <= 100.0
