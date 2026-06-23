@@ -20,6 +20,7 @@ html, body {
      (and bottom) of the OBS canvas — their text is cut off at 1080p. */
   --badge-reserve: 36px;
   box-sizing: border-box;
+  position: relative;                /* anchor for the absolutely-placed legend key */
   display: grid;
   gap: 8px;
   width: 100%;
@@ -257,6 +258,41 @@ html, body {
 }
 .stale-marker[hidden] { display: none; }
 @keyframes stalepulse { 50% { opacity: 0.55; } }
+
+/* Legend key (task 0201): an optional one-line key a streamer toggles on (?legend=1)
+   so a first-time viewer can read the bar. Anchored to the bottom of the overlay,
+   inside the reserved badge room (--badge-reserve) so it never clips at 1080p; its
+   own translucent pill keeps it legible over any background. Off by default (the
+   element is `hidden` until overlay.js reveals it). */
+.legend {
+  position: absolute;
+  left: var(--pad);
+  bottom: 4px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #f3f4f6;
+  background: rgba(0, 0, 0, 0.62);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.legend[hidden] { display: none; }
+.legend-item { display: flex; align-items: center; gap: 5px; }
+.legend .sw {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+.legend .sw-bar { background: linear-gradient(90deg, var(--white) 0 50%, var(--black) 50% 100%); }
+.legend .sw-good { background: var(--accent); }   /* gained equity — good/brilliant */
+.legend .sw-bad { background: var(--bad); }        /* lost equity — inaccuracy/mistake/blunder */
+.theme-light .legend { color: #f3f4f6; }           /* keep the dark pill; readable on light streams too */
 
 .theme-light .player { color: #111; text-shadow: 0 1px 2px rgba(255,255,255,0.6); }
 

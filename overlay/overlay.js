@@ -263,6 +263,7 @@
       cp: p.get("cp") !== "0",
       cpbar: p.get("cpbar") === "1",
       caster: p.get("caster") === "1",
+      legend: p.get("legend") === "1",
       autofollow: p.get("autofollow") === "1",
       focuslock: parseInt(p.get("focuslock"), 10),
       speed: parseFloat(p.get("speed")) || 1,
@@ -516,6 +517,11 @@
       root.classList.add("layout-" + cfg.layout);
     }
     document.body.className = "theme-" + cfg.theme;
+
+    // Legend key (task 0201): off by default; revealed only when the streamer opts in
+    // via ?legend=1 (the config.html toggle). Static content, so just unhide it.
+    const legendEl = q("[data-legend]");
+    if (legendEl) legendEl.hidden = !cfg.legend;
 
     // Show any rating overrides immediately, before the first game event arrives.
     if (cfg.welo != null && cfg.welo !== "") setText("[data-white-rating]", cfg.welo);

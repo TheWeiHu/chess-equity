@@ -20,6 +20,7 @@
     ?cp=1|0         show the classic centipawn "ghost" tick for contrast.
     ?cpbar=1        render the centipawn eval as a full second bar (not just a tick).
     ?caster=1       caster mode: flare on big practical swings the engine bar misses.
+    ?legend=1       show a compact key (bar = White win%, grade colors) for new viewers.
     ?speed=N        replay speed multiplier for .json feeds (default 1).
     ?stale=N        seconds of feed silence before showing the STALE/reconnecting
                     state (live SSE/WS feeds only; default 10). 0 disables it.
@@ -69,6 +70,18 @@
       <span class="name" data-black-name>Black</span>
       <span class="rating" data-black-rating></span>
       <span class="clock" data-black-clock></span>
+    </div>
+
+    <!-- Legend key (task 0201): an optional, compact one-line key so a first-time
+         viewer can read the bar. Off by default; revealed by ?legend=1 (set via the
+         config.html toggle). A single row that lives in the reserved badge room so it
+         doesn't clip at 1080p. Maps the bar fill to White win-equity %, and the two
+         grade-pill colors to their label groups (green = a move that gained equity:
+         good/brilliant; red = one that lost it: inaccuracy/mistake/blunder). -->
+    <div class="legend" data-legend aria-label="overlay key" hidden>
+      <span class="legend-item"><i class="sw sw-bar"></i>bar = White win-equity %</span>
+      <span class="legend-item"><i class="sw sw-good"></i>good · brilliant</span>
+      <span class="legend-item"><i class="sw sw-bad"></i>inaccuracy · blunder</span>
     </div>
   </div>
 
