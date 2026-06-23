@@ -58,3 +58,8 @@ jobs:
       # and the followed board's roster names the winner (task 0213).
       - name: Run overlay game-over JS tests
         run: node overlay/test_gameover.test.js
+      # The lower-third standings panel (overlay/standings.js orderTopN/rowsHTML) is gated
+      # by a dependency-free node test: a shuffled `grade --round --json` leaderboard
+      # renders rows in strict rank order, sliced to top-N (task 0231).
+      - name: Run overlay standings JS tests
+        run: node overlay/test_standings.test.js

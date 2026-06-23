@@ -143,6 +143,24 @@ Lichess broadcast round URL and it shows the `chess-equity broadcast … --serve
 command to run the [0018](../src/chess_equity/broadcast.py) ingestor that feeds the
 overlay.
 
+### Standings lower third (task 0231)
+
+A separate OBS browser source, **`standings.html`**, renders a top-N accuracy
+**standings lower third** for a multi-game round, fed by the `grade --round` leaderboard
+JSON (the same export documented in [grading](../src/chess_equity/grading.py)). Generate
+the feed and point the source at it:
+
+```sh
+chess-equity grade --round --pgn round.pgn --json > overlay/leaderboard.json
+# OBS → Browser source → .../standings.html?src=./leaderboard.json&top=5
+```
+
+With no `?src` it replays the committed illustrative `mock-leaderboard.json`. Params:
+`?src=` (a bare export array, or `{leaderboard:[…]}`), `?top=N` (default 5, 1–20),
+`?title=` (default *STANDINGS*), `?theme=dark|light`. Rows render in strict **rank**
+order (a sub-floor cameo can't jump the board), showing `# · player · acc% · Δpeer`.
+Static, fixture-driven — no live model.
+
 ## What it shows
 
 - The **equity bar** (0–100% practical), both names + ratings, framed by the chosen
