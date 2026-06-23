@@ -681,7 +681,9 @@ def _run_validate(args: argparse.Namespace) -> int:
     from chess_equity.validate.goodmoves import format_good_moves, measure_good_moves
 
     good_moves = measure_good_moves(rows, predictors)
-    good_section = format_good_moves(good_moves, baseline=baseline_name)
+    good_section = format_good_moves(
+        good_moves, baseline=baseline_name, see_also="reports/goodmoves_real.md"
+    )
     if good_section:
         report = report + "\n" + good_section
 
