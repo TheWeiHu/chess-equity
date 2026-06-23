@@ -256,9 +256,12 @@ class GameTracker:
     """Turns successive PGN snapshots of one game into new-move events.
 
     Keeps the moves already emitted; each :meth:`ingest` returns only moves beyond
-    that point. A snapshot with *fewer* moves than seen (a broadcast correction /
-    re-sync) resets state and re-emits from the start, flagged ``resync=True`` so a
-    consumer can reconcile by ``ply``.
+    that point. A snapshot that *diverges* from the moves seen so far — whether it is
+    shorter (a walk-back / mid-stream truncation) or replaces an earlier move at the
+    same or greater length (an operator correction) — resets state and re-emits from
+    the start, flagged ``resync=True`` so a consumer can reconcile by ``ply``. The
+    common append-only case (the snapshot just grew) is byte-identical to before:
+    nothing in the emitted prefix changed, so no resync fires.
     """
 
     def __init__(
@@ -286,6 +289,12 @@ class GameTracker:
         # Only consulted when ``equity.cp is None``; models that carry cp are untouched.
         self.engine = engine
         self.emitted_ply = 0
+        # The UCIs of every mainline move emitted so far, so a *correction* that
+        # replaces an earlier move (not just a walk-back that shortens the PGN) is
+        # caught: if the new mainline diverges from this prefix we resync. Rebuilt to
+        # the full mainline on every ingest, so the common append-only poll never
+        # touches it beyond a cheap matching-prefix comparison.
+        self.emitted_ucis: List[str] = []
 
     def _elos(self) -> tuple[int, int]:
         # The model contract takes ints; default unknown ratings to a neutral 1500
@@ -307,9 +316,15 @@ class GameTracker:
             self.tc_bucket = tc_bucket(game.headers.get("TimeControl", "-"))
 
         nodes = list(game.mainline())
+        new_ucis = [node.move.uci() for node in nodes]
+        # Resync when the snapshot diverges from what we've already emitted — either it
+        # is shorter (a walk-back / truncated poll) or it replaces a move within the
+        # overlapping prefix (an operator correction at the same-or-greater length).
+        # Append-only growth leaves the prefix identical, so this is a no-op there.
+        overlap = min(len(new_ucis), len(self.emitted_ucis))
+        diverged = new_ucis[:overlap] != self.emitted_ucis[:overlap]
         resync = False
-        if len(nodes) < self.emitted_ply:
-            # The feed walked the game back (correction). Replay from scratch.
+        if len(nodes) < self.emitted_ply or diverged:
             self.emitted_ply = 0
             resync = True
 
@@ -399,6 +414,7 @@ class GameTracker:
             prev_equity_white = equity_white
 
         self.emitted_ply = len(nodes)
+        self.emitted_ucis = new_ucis
         return events
 
     def _equity_white(self, fen: str, white_elo: int, black_elo: int) -> float:
