@@ -311,6 +311,32 @@ def test_round_leaderboard_render_has_a_row_per_player():
         assert any(s.name in line for line in lines[2:])
 
 
+def test_round_leaderboard_render_shows_worst_move():
+    from chess_equity.grading import _worst_cell, render_leaderboard, round_leaderboard
+
+    scores = round_leaderboard(_round_games())
+    lines = render_leaderboard(scores)
+    assert "worst" in lines[0]
+    # Each player's row carries their worst-move cell (SAN Δpeer, or '-' when none).
+    for i, s in enumerate(scores):
+        row = lines[2 + i]
+        cell = _worst_cell(s.worst)
+        assert cell in row
+        if s.worst is not None:
+            assert s.worst.san in row  # the SAN of the biggest drop is rendered
+
+
+def test_worst_cell_formats_san_and_delta_or_dash():
+    from chess_equity.grading import _worst_cell, round_leaderboard
+
+    assert _worst_cell(None) == "-"
+    # A real worst move renders as "SAN Δpeer" with a signed, 1-decimal delta.
+    worst = next(s.worst for s in round_leaderboard(_round_games()) if s.worst is not None)
+    cell = _worst_cell(worst)
+    assert cell.startswith(worst.san + " ")
+    assert cell.endswith(f"{worst.grade_peer:+.1f}")
+
+
 def test_round_leaderboard_player_carries_rating():
     from chess_equity.grading import round_leaderboard
 
