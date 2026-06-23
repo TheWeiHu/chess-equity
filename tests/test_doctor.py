@@ -287,6 +287,140 @@ def test_doctor_nonzero_when_overlay_check_fails(tmp_path):
     assert "[FAIL] overlay" in out.getvalue()
 
 
+# --------------------------------------------------------------------------- #
+# evidence gate preflight (task 0195)
+# --------------------------------------------------------------------------- #
+
+from chess_equity.doctor import (  # noqa: E402
+    EVIDENCE_FAIL_ALLOWLIST,
+    _parse_summary_rows,
+    probe_evidence,
+    reports_dir,
+)
+
+# A minimal SUMMARY.md table that mirrors the real shape (link + 3 columns, verdict last).
+_SUMMARY_HEADER = (
+    "# reports/SUMMARY.md — real-data gate index\n\n"
+    "| Report | Dump | n | Verdict |\n|---|---|--:|---|\n"
+)
+
+
+def _write_summary(directory, rows):
+    """Write SUMMARY.md with ``rows`` of (filename, desc, verdict_cell); create each report.
+
+    Each report's body is set from ``verdict_cell`` so it corroborates by default — override
+    by writing the report yourself after calling this.
+    """
+    lines = [_SUMMARY_HEADER]
+    for filename, desc, verdict_cell in rows:
+        lines.append(f"| [{desc}]({filename}) — {desc} | 2013-01 | 12,000 | {verdict_cell} |\n")
+    (directory / "SUMMARY.md").write_text("".join(lines), encoding="utf-8")
+    for filename, _desc, verdict_cell in rows:
+        # default report body states a matching pass/fail token so corroboration holds
+        cell = verdict_cell.upper()
+        body = "PASS" if "PASS" in cell else ("FAIL" if "FAIL" in cell else "info")
+        (directory / filename).write_text(f"# {filename}\n\nverdict: {body}\n", encoding="utf-8")
+
+
+def test_parse_summary_rows_normalises_verdicts_and_skips_prose():
+    rows = _parse_summary_rows(
+        _SUMMARY_HEADER
+        + "| [a.md](a.md) — x | m | 1 | **PASS** — wins |\n"
+        + "| [b.md](b.md) — y | m | 2 | **PASS (caveat)** — in-dist |\n"
+        + "| [c.md](c.md) — z | m | 3 | **FAIL** — loses |\n"
+        + "| [d.md](d.md) — w | m | 4 | **info** — measurement |\n"
+        + "\nSome prose with a [link](not_a_row.md) that is not a table row.\n"
+    )
+    assert rows == [
+        ("a.md", "PASS"),
+        ("b.md", "PASS"),
+        ("c.md", "FAIL"),
+        ("d.md", "info"),
+    ]
+
+
+def test_parse_summary_rows_raises_on_empty_table():
+    with pytest.raises(ValueError, match="no parseable report rows"):
+        _parse_summary_rows("# SUMMARY\n\njust prose, no table.\n")
+
+
+def test_probe_evidence_passes_on_the_real_reports():
+    if reports_dir() is None:
+        pytest.skip("reports/ dir not present (installed wheel)")
+    detail = probe_evidence()
+    assert "gate index OK" in detail
+    assert "deliberate FAIL" in detail
+
+
+def test_probe_evidence_passes_with_goodmoves_prose_checkmark(tmp_path):
+    # acceptance: a PASS report may state its pass in prose (✅) rather than the word PASS.
+    (tmp_path / "SUMMARY.md").write_text(
+        _SUMMARY_HEADER
+        + "| [goodmoves_real.md](goodmoves_real.md) — gm | m | 1 | **PASS** — ok |\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "goodmoves_real.md").write_text(
+        "# good moves\n\ngood reads as good ✅\n", encoding="utf-8"
+    )
+    assert "1 PASS" in probe_evidence(tmp_path)
+
+
+def test_probe_evidence_fails_on_missing_report(tmp_path):
+    _write_summary(tmp_path, [("validation_real.md", "headline", "**PASS** — wins")])
+    (tmp_path / "validation_real.md").unlink()
+    with pytest.raises(ValueError, match="missing on disk: validation_real.md"):
+        probe_evidence(tmp_path)
+
+
+def test_probe_evidence_fails_when_pass_report_states_no_pass(tmp_path):
+    # acceptance: a regressed proof — SUMMARY still says PASS but the report no longer does.
+    _write_summary(tmp_path, [("validation_real.md", "headline", "**PASS** — wins")])
+    (tmp_path / "validation_real.md").write_text(
+        "# headline\n\nresults were inconclusive\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="states no pass"):
+        probe_evidence(tmp_path)
+
+
+def test_probe_evidence_fails_on_unallowlisted_fail(tmp_path):
+    # acceptance: any FAIL other than the deliberate wdl_net_real is a regression.
+    _write_summary(tmp_path, [("validation_real.md", "headline", "**FAIL** — lost")])
+    with pytest.raises(ValueError, match="regressed to FAIL"):
+        probe_evidence(tmp_path)
+
+
+def test_probe_evidence_allows_the_deliberate_wdl_net_fail(tmp_path):
+    assert "wdl_net_real.md" in EVIDENCE_FAIL_ALLOWLIST
+    _write_summary(tmp_path, [("wdl_net_real.md", "approach D", "**FAIL** — not worth it")])
+    assert "1 deliberate FAIL" in probe_evidence(tmp_path)
+
+
+def test_probe_evidence_missing_summary_raises(tmp_path):
+    with pytest.raises(ValueError, match="missing reports/SUMMARY.md"):
+        probe_evidence(tmp_path)
+
+
+def test_doctor_appends_evidence_check_and_passes_on_real_reports():
+    if reports_dir() is None:
+        pytest.skip("reports/ dir not present (installed wheel)")
+    out = io.StringIO()
+    rc = doctor(out=out, probes={"stockfish": lambda: "ok"}, evidence_probe=probe_evidence)
+    assert rc == 0
+    assert "[PASS] evidence" in out.getvalue()
+
+
+def test_doctor_nonzero_when_evidence_check_fails(tmp_path):
+    _write_summary(tmp_path, [("validation_real.md", "headline", "**FAIL** — lost")])
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok"},
+        evidence_probe=lambda: probe_evidence(tmp_path),
+    )
+    assert rc == 1
+    assert "[FAIL] evidence" in out.getvalue()
+
+
 def test_feed_from_spec_dispatches_on_the_source_shape(tmp_path):
     from chess_equity.broadcast import LichessRoundFeed, UrlPgnFeed
 

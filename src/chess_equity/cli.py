@@ -1701,6 +1701,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "HTML/JS assets parse and the bundled replay + live overlay events conform to "
         "the documented event schema (no torch/engine/network needed).",
     )
+    dr.add_argument(
+        "--evidence",
+        action="store_true",
+        help="also verify the committed real-data gate reports listed in "
+        "reports/SUMMARY.md exist on disk and still state their expected verdict "
+        "(the deliberate wdl_net_real FAIL is allowlisted). Reads no datasets.",
+    )
 
     pp = sub.add_parser(
         "personal",
@@ -1762,7 +1769,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":
-        from chess_equity.doctor import doctor, probe_broadcast, probe_overlay
+        from chess_equity.doctor import doctor, probe_broadcast, probe_evidence, probe_overlay
 
         broadcast_probe = None
         if args.broadcast:
@@ -1771,10 +1778,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             feed = feed_from_spec(args.broadcast, token=args.token)
             broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
         overlay_probe = probe_overlay if args.overlay else None
+        evidence_probe = probe_evidence if args.evidence else None
         return doctor(
             engines=args.engine,
             broadcast_probe=broadcast_probe,
             overlay_probe=overlay_probe,
+            evidence_probe=evidence_probe,
         )
     if args.command == "personal":
         return _run_personal(args)
