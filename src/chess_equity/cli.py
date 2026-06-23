@@ -222,9 +222,34 @@ def _eval_search_fen(model: MaiaSearchModel, fen: str, white_elo: int, black_elo
     )
 
 
+def _eval_equity(model: EquityModel, args: argparse.Namespace):
+    """Resolve a single :class:`Equity` for ``args.fen`` across model kinds.
+
+    Mirrors the dispatch in :func:`_run_eval` but returns the raw ``Equity`` (used by
+    the ``--svg`` snapshot, which renders an image rather than the text line).
+    """
+    if isinstance(model, MaiaRolloutModel):
+        return estimate_to_equity(model.estimate(args.fen, args.white_elo, args.black_elo),
+                                  args.fen, model.SOURCE)
+    if isinstance(model, MaiaSearchModel):
+        return search_estimate_to_equity(model.estimate(args.fen, args.white_elo, args.black_elo),
+                                         args.fen, model.SOURCE)
+    return _apply_profiles(model, args).evaluate(args.fen, args.white_elo, args.black_elo)
+
+
 def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
+        if getattr(args, "svg", None) and not args.pgn:
+            from chess_equity.bar import render_svg
+
+            equity = _eval_equity(model, args)
+            white_to_move = chess.Board(args.fen).turn == chess.WHITE
+            svg = render_svg(equity, white_to_move=white_to_move)
+            with open(args.svg, "w", encoding="utf-8") as fh:
+                fh.write(svg)
+            print(f"wrote {args.svg}  ({render_eval(equity)})")
+            return 0
         if args.pgn:
             for line in _eval_pgn(_apply_profiles(model, args), args.pgn, args.white_elo, args.black_elo):
                 print(line)
@@ -1432,6 +1457,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
     ev.add_argument("fen", nargs="?", default=START_FEN, help="FEN (default: startpos)")
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
+    ev.add_argument(
+        "--svg", metavar="OUT",
+        help="write a self-contained White-POV equity-bar SVG snapshot for FEN to OUT "
+             "(shareable still image; ignored with --pgn)",
+    )
     ev.add_argument("--white-elo", type=int, default=1500)
     ev.add_argument("--black-elo", type=int, default=1500)
     ev.add_argument(
