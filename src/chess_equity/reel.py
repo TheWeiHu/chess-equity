@@ -490,6 +490,42 @@ def build_webvtt(reel: List[DramaEvent]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _srt_timestamp(seconds: float) -> str:
+    """Format a second offset as an SRT cue timestamp (``HH:MM:SS,mmm``).
+
+    Identical to :func:`_vtt_timestamp` but with the SubRip comma decimal separator
+    (``,`` not ``.``) that non-web editors (Premiere/Resolve/CapCut) expect.
+    """
+    ms = int(round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(reel: List[DramaEvent]) -> str:
+    """Render the reel as an SRT (SubRip) subtitle track — one cue per clip.
+
+    SRT mirrors :func:`build_webvtt` exactly — same one-cue-per-clip cadence, same
+    contiguous ``[start_i, start_i + duration_i)`` timings, same caster caption text —
+    so the narration drops into any non-web editor that can't ingest WebVTT. Only the
+    container differs: no ``WEBVTT`` header, ``HH:MM:SS,mmm`` comma-decimal timestamps,
+    and raw cue text (SRT, unlike WebVTT, does not reserve ``& < >``). The 1-based
+    sequential indices and cue boundaries match the WebVTT track cue-for-cue.
+    """
+    blocks = []
+    start = 0.0
+    for i, d in enumerate(reel, start=1):
+        end = start + _caption_duration(d.magnitude)
+        blocks.append(
+            f"{i}\n"
+            f"{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n"
+            f"{caption(d)['text']}"
+        )
+        start = end
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
 def _webvtt_track_html(reel: List[DramaEvent]) -> str:
     """A <video> clip timeline carrying the reel's narration as an inline WebVTT track.
 
