@@ -1708,6 +1708,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reports/SUMMARY.md exist on disk and still state their expected verdict "
         "(the deliberate wdl_net_real FAIL is allowlisted). Reads no datasets.",
     )
+    dr.add_argument(
+        "--model",
+        metavar="NAME",
+        default=None,
+        help="also preflight the ACTIVE equity model before air: --model wdl-a checks "
+        "its committed artifact loads, carries fit provenance (n_train/fit_month), and "
+        "produces a finite 0..1 bar; --model baseline checks the objective-engine bar. "
+        "Torch-free for baseline/wdl-a; absent provenance WARNs (doesn't fail).",
+    )
 
     pp = sub.add_parser(
         "personal",
@@ -1769,7 +1778,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":
-        from chess_equity.doctor import doctor, probe_broadcast, probe_evidence, probe_overlay
+        from chess_equity.doctor import (
+            doctor,
+            probe_broadcast,
+            probe_evidence,
+            probe_model,
+            probe_overlay,
+        )
 
         broadcast_probe = None
         if args.broadcast:
@@ -1779,11 +1794,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
         overlay_probe = probe_overlay if args.overlay else None
         evidence_probe = probe_evidence if args.evidence else None
+        model_probe = (lambda: probe_model(args.model)) if args.model else None  # noqa: E731
         return doctor(
             engines=args.engine,
             broadcast_probe=broadcast_probe,
             overlay_probe=overlay_probe,
             evidence_probe=evidence_probe,
+            model_probe=model_probe,
         )
     if args.command == "personal":
         return _run_personal(args)
