@@ -312,6 +312,114 @@ def _probe_to_overlay_event() -> str:
     return f"ply {event.get('ply')}, equity {event.get('equity')}"
 
 
+# --- live SSE wiring go-live preflight (task 0209) -------------------------------------
+#
+# `probe_broadcast` checks the *feed* parses and `probe_overlay` checks the *bundle*
+# loads, but neither exercises the actual `broadcast --serve-sse` HTTP path the overlay
+# (OBS browser source) EventSources onto. A streamer who has both green can still go on
+# air to a dead bar if the SSE server never binds or never emits. `probe_serve_sse` closes
+# that gap: it binds the *real* SSE server on an ephemeral port over a finite local PGN
+# replay, connects to `/sse` exactly as the overlay would, and confirms a real overlay
+# `position` frame arrives within a timeout — torch-free (pure baseline model) and
+# network-free (loopback + committed sample PGN), so it runs unattended.
+
+
+def sample_pgn_path() -> Optional[Path]:
+    """The repo's committed offline sample game, or ``None`` from a wheel without it."""
+    candidate = Path(__file__).resolve().parents[2] / "data" / "sample" / "sample_games.pgn"
+    return candidate if candidate.is_file() else None
+
+
+def probe_serve_sse(pgn_path: Optional[Path] = None, *, timeout: float = 5.0) -> str:
+    """Assert the live ``broadcast --serve-sse`` wiring works before going on air (0209).
+
+    Drives the smallest possible end-to-end of the live path a streamer points OBS at:
+
+    * builds the same overlay event source ``broadcast --serve-sse`` uses (a finite
+      :class:`~chess_equity.broadcast.LocalPgnFeed` replay through the pure baseline
+      model — no torch, no network);
+    * binds the *real* SSE server (:func:`~chess_equity.broadcast.make_sse_server`) on
+      an ephemeral loopback port (``port=0``) in a background thread;
+    * connects to ``/sse`` as the overlay's ``EventSource`` would, asserts the
+      ``text/event-stream`` content type, and reads frames until the first overlay
+      ``position`` event arrives — validated against the documented schema
+      (:func:`validate_overlay_event`) — or ``timeout`` seconds elapse.
+
+    A server that fails to bind, returns the wrong content type, or never emits a move
+    turns doctor red so a dead feed is caught before air. Raises ``ValueError`` /
+    ``RuntimeError`` on any failure so :func:`check` reports a FAIL with the detail.
+    """
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import (
+        BroadcastIngestor,
+        LocalPgnFeed,
+        make_sse_server,
+        overlay_events,
+    )
+    from chess_equity.models import LichessBaselineModel
+
+    path = Path(pgn_path) if pgn_path else sample_pgn_path()
+    if path is None or not path.is_file():
+        raise ValueError("sample PGN not found (running from a wheel without data/sample assets?)")
+    pgn_text = path.read_text(encoding="utf-8")
+
+    def make_events():
+        # Fresh ingestor per connection; a high moves_per_poll reveals the whole replay
+        # on the first poll, and a no-op sleep keeps the finite replay instant.
+        ingestor = BroadcastIngestor(
+            LocalPgnFeed(pgn_text, moves_per_poll=20),
+            LichessBaselineModel(),
+            white_elo=1500,
+            black_elo=1500,
+        )
+        return overlay_events(
+            ingestor, max_idle_polls=1, heartbeat=False, sleep=lambda _: None
+        )
+
+    httpd = make_sse_server(make_events, port=0, host="127.0.0.1")
+    bound = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{bound}/sse"
+        frames = 0
+        first_position: Optional[dict] = None
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            if "text/event-stream" not in ctype:
+                raise RuntimeError(f"/sse returned Content-Type {ctype!r}, not text/event-stream")
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if not line.startswith("data:"):
+                    continue  # SSE comments (": keepalive") and blank separators
+                frames += 1
+                payload = line[len("data:") :].strip()
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"/sse emitted a non-JSON data frame: {payload!r}") from exc
+                validate_overlay_event(event, where="serve-sse /sse frame")
+                if event.get("type") == "position":
+                    first_position = event
+                    break  # one real move proves the live wiring; stop reading
+        if first_position is None:
+            raise RuntimeError(
+                f"/sse reachable on port {bound} but emitted no position event "
+                f"({frames} frame(s)) within {timeout:g}s"
+            )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2.0)
+
+    return (
+        f"/sse bound on 127.0.0.1:{bound}, streamed {frames} overlay frame(s); "
+        f"first position ply {first_position.get('ply')}, equity {first_position.get('equity')}"
+    )
+
+
 # --- evidence gate preflight (task 0195) -----------------------------------------------
 #
 # `doctor` verifies the optional engines and the go-live bundle, but not the project's
@@ -571,6 +679,7 @@ def doctor(
     engines: Optional[List[str]] = None,
     broadcast_probe: Optional[Probe] = None,
     overlay_probe: Optional[Probe] = None,
+    serve_sse_probe: Optional[Probe] = None,
     evidence_probe: Optional[Probe] = None,
     model_probe: Optional[Probe] = None,
 ) -> int:
@@ -593,6 +702,11 @@ def doctor(
     their expected verdict (task 0195) — so a missing/regressed proof turns doctor red.
     Reads report text but no datasets — safe to run unattended.
 
+    ``serve_sse_probe`` (set by ``doctor --serve-sse``) appends a go-live preflight that
+    binds the real ``broadcast --serve-sse`` server on an ephemeral port over a local PGN
+    replay and confirms ``/sse`` emits at least one overlay event (task 0209) — so a dead
+    live feed is caught before air. Loopback + committed sample PGN, torch/network-free.
+
     ``model_probe`` (set by ``doctor --model NAME``) appends a preflight that the active
     equity model loads and produces a finite in-range bar (task 0199): a missing/garbled
     artifact FAILs, missing wdl-a fit provenance WARNs. Torch-free for baseline/wdl-a.
@@ -605,6 +719,8 @@ def doctor(
         checks.append(check("broadcast", broadcast_probe))
     if overlay_probe is not None:
         checks.append(check("overlay", overlay_probe))
+    if serve_sse_probe is not None:
+        checks.append(check("serve-sse", serve_sse_probe))
     if evidence_probe is not None:
         checks.append(check("evidence", evidence_probe))
     if model_probe is not None:

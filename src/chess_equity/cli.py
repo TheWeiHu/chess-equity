@@ -1792,6 +1792,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "the documented event schema (no torch/engine/network needed).",
     )
     dr.add_argument(
+        "--serve-sse",
+        action="store_true",
+        help="also run a go-live preflight on the live SSE wiring OBS points at: bind "
+        "`broadcast --serve-sse` on an ephemeral port over a local PGN replay and confirm "
+        "`/sse` is reachable and emits >=1 overlay event (no torch/engine/network needed).",
+    )
+    dr.add_argument(
         "--evidence",
         action="store_true",
         help="also verify the committed real-data gate reports listed in "
@@ -1874,6 +1881,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             probe_evidence,
             probe_model,
             probe_overlay,
+            probe_serve_sse,
         )
 
         broadcast_probe = None
@@ -1883,12 +1891,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             feed = feed_from_spec(args.broadcast, token=args.token)
             broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
         overlay_probe = probe_overlay if args.overlay else None
+        serve_sse_probe = probe_serve_sse if args.serve_sse else None
         evidence_probe = probe_evidence if args.evidence else None
         model_probe = (lambda: probe_model(args.model)) if args.model else None  # noqa: E731
         return doctor(
             engines=args.engine,
             broadcast_probe=broadcast_probe,
             overlay_probe=overlay_probe,
+            serve_sse_probe=serve_sse_probe,
             evidence_probe=evidence_probe,
             model_probe=model_probe,
         )
