@@ -2,7 +2,11 @@
 
 One row per committed **real-Lichess** evidence report. Each verdict is **quoted or
 parsed from that report's own header / `## Gate verdict` section** — this index reads no
-data and computes no new numbers (see the real-data-only policy in `CLAUDE.md`). The
+data and computes no new numbers (see the real-data-only policy in `CLAUDE.md`).
+
+**How each was produced:** see [REPRODUCE.md](REPRODUCE.md) — one documented
+`chess-equity …` command per report below (dump month, n, model, seed/flags), with the
+maia2/torch steps flagged as the attended, human-approved headline path. The
 gate's PASS rule, stated verbatim in each validation report, is: a rating-conditioned
 predictor **PASSes** when it has strictly lower log-loss **and** Brier than the
 rating-blind `baseline` **and** its log-loss 95% bootstrap CI clears zero.
