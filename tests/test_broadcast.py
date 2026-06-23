@@ -17,6 +17,7 @@ from chess_equity.broadcast import (
     MoveEvent,
     game_event,
     grade_delta,
+    overlay_events,
     split_games,
 )
 from chess_equity.adapters import EquityModel
@@ -504,6 +505,58 @@ def test_ingestor_emits_one_game_event_per_game():
     ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
     names = {g.white_name for g in games}
     assert names == {"Carlsen", "Ding"}
+
+
+# --------------------------------------------------------------------------- #
+# Live board switcher — boards roster + per-board routing (task 0185)
+# --------------------------------------------------------------------------- #
+
+
+def _overlay_events_for(snapshot):
+    """Drive a snapshot through the overlay bridge and collect the emitted events."""
+    feed = _OneShotFeed(snapshot)
+    ingestor = BroadcastIngestor(feed, _model())
+    return [
+        e
+        for e in overlay_events(ingestor, interval=0.0, sleep=lambda _: None)
+        if isinstance(e, dict)
+    ]
+
+
+def test_overlay_bridge_announces_boards_for_a_multi_game_round():
+    """A multi-game round emits a `boards` roster event listing every board
+    (index + players), so the overlay can render a live board selector."""
+    events = _overlay_events_for(_two_board_round())
+    rosters = [e for e in events if e.get("type") == "boards"]
+    assert rosters, "a multi-game round must announce a boards roster"
+    # The final roster lists both boards with their index + players.
+    boards = rosters[-1]["boards"]
+    assert {b["index"] for b in boards} == {0, 1}
+    by_index = {b["index"]: b for b in boards}
+    assert by_index[0]["players"]["white"]["name"] == "Carlsen"
+    assert by_index[1]["players"]["white"]["name"] == "Ding"
+
+
+def test_overlay_bridge_stamps_board_index_on_each_event():
+    """Every game/position event of a multi-game round carries its 0-based `board`
+    index, so the overlay can route it to the chosen board."""
+    events = _overlay_events_for(_two_board_round())
+    games = {e["game_id"]: e["board"] for e in events if e.get("type") == "game"}
+    # Two games, board 0 and board 1.
+    assert set(games.values()) == {0, 1}
+    positions = [e for e in events if e.get("type") == "position"]
+    assert positions, "moves must stream"
+    for e in positions:
+        assert e["board"] in (0, 1), "each position routes to a known board"
+
+
+def test_overlay_bridge_single_game_has_no_boards_or_index():
+    """Default single-board behavior: a single-game feed announces no roster and tags
+    no `board`, so the overlay shows no selector and renders every event."""
+    events = _overlay_events_for(GAME_PGN)
+    assert not any(e.get("type") == "boards" for e in events), "no roster for one board"
+    for e in events:
+        assert "board" not in e, "single-game events carry no board index"
 
 
 # --------------------------------------------------------------------------- #

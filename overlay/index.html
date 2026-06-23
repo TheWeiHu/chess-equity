@@ -29,6 +29,11 @@
 -->
 <body class="theme-dark">
   <div id="overlay" class="overlay layout-horizontal" aria-live="polite">
+    <!-- Board selector (task 0185): hidden for a single-game feed; revealed and
+         populated when the feed announces a multi-game round so a caster can flip
+         which board the bar follows live. -->
+    <select class="board-select" data-board-select aria-label="board" hidden></select>
+
     <div class="player player-white">
       <span class="name" data-white-name>White</span>
       <span class="rating" data-white-rating></span>
