@@ -156,6 +156,59 @@ check("autofollow is inert without the flag (default routing preserved)", () => 
   assert.strictEqual(r.autofollow(), false);
 });
 
+// ---- auto-advance off a finished board (task 0189) ---------------------------
+// The bridge emits a `result` event ({type:"result", board}) when a game ends. The
+// router marks that board finished and, if it was the followed board (and not pinned),
+// advances focus to the next still-live board so a caster isn't stuck on an ended game.
+function result(board) {
+  return { type: "result", board: board, game_id: "g" + board, result: "1-0" };
+}
+
+check("(0189-a) when the followed board finishes, focus advances to the next live board", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT); // board 0 auto-selected
+  assert.strictEqual(r.selected(), 0);
+  r.learn(result(0)); // board 0's game ends
+  assert.strictEqual(r.selected(), 1, "focus moved off the finished board to the live one");
+  assert.ok(r.accepts(posBoard1), "the now-followed live board's events route");
+  assert.ok(!r.accepts(posBoard0), "the finished board's events no longer route");
+});
+
+check("(0189-b) a `result` event is routing metadata — never rendered", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  assert.ok(!r.accepts(result(0)), "the result event itself must not reach the bar");
+});
+
+check("(0189-c) a manually-pinned board does NOT auto-advance when it finishes", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  r.select(0); // caster pins board 0
+  assert.strictEqual(r.pinned(), true);
+  r.learn(result(0)); // board 0 ends — but it's pinned
+  assert.strictEqual(r.selected(), 0, "a pinned board stays put even after it finishes");
+});
+
+check("(0189-d) focus stays put when every board has finished", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  r.learn(result(1)); // the other board finishes first
+  assert.strictEqual(r.selected(), 0, "finishing a non-followed board doesn't move focus");
+  r.learn(result(0)); // now the followed board finishes too — no live board left
+  assert.strictEqual(r.selected(), 0, "with no live board to move to, focus stays put");
+});
+
+check("(0189-e) auto-advance composes with autofollow, and the director won't steal back to a finished board", () => {
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  r.learn(BOARDS_EVENT); // board 0 followed
+  r.note(pos(1, 0.9)); // board 1 erupts → steal to 1, lock engaged
+  assert.strictEqual(r.selected(), 1);
+  r.learn(result(1)); // board 1's game ends → advance back to live board 0, lock cleared
+  assert.strictEqual(r.selected(), 0, "finished board hands focus to the remaining live one");
+  r.note(pos(1, 1.0)); // a late max-drama event on the FINISHED board must not steal focus
+  assert.strictEqual(r.selected(), 0, "the auto-director never returns focus to a finished board");
+});
+
 if (failures) {
   console.error(failures + " failure(s)");
   process.exit(1);

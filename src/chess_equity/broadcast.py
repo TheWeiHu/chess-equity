@@ -196,6 +196,36 @@ class GameEvent:
         return event
 
 
+# Terminal PGN ``Result`` values — the canonical broadcast end-signal. ``*`` (ongoing)
+# and anything else are not game-over.
+_TERMINAL_RESULTS = frozenset({"1-0", "0-1", "1/2-1/2"})
+
+
+@dataclass(frozen=True)
+class ResultEvent:
+    """Game-over signal in the overlay's ``"result"`` schema (task 0189).
+
+    Emitted once, the first time a game in a multi-board round reaches a terminal PGN
+    ``Result`` (one of :data:`_TERMINAL_RESULTS`), so the overlay's board router can
+    advance focus off a finished board to a still-live one instead of stranding a
+    caster on an ended game. Routing metadata only — never rendered, like the ``boards``
+    roster event. Single-game feeds carry no ``board`` and emit no result event.
+    """
+
+    game_id: str
+    board: int
+    result: str
+
+    def to_overlay(self) -> Dict[str, object]:
+        """Render as the overlay's ``{type: "result", board, game_id, result}`` event."""
+        return {
+            "type": "result",
+            "game_id": self.game_id,
+            "board": self.board,
+            "result": self.result,
+        }
+
+
 # --------------------------------------------------------------------------- #
 # Clock / rating parsing from PGN
 # --------------------------------------------------------------------------- #
@@ -726,6 +756,12 @@ class BroadcastIngestor:
         # game line before that game's moves.
         self.on_game: Optional[Callable[["GameEvent"], None]] = None
         self._announced: set[str] = set()
+        # Fired once per game, the first time it is seen with a terminal PGN ``Result``,
+        # with its :class:`ResultEvent`. Only multi-board rounds fire it (board is not
+        # None); the overlay uses it to auto-advance focus off a finished board. Optional
+        # so the MoveEvent stream is unchanged when a caller doesn't care.
+        self.on_result: Optional[Callable[["ResultEvent"], None]] = None
+        self._finished: set[str] = set()
 
     def _tracker_for(self, game_id: str) -> GameTracker:
         tracker = self._trackers.get(game_id)
@@ -771,6 +807,15 @@ class BroadcastIngestor:
                     )
             new = self._tracker_for(gid).ingest(game_pgn)
             events.extend(new)
+            # Game-over signal (task 0189): once a multi-board game reaches a terminal
+            # PGN Result, emit a one-time ResultEvent so the overlay can advance focus off
+            # the finished board. Gated on multi_board so single-game feeds are unchanged.
+            if multi_board and gid not in self._finished:
+                result = (headers.get("Result", "*") or "*").strip()
+                if result in _TERMINAL_RESULTS:
+                    self._finished.add(gid)
+                    if self.on_result is not None:
+                        self.on_result(ResultEvent(game_id=gid, board=index, result=result))
         for ev in events:
             self.stats.max_compute_ms = max(self.stats.max_compute_ms, ev.compute_ms)
         self.stats.events += len(events)
@@ -958,7 +1003,13 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
             queued.append({"type": "boards", "boards": list(roster)})
         queued.append(ev)
 
+    def on_result(result: "ResultEvent") -> None:
+        # Routing metadata for the overlay's board router (task 0189): "board N finished".
+        # Drained via the same ``queued`` list as game/boards announcements.
+        queued.append(result.to_overlay())
+
     ingestor.on_game = on_game
+    ingestor.on_result = on_result
     for move_event in ingestor.stream(**stream_kwargs):
         if move_event is None:  # idle-poll heartbeat tick from stream()
             yield HEARTBEAT

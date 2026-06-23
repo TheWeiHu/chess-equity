@@ -130,6 +130,13 @@
   // last switch, so transient noise can't thrash the bar (a real swing wins; a blip waits
   // out the lock). A manual `select(idx)` PINS the board and disables autofollow until
   // `resume()`, so a caster can always override the director.
+  //
+  // Auto-advance off a finished board (task 0189): the bridge emits a `result` event
+  // ({type:"result", board}) when a game reaches a terminal PGN result. The router marks
+  // that board finished, and if it was the FOLLOWED board — and not manually pinned —
+  // advances focus to the next still-live board so a caster isn't stranded on an ended
+  // game while others are live. This is baseline routing (independent of `autofollow`);
+  // only a manual pin suppresses it. `result` events are routing metadata, never rendered.
   function makeBoardRouter(opts) {
     opts = opts || {};
     var autofollow = !!opts.autofollow;
@@ -139,10 +146,29 @@
     var pinned = false; // a manual select pins the board, disabling autofollow
     var lockRemaining = 0; // plies left before autofollow may switch again
     var lastDrama = {}; // board index -> latest drama magnitude seen
+    var finished = {}; // board index -> true once that game has ended
 
     function has(idx) {
       for (var i = 0; i < boards.length; i++) if (boards[i].index === idx) return true;
       return false;
+    }
+
+    // The next still-live board after `from` in board order (wrapping). null if every
+    // known board has finished — then we stay put rather than jump to a dead board.
+    function nextLiveBoard(from) {
+      if (!boards.length) return null;
+      var start = 0;
+      for (var i = 0; i < boards.length; i++) {
+        if (boards[i].index === from) {
+          start = i;
+          break;
+        }
+      }
+      for (var k = 1; k <= boards.length; k++) {
+        var b = boards[(start + k) % boards.length];
+        if (!finished[b.index]) return b.index;
+      }
+      return null;
     }
 
     function dramaMag(evt) {
@@ -179,7 +205,7 @@
       // multi-board (numeric `board`), and the board isn't pinned. Honors the focus lock.
       note: function (evt) {
         if (!autofollow || pinned) return;
-        if (!evt || typeof evt.board !== "number") return;
+        if (!evt || evt.type === "result" || typeof evt.board !== "number") return;
         var mag = dramaMag(evt);
         if (selected === null) {
           // Nothing followed yet — adopt the first board we see, unlocked so a bigger
@@ -197,8 +223,8 @@
           lockRemaining--; // locked: a real swing has to wait out the focus window
           return;
         }
-        if (mag > (lastDrama[selected] || 0)) {
-          selected = evt.board; // a higher-drama board steals focus...
+        if (mag > (lastDrama[selected] || 0) && !finished[evt.board]) {
+          selected = evt.board; // a higher-drama (still-live) board steals focus...
           lockRemaining = lockPlies; // ...and the lock guards it from an immediate flip
         }
       },
@@ -211,6 +237,17 @@
           boards = evt.boards.slice();
         } else if (evt.type === "game" && typeof evt.board === "number") {
           if (!has(evt.board)) boards.push({ index: evt.board, players: evt.players });
+        } else if (evt.type === "result" && typeof evt.board === "number") {
+          // A game ended. Mark it finished; if it's the board we're following and the
+          // caster hasn't pinned it, advance focus to the next still-live board.
+          finished[evt.board] = true;
+          if (!pinned && evt.board === selected) {
+            var next = nextLiveBoard(selected);
+            if (next !== null) {
+              selected = next;
+              lockRemaining = 0; // a freshly adopted live board starts unlocked
+            }
+          }
         }
         if (selected === null && boards.length) selected = boards[0].index;
       },
@@ -218,7 +255,7 @@
       // routing metadata (never rendered). Events with no `board` (single-game feed)
       // always pass. When a board is selected, only that board's events pass.
       accepts: function (evt) {
-        if (!evt || evt.type === "boards") return false;
+        if (!evt || evt.type === "boards" || evt.type === "result") return false;
         if (typeof evt.board !== "number") return true;
         if (selected === null) return true;
         return evt.board === selected;

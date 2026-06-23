@@ -560,6 +560,55 @@ def test_overlay_bridge_single_game_has_no_boards_or_index():
 
 
 # --------------------------------------------------------------------------- #
+# Game-over signal -> overlay auto-advance off a finished board (task 0189)
+# --------------------------------------------------------------------------- #
+
+
+def _round_board0_finished():
+    """A two-board round where board 0 (Carlsen) has a terminal Result and board 1
+    (Ding) is still ongoing — so the bridge should emit a result event for board 0."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]').rstrip().rstrip("*").rstrip() + " 1-0\n"
+    ongoing = GAME_PGN.replace("Carlsen", "Ding").replace("Nakamura", "Firouzja").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    return finished + "\n" + ongoing
+
+
+def test_overlay_bridge_emits_result_event_for_a_finished_board():
+    """When a multi-board game reaches a terminal PGN Result, the bridge emits a
+    `{type:"result", board, result}` event so the overlay can advance focus off it."""
+    events = _overlay_events_for(_round_board0_finished())
+    results = [e for e in events if e.get("type") == "result"]
+    assert results, "a finished board must emit a result event"
+    assert results[0]["board"] == 0, "the result names the finished board's index"
+    assert results[0]["result"] == "1-0"
+    # The still-ongoing board emits no result event.
+    assert {r["board"] for r in results} == {0}
+
+
+def test_overlay_bridge_emits_result_event_once_per_finished_game():
+    """A finished game's result fires once, not on every subsequent poll."""
+    # Poll the same finished snapshot twice; the result event must not repeat.
+    feed = _ScriptedFeed([_round_board0_finished(), _round_board0_finished(), None])
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(ingestor, interval=0.0, sleep=lambda _: None)
+        if isinstance(e, dict)
+    ]
+    results = [e for e in events if e.get("type") == "result"]
+    assert len(results) == 1, "the result event fires exactly once for the finished game"
+
+
+def test_single_game_feed_emits_no_result_event():
+    """Single-game feeds are unchanged: no board index, so no result event even when
+    the game has a terminal Result."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]').rstrip().rstrip("*").rstrip() + " 1-0\n"
+    events = _overlay_events_for(finished)
+    assert not any(e.get("type") == "result" for e in events), "single game emits no result event"
+
+
+# --------------------------------------------------------------------------- #
 # Drama classifier attached to the overlay event (task 0053)
 # --------------------------------------------------------------------------- #
 
