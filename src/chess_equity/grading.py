@@ -204,3 +204,88 @@ class EquityGrader:
             grades.append(self.grade_move(board.fen(), move, white_elo, black_elo, ply=ply))
             board.push(move)
         return grades
+
+
+# --------------------------------------------------------------------------- #
+# Per-side scoreline — a caster-facing "accuracy"-style summary (task 0200)
+# --------------------------------------------------------------------------- #
+
+# All grade labels, best → worst. Drives the column order in the scoreline table
+# and guarantees every side reports a count for every label (zero if unused).
+GRADE_LABELS = [label for _, label in BASE_BANDS] + ["blunder"]
+
+
+@dataclass(frozen=True)
+class SideScoreline:
+    """One side's aggregate move quality over a graded game (derived, no model calls)."""
+
+    white: bool
+    n_moves: int
+    label_counts: Dict[str, int]  # keyed by every GRADE_LABELS entry (0 if unused)
+    mean_peer: float  # mean grade_peer (signed; positive = beat rating peers overall)
+    worst: Optional[MoveGrade]  # the move with the minimum grade_peer (biggest drop)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "white": self.white,
+            "n_moves": self.n_moves,
+            "label_counts": dict(self.label_counts),
+            "mean_peer": self.mean_peer,
+            "worst": None if self.worst is None else self.worst.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class GameScoreline:
+    """Per-side scoreline for a whole game (White vs Black)."""
+
+    white: SideScoreline
+    black: SideScoreline
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"white": self.white.to_dict(), "black": self.black.to_dict()}
+
+
+def _side_scoreline(grades: List[MoveGrade], *, white: bool) -> SideScoreline:
+    moves = [g for g in grades if g.mover_white == white]
+    counts = {label: 0 for label in GRADE_LABELS}
+    for g in moves:
+        # Unknown labels (shouldn't happen) still count, so the sum invariant holds.
+        counts[g.label] = counts.get(g.label, 0) + 1
+    mean_peer = sum(g.grade_peer for g in moves) / len(moves) if moves else 0.0
+    worst = min(moves, key=lambda g: g.grade_peer) if moves else None
+    return SideScoreline(
+        white=white, n_moves=len(moves), label_counts=counts, mean_peer=mean_peer, worst=worst
+    )
+
+
+def scoreline(grades: List[MoveGrade]) -> GameScoreline:
+    """Aggregate a :class:`MoveGrade` list into a per-side scoreline.
+
+    Pure reduction over the grades the game already produced — no new model calls.
+    Each side's ``label_counts`` sum to its move count and ``worst`` is the move with
+    the minimum (most negative) ``grade_peer``.
+    """
+    return GameScoreline(
+        white=_side_scoreline(grades, white=True),
+        black=_side_scoreline(grades, white=False),
+    )
+
+
+def render_scoreline(line: GameScoreline) -> List[str]:
+    """A White-vs-Black grade-label table + mean Δpeer + worst move, as text lines."""
+    w, b = line.white, line.black
+    rows: List[str] = []
+    rows.append(f"{'move quality':<12}{'White':>8}{'Black':>8}")
+    rows.append(f"{'-' * 12}{'-' * 8:>8}{'-' * 8:>8}")
+    for label in GRADE_LABELS:
+        rows.append(f"{label:<12}{w.label_counts[label]:>8}{b.label_counts[label]:>8}")
+    rows.append(f"{'moves':<12}{w.n_moves:>8}{b.n_moves:>8}")
+    rows.append(f"{'mean Δpeer':<12}{w.mean_peer:>+8.1f}{b.mean_peer:>+8.1f}")
+    for side, sl in (("White", w), ("Black", b)):
+        if sl.worst is not None:
+            g = sl.worst
+            rows.append(
+                f"worst ({side}): {g.ply:3d}. {g.san} {g.label} (Δpeer {g.grade_peer:+.1f})"
+            )
+    return rows
