@@ -47,7 +47,9 @@ def infer_month_from_path(path: str) -> Optional[str]:
     return f"{year}-{month}"
 
 
-def model_fit_months(names: Sequence[str]) -> Dict[str, str]:
+def model_fit_months(
+    names: Sequence[str], wdl_a_path: Optional[str] = None
+) -> Dict[str, str]:
     """Map each selected predictor to the Lichess month it was trained on, when recorded.
 
     Only models with a committed artifact carry provenance; today that is ``wdl-a``,
@@ -55,12 +57,17 @@ def model_fit_months(names: Sequence[str]) -> Dict[str, str]:
     (``baseline``, ``baseline+clock``) have no training month and cannot leak, so they
     are simply absent from the result. Loading ``wdl-a`` here is cheap (it just reads
     the JSON artifact, no torch).
+
+    ``wdl_a_path`` overrides which artifact's provenance is read (task 0164) — when a run
+    scores wdl-a from a refit artifact (``validate --wdl-a-artifact``), the guard must
+    check *that* artifact's ``fit_month``, not the committed one's, or a genuine cross-dump
+    refit would still trip (or silently miss) the in-distribution check.
     """
     months: Dict[str, str] = {}
     if "wdl-a" in names:
         from chess_equity.wdl_regression import load_wdl_a_model
 
-        fit_month = (load_wdl_a_model().meta or {}).get("fit_month")
+        fit_month = (load_wdl_a_model(wdl_a_path).meta or {}).get("fit_month")
         if fit_month:
             months["wdl-a"] = str(fit_month)
     return months

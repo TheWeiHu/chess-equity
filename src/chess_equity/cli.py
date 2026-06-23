@@ -503,6 +503,23 @@ def _run_validate(args: argparse.Namespace) -> int:
     except KeyError as exc:
         print(f"error: {exc.args[0]}", file=sys.stderr)
         return 1
+
+    # Custom wdl-a artifact (task 0164): score wdl-a from a refit artifact (e.g. fit on a
+    # different month) so an eval dump can be a genuine held-out test for it. The leakage
+    # guard below reads the SAME artifact's fit_month, so a cross-dump refit reads as
+    # held-out rather than tripping the in-distribution warning.
+    wdl_a_artifact = getattr(args, "wdl_a_artifact", None)
+    if wdl_a_artifact and "wdl-a" in predictors:
+        from chess_equity.wdl_regression import load_wdl_a_model
+
+        _custom_wdl_a = load_wdl_a_model(wdl_a_artifact)
+
+        def _wdl_a_from_artifact(row, _m=_custom_wdl_a):
+            return _m.predict_white_equity(
+                row.cp_eval, row.white_elo, row.black_elo, row.ply, row.tc_bucket
+            )
+
+        predictors["wdl-a"] = _wdl_a_from_artifact
     try:
         rows = load_rows(args.data)
     except (OSError, ValueError) as exc:
@@ -571,7 +588,9 @@ def _run_validate(args: argparse.Namespace) -> int:
         or data_month
         or infer_month_from_path(args.data)
     )
-    leaks = detect_leakage(eval_month, model_fit_months(requested))
+    leaks = detect_leakage(
+        eval_month, model_fit_months(requested, wdl_a_path=wdl_a_artifact)
+    )
     if leaks:
         print("warning: " + leakage_line(leaks, eval_month), file=sys.stderr)
         if getattr(args, "strict", False):
@@ -921,7 +940,13 @@ def _run_train(args: argparse.Namespace) -> int:
     if not rows:
         print(f"error: no rows in {args.data}", file=sys.stderr)
         return 1
-    model = fit(rows, lr=args.lr, iters=args.iters, l2=args.l2)
+    model = fit(
+        rows,
+        lr=args.lr,
+        iters=args.iters,
+        l2=args.l2,
+        source_month=getattr(args, "train_month", None),
+    )
     out = args.out or str(default_artifact_path())
     model.save(out)
     meta = model.meta or {}
@@ -1290,6 +1315,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "evidence: validate warns loudly (or refuses, with --strict)",
     )
     val.add_argument(
+        "--wdl-a-artifact",
+        metavar="PATH",
+        help="score wdl-a from a custom artifact instead of the committed one (task 0164). "
+        "Lets a held-out run use a wdl-a refit on a *different* month than the eval dump — "
+        "the leakage guard reads this artifact's meta['fit_month'] too, so a genuine "
+        "cross-dump refit reads as held-out, not in-distribution",
+    )
+    val.add_argument(
         "--strict",
         action="store_true",
         help="refuse the run (nonzero exit) instead of merely warning when the leakage "
@@ -1366,6 +1399,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     tr.add_argument("--iters", type=int, default=3000, help="gradient-descent iterations")
     tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
     tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
+    tr.add_argument(
+        "--train-month",
+        default=None,
+        help="YYYY-MM the dataset came from, stamped into meta['fit_month'] for the "
+        "leakage guard (task 0112) — set it so a held-out eval on a different month "
+        "isn't mistaken for in-distribution",
+    )
 
     tn = sub.add_parser(
         "train-net",
