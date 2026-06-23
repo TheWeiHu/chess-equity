@@ -16,6 +16,7 @@ from chess_equity.broadcast import MoveEvent
 from chess_equity.drama import score_event
 from chess_equity.reel import (
     _KIND_LABEL,
+    build_poster_svg,
     build_reel,
     build_srt,
     build_webvtt,
@@ -30,6 +31,7 @@ from chess_equity.reel import (
     render_json,
     render_markdown,
     social_caption,
+    write_posters,
 )
 
 # Neutral base event (White just moved; quiet). Mirror test_drama's fixture.
@@ -252,6 +254,117 @@ def test_render_html_empty_reel_is_graceful():
     assert doc.startswith("<!doctype html>")
     assert "No highlight-worthy moments" in doc
     assert 'class="moment"' not in doc
+
+
+# --- Static SVG poster per moment (task 0218) --------------------------------
+
+def test_poster_svg_is_self_contained_and_shows_caption_and_bar():
+    reel = build_reel(_ONE_OF_EACH)
+    d = reel[0]  # the missed_win (|−20|) leads
+    svg = build_poster_svg(d, 1)
+    # Well-formed, standalone SVG: opens offline, no external deps / fetches / scripts.
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+    assert "http://www.w3.org/2000/svg" in svg  # the only http: permitted is the XML ns
+    assert "https://" not in svg
+    assert "<script" not in svg and "<image" not in svg
+    # The drama kind's caster label/emoji and the 1-based rank surface.
+    emoji, label = _KIND_LABEL[d.kind]
+    assert label in svg and emoji in svg
+    assert "#1 " in svg
+    # The social caption is rendered (it may wrap across lines, so check its tokens are
+    # all present rather than the contiguous string).
+    for tok in social_caption(d).split():
+        assert tok in svg, f"caption token missing from poster: {tok!r}"
+    # White-POV equity surfaces in the header.
+    assert f"White {d.equity:.0f}%" in svg
+
+
+def test_poster_svg_renders_board_from_fen():
+    reel = build_reel(_ONE_OF_EACH)
+    svg = build_poster_svg(reel[0], 1)
+    assert reel[0].fen is not None
+    assert "♘" in svg  # the knight from the _BASE fixture FEN
+    # The White-POV bar draws a white fill rect over a dark background.
+    assert "#f2f3f5" in svg and "#14151a" in svg
+
+
+def test_poster_svg_bar_height_tracks_white_equity():
+    # Two real moments at different White-POV equity: escape (75%) fills taller than
+    # scramble (58%). Both fire on the synthetic fixture, so neither is None.
+    reel = build_reel(_ONE_OF_EACH)
+    by_kind_ev = {d.kind: d for d in reel}
+    high = build_poster_svg(by_kind_ev["escape"], 1)    # equity 75
+    low = build_poster_svg(by_kind_ev["scramble"], 1)   # equity 58
+
+    def fill_h(svg):
+        # The <rect> carrying the white fill colour carries the fill height in its tag.
+        m = re.search(r'<rect[^>]*fill="#f2f3f5"[^>]*/>', svg)
+        return float(re.search(r'height="([0-9.]+)"', m.group(0)).group(1))
+
+    assert by_kind_ev["escape"].equity > by_kind_ev["scramble"].equity
+    assert fill_h(high) > fill_h(low)
+
+
+def test_poster_svg_escapes_dynamic_text():
+    d = score_event(ev(san="<b>&", equity=65.0, delta_equity=15.0))
+    svg = build_poster_svg(d, 1)
+    assert "<b>&" not in svg.replace("<svg", "")  # raw markup never leaks into the body
+    assert "&amp;" in svg and "&lt;b&gt;" in svg
+
+
+def test_poster_svg_handles_missing_fen():
+    d = score_event(ev(fen=None, equity=55.0, delta_equity=15.0))
+    svg = build_poster_svg(d, 1)
+    assert "no board snapshot" in svg
+    assert svg.startswith("<svg")
+
+
+def test_write_posters_writes_one_svg_per_moment(tmp_path):
+    reel = build_reel(_ONE_OF_EACH)
+    out = tmp_path / "posters"
+    paths = write_posters(reel, str(out))
+    assert len(paths) == len(reel)
+    for i, p in enumerate(paths, start=1):
+        assert p.endswith(f"poster-{i:02d}-{reel[i - 1].kind}.svg")
+        assert (out / f"poster-{i:02d}-{reel[i - 1].kind}.svg").read_text().startswith("<svg")
+
+
+def test_write_posters_empty_reel_writes_nothing(tmp_path):
+    out = tmp_path / "posters"
+    assert write_posters([], str(out)) == []
+
+
+def test_cli_reel_writes_posters(tmp_path):
+    from chess_equity.cli import main
+
+    # Run --posters alongside --out-dir so we can compare the poster count against the
+    # JSON moment count (the muted baseline may surface few/zero moments on the sample).
+    out = tmp_path / "reel"
+    posters = tmp_path / "posters"
+    rc = main(
+        [
+            "reel", "--pgn", "data/sample/sample_games.pgn",
+            "--out-dir", str(out), "--posters", str(posters),
+        ]
+    )
+    assert rc == 0
+    payload = json.loads((out / "reel.json").read_text())
+    svgs = sorted(posters.glob("poster-*.svg"))
+    assert len(svgs) == len(payload["moments"])  # one SVG per ranked moment
+    for svg in svgs:
+        text = svg.read_text()
+        assert text.startswith("<svg") and text.rstrip().endswith("</svg>")
+
+
+def test_cli_reel_writes_posters_standalone(tmp_path):
+    from chess_equity.cli import main
+
+    posters = tmp_path / "posters"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--posters", str(posters)]
+    )
+    assert rc == 0
+    assert posters.is_dir()  # the directory is created even on a quiet (0-moment) game
 
 
 def test_render_html_escapes_dynamic_text():

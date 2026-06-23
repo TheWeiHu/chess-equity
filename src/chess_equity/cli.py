@@ -651,6 +651,13 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
             print(f"wrote {len(reel)} moment(s): {args.srt}", file=sys.stderr)
         return 0
 
+    # --posters DIR writes one static SVG poster per ranked moment (a shareable social
+    # card). Like --html/--srt it can stand alone or sit alongside --out-dir's json+md.
+    if args.posters is not None and args.out_dir is None:
+        paths = reel_mod.write_posters(reel, args.posters, sources=sources)
+        print(f"wrote {len(paths)} poster(s): {args.posters}", file=sys.stderr)
+        return 0
+
     if args.out_dir is None:
         print(reel_mod.render_markdown(reel, title=title, sources=sources))
         return 0
@@ -673,6 +680,9 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         with open(srt_path, "w", encoding="utf-8") as fh:
             fh.write(reel_mod.build_srt(reel))
         written.append(srt_path)
+    if args.posters is not None:
+        poster_dir = args.posters
+        written.extend(reel_mod.write_posters(reel, poster_dir, sources=sources))
     print(f"wrote {len(reel)} moment(s): {', '.join(written)}", file=sys.stderr)
     return 0
 
@@ -1680,6 +1690,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "emit the narration as an SRT subtitle file (for Premiere/Resolve/CapCut) "
             "to PATH (or stdout if PATH omitted; reel.srt in --out-dir if both given)"
+        ),
+    )
+    rl.add_argument(
+        "--posters",
+        default=None,
+        metavar="DIR",
+        help=(
+            "write one static SVG poster per ranked moment (board + White-POV equity "
+            "bar + social caption) into DIR — shareable social cards"
         ),
     )
     rl.add_argument("--title", default="Highlight reel", help="reel title")

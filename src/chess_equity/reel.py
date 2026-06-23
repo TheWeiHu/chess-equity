@@ -547,6 +547,198 @@ def _webvtt_track_html(reel: List[DramaEvent]) -> str:
     )
 
 
+# --- Static SVG poster frame per moment (task 0218) --------------------------
+#
+# The HTML clip player above is a single multi-moment document; a *poster* is one
+# still SVG per ranked moment — a shareable social card (tweet image, article still,
+# thumbnail). Pure server-side string-gen, no external deps: a White-POV equity bar,
+# the board rendered from the moment FEN (reusing ``_PIECE_GLYPH``), the caster
+# kind/emoji label, and the ready-to-post social caption. This mirrors the
+# ``eval --svg`` bar renderer (task 0217); when that isn't merged yet the minimal bar
+# below stands alone. The bar is White-POV like every other equity bar in the project
+# (full = White winning, see :func:`chess_equity.bar.render_bar`): ``DramaEvent.equity``
+# is already the White-POV percentage after the move, so the white fill rises from the
+# bottom to that fraction.
+
+_POSTER_SQ = 40  # board square edge, px
+_POSTER_PAD = 16
+_POSTER_BAR_W = 26
+_POSTER_GAP = 12
+_POSTER_HEADER_H = 46
+_POSTER_LINE_H = 22
+_POSTER_CAP_CHARS = 50  # caption wrap width (chars) tuned to the poster inner width
+
+# Board square fills (light/dark) and piece colours — match the HTML player's palette.
+_POSTER_LIGHT = "#e9edf2"
+_POSTER_DARK = "#6f7b8a"
+
+
+def _svg_escape(text: str) -> str:
+    """Escape text for an SVG/XML text node (``&``, ``<``, ``>`` and both quotes)."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _wrap(text: str, width: int) -> List[str]:
+    """Greedy word-wrap to ``width`` chars; never splits a word, never returns []."""
+    words = text.split()
+    if not words:
+        return [""]
+    lines: List[str] = []
+    cur = words[0]
+    for w in words[1:]:
+        if len(cur) + 1 + len(w) <= width:
+            cur = f"{cur} {w}"
+        else:
+            lines.append(cur)
+            cur = w
+    lines.append(cur)
+    return lines
+
+
+def _poster_board_svg(fen: Optional[str], x: float, y: float) -> str:
+    """Render the FEN placement field as an 8x8 SVG board (rects + figurine glyphs)."""
+    side = _POSTER_SQ * 8
+    parts = [
+        f'<rect x="{x}" y="{y}" width="{side}" height="{side}" '
+        f'fill="{_POSTER_LIGHT}" stroke="#2a2d38" stroke-width="2"/>'
+    ]
+    if not fen:
+        parts.append(
+            f'<text x="{x + side / 2}" y="{y + side / 2}" text-anchor="middle" '
+            'dominant-baseline="central" font-size="14" fill="#6b7280">'
+            "no board snapshot</text>"
+        )
+        return "".join(parts)
+    placement = fen.split(" ", 1)[0]
+    for rank_idx, row in enumerate(placement.split("/")):
+        file_idx = 0
+        for ch in row:
+            span = int(ch) if ch.isdigit() else 1
+            for _ in range(span):
+                cx = x + file_idx * _POSTER_SQ
+                cy = y + rank_idx * _POSTER_SQ
+                light = (rank_idx + file_idx) % 2 == 0
+                if not light:
+                    parts.append(
+                        f'<rect x="{cx}" y="{cy}" width="{_POSTER_SQ}" '
+                        f'height="{_POSTER_SQ}" fill="{_POSTER_DARK}"/>'
+                    )
+                if not ch.isdigit():
+                    glyph = _PIECE_GLYPH.get(ch, "")
+                    if glyph:
+                        parts.append(
+                            f'<text x="{cx + _POSTER_SQ / 2}" '
+                            f'y="{cy + _POSTER_SQ / 2}" text-anchor="middle" '
+                            'dominant-baseline="central" '
+                            f'font-size="{int(_POSTER_SQ * 0.74)}" fill="#14151a">'
+                            f"{glyph}</text>"
+                        )
+                file_idx += 1
+    return "".join(parts)
+
+
+def _poster_bar_svg(equity_white: float, x: float, y: float, h: float) -> str:
+    """A White-POV vertical equity bar: white fills from the bottom to ``equity_white%``.
+
+    Full bar (white) = White winning, empty = Black — the project's one bar convention
+    (see :func:`chess_equity.bar.render_bar`). A midline marks the 50% reference.
+    """
+    pct = max(0.0, min(100.0, equity_white))
+    fill_h = h * pct / 100.0
+    mid_y = y + h / 2.0
+    return (
+        f'<rect x="{x}" y="{y}" width="{_POSTER_BAR_W}" height="{h}" '
+        'fill="#14151a" stroke="#2a2d38" stroke-width="2"/>'
+        f'<rect x="{x}" y="{y + h - fill_h}" width="{_POSTER_BAR_W}" '
+        f'height="{fill_h}" fill="#f2f3f5"/>'
+        f'<line x1="{x}" y1="{mid_y}" x2="{x + _POSTER_BAR_W}" y2="{mid_y}" '
+        'stroke="#9aa0aa" stroke-width="1" stroke-dasharray="3 3"/>'
+    )
+
+
+def build_poster_svg(
+    d: DramaEvent,
+    index: int,
+    *,
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> str:
+    """Render ONE ranked moment as a self-contained static SVG poster card.
+
+    Layout (White-POV throughout): a vertical equity bar on the left, the board from
+    the moment FEN beside it, a header naming the rank + drama kind/emoji + White-POV
+    equity, and the ready-to-post social caption wrapped beneath. No external deps,
+    fonts, or scripts — the SVG opens offline straight from disk. ``index`` is the
+    1-based reel rank (shown as ``#N``).
+    """
+    emoji, label = _KIND_LABEL.get(d.kind, ("", d.kind))
+    board_side = _POSTER_SQ * 8
+    width = _POSTER_PAD + _POSTER_BAR_W + _POSTER_GAP + board_side + _POSTER_PAD
+    board_x = _POSTER_PAD + _POSTER_BAR_W + _POSTER_GAP
+    board_y = _POSTER_HEADER_H
+    cap_lines = _wrap(social_caption(d, sources), _POSTER_CAP_CHARS)
+    cap_top = board_y + board_side + 20
+    height = cap_top + len(cap_lines) * _POSTER_LINE_H + _POSTER_PAD - _POSTER_LINE_H
+
+    header = (
+        f'<text x="{_POSTER_PAD}" y="22" font-size="18" font-weight="700" '
+        f'fill="#14151a">#{index} {_svg_escape(emoji)} {_svg_escape(label)}</text>'
+        f'<text x="{_POSTER_PAD}" y="40" font-size="13" fill="#6b7280">'
+        f"magnitude {d.magnitude:.2f} · White {d.equity:.0f}% "
+        f"({d.delta_equity:+.0f} pts)</text>"
+    )
+    caps = "".join(
+        f'<text x="{_POSTER_PAD}" y="{cap_top + i * _POSTER_LINE_H}" '
+        f'font-size="15" fill="#1d1f27">{_svg_escape(line)}</text>'
+        for i, line in enumerate(cap_lines)
+    )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height:.0f}" viewBox="0 0 {width} {height:.0f}" '
+        'font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">\n'
+        f'<rect width="{width}" height="{height:.0f}" fill="#ffffff"/>\n'
+        f"{header}\n"
+        f"{_poster_bar_svg(d.equity, _POSTER_PAD, board_y, board_side)}\n"
+        f"{_poster_board_svg(d.fen, board_x, board_y)}\n"
+        f"{caps}\n"
+        "</svg>\n"
+    )
+
+
+def _poster_filename(index: int, d: DramaEvent) -> str:
+    """Stable per-moment filename: zero-padded rank + drama kind (``poster-01-clutch.svg``)."""
+    return f"poster-{index:02d}-{d.kind}.svg"
+
+
+def write_posters(
+    reel: List[DramaEvent],
+    out_dir: str,
+    *,
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> List[str]:
+    """Write one SVG poster per ranked moment into ``out_dir``; return the paths written.
+
+    Files are named ``poster-NN-<kind>.svg`` in reel-rank order. An empty reel writes
+    nothing and returns ``[]`` (a quiet game produces no posters). The directory is
+    created if needed.
+    """
+    import os
+
+    os.makedirs(out_dir, exist_ok=True)
+    written: List[str] = []
+    for i, d in enumerate(reel, start=1):
+        path = os.path.join(out_dir, _poster_filename(i, d))
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(build_poster_svg(d, i, sources=sources))
+        written.append(path)
+    return written
+
+
 def render_html(
     reel: List[DramaEvent],
     *,
