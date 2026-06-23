@@ -351,6 +351,13 @@
   // accumulate its streak across interleaved quiet-board ticks. Defaults are sticky (margin
   // 0.1, K 2) so anti-flap is on by default; set `challengePlies:1, dramaMargin:0` for the
   // old hair-trigger behavior.
+  //
+  // Auto-advance off a finished board (task 0189): the bridge emits a `result` event
+  // ({type:"result", board}) when a game reaches a terminal PGN result. The router marks
+  // that board finished, and if it was the FOLLOWED board — and not manually pinned —
+  // advances focus to the next still-live board so a caster isn't stranded on an ended
+  // game while others are live. This is baseline routing (independent of `autofollow`);
+  // only a manual pin suppresses it. `result` events are routing metadata, never rendered.
   function makeBoardRouter(opts) {
     opts = opts || {};
     var autofollow = !!opts.autofollow;
@@ -369,6 +376,24 @@
     function has(idx) {
       for (var i = 0; i < boards.length; i++) if (boards[i].index === idx) return true;
       return false;
+    }
+
+    // The next still-live board after `from` in board order (wrapping). null if every
+    // known board has finished — then we stay put rather than jump to a dead board.
+    function nextLiveBoard(from) {
+      if (!boards.length) return null;
+      var start = 0;
+      for (var i = 0; i < boards.length; i++) {
+        if (boards[i].index === from) {
+          start = i;
+          break;
+        }
+      }
+      for (var k = 1; k <= boards.length; k++) {
+        var b = boards[(start + k) % boards.length];
+        if (!finished[b.index]) return b.index;
+      }
+      return null;
     }
 
     function dramaMag(evt) {
@@ -437,7 +462,7 @@
       // multi-board (numeric `board`), and the board isn't pinned. Honors the focus lock.
       note: function (evt) {
         if (!autofollow || pinned) return;
-        if (!evt || typeof evt.board !== "number") return;
+        if (!evt || evt.type === "result" || typeof evt.board !== "number") return;
         var mag = dramaMag(evt);
         if (selected === null) {
           // Nothing followed yet — adopt the first board we see, unlocked so a bigger
