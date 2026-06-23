@@ -687,6 +687,20 @@ def _run_validate(args: argparse.Namespace) -> int:
     if good_section:
         report = report + "\n" + good_section
 
+    # Cutoff-robustness sweep (task 0157): the good/blunder cutoffs in the section above
+    # are arbitrary defaults, so re-measure the Δgood > Δblunder direction across a grid
+    # of good × blunder cutoffs and report whether it holds in every cell (or names where
+    # it breaks). Cheap (no bootstrap); skipped when there are no move-pairs to score.
+    from chess_equity.validate.goodmoves import (
+        format_good_moves_sweep,
+        sweep_good_moves,
+    )
+
+    sweeps = sweep_good_moves(rows, predictors)
+    sweep_section = format_good_moves_sweep(sweeps)
+    if sweep_section:
+        report = report + "\n" + sweep_section
+
     # Seed stability (task 0156): if --seeds was given, re-run the gate under each seed and
     # append a stability section so the committed-seed PASS is shown to survive re-sampling
     # (not a cherry-picked draw). Uses the full pre-split rows, re-drawing the --holdout
