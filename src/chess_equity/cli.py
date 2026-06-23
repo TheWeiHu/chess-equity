@@ -778,6 +778,25 @@ def _run_data(args: argparse.Namespace) -> int:
 
 
 def _run_validate(args: argparse.Namespace) -> int:
+    # Evidence-index drift guard (task 0219): a zero-data cross-check of reports/SUMMARY.md
+    # against the committed real-data report headers. Runs before anything touches a
+    # dataset, so it needs no --data.
+    if getattr(args, "check_index", False):
+        from chess_equity.validate.index_guard import check_index
+
+        result = check_index()
+        if result.ok:
+            print("SUMMARY.md evidence index is consistent with the committed reports.")
+            return 0
+        print("SUMMARY.md evidence-index drift:", file=sys.stderr)
+        for problem in result.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    if not args.data:
+        print("error: validate needs --data (or use --check-index)", file=sys.stderr)
+        return 2
+
     # Lazy import: keeps the eval path free of the data loader.
     from chess_equity.data.build import load_rows
     from chess_equity.validate.harness import (
@@ -1745,7 +1764,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The underpowered-sample floor's default (task 0132) — imported here so the help text
     # shows the real number without pulling the heavy validate package at startup.
     from chess_equity.validate.harness import MIN_GATE_N
-    val.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
+    val.add_argument(
+        "--data",
+        help="path to a built dataset (csv/parquet); required unless --check-index",
+    )
+    val.add_argument(
+        "--check-index",
+        action="store_true",
+        help="evidence-index drift guard (task 0219): cross-check reports/SUMMARY.md "
+        "against the committed reports/*_real*.md headers + '## Gate verdict' lines and "
+        "exit non-zero listing any row whose dump/n/verdict disagrees or any report "
+        "missing from the table. Reads no data and computes no numbers — fully unattended",
+    )
     val.add_argument(
         "--models",
         default="baseline",
