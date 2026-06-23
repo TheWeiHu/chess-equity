@@ -161,6 +161,7 @@ values are **seconds remaining**.
   "type": "game",
   "format": "bullet",                       // optional label
   "board": 0,                               // optional — 0-based board index in a multi-game round (task 0185)
+  "model": "Maia-2",                        // optional — human-readable bar-model badge (task 0222); omitted -> no badge
   "players": {
     "white": { "name": "Carlsen", "rating": 2839 },
     "black": { "name": "Nakamura", "rating": 2802 }

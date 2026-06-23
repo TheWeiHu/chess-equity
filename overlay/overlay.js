@@ -455,6 +455,18 @@
       setText("[data-black-name]", pl.black.name || "Black");
       setText("[data-black-rating]", overrideRating(pl.black.rating, cfg.belo));
     }
+    // Model badge (task 0222): a static label naming the model that drives the bar, so
+    // a viewer can tell this is a human win-probability model rather than Stockfish.
+    // Shown only when the game event carries a model; otherwise hidden (no badge).
+    const modelEl = q("[data-model]");
+    if (modelEl) {
+      if (evt.model) {
+        modelEl.textContent = evt.model;
+        modelEl.hidden = false;
+      } else {
+        modelEl.hidden = true;
+      }
+    }
   }
 
   function applyPosition(evt, cfg) {
