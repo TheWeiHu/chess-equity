@@ -48,3 +48,8 @@ jobs:
       # Black is on the move (task 0206).
       - name: Run overlay POV JS tests
         run: node overlay/test_pov.test.js
+      # The momentum cue (overlay/overlay.js momentum/makeMomentumTracker) is gated by a
+      # dependency-free node test: a swing arms the last-swing arrow and it decays over the
+      # next few quiet moves (task 0208).
+      - name: Run overlay momentum JS tests
+        run: node overlay/test_momentum.test.js

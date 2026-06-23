@@ -112,6 +112,62 @@
     return "human edge · " + who + " +" + pts + " vs engine";
   }
 
+  // Momentum cue (task 0208): the DIRECTION and SIZE of the last equity swing, so a
+  // viewer can see at a glance who just gained — distinct from dramaSwing (which only
+  // FLARES on big engine-blind swings in caster mode) and humanEdge (a LEVEL gap vs the
+  // engine). All inputs White-POV; derived purely from the event delta (eq - prevEquity),
+  // no new feed field. Returns null on the first move or when the swing is negligible.
+  // `magnitude` is the swing normalized to MAX_SWING (0.4) like dramaSwing, so the two
+  // read on the same scale.
+  function momentum(prevEquity, equity, opts) {
+    opts = opts || {};
+    var minDelta = opts.minDelta == null ? 0.02 : opts.minDelta; // < 2pts is "negligible"
+    if (typeof prevEquity !== "number" || typeof equity !== "number") return null;
+    if (isNaN(prevEquity) || isNaN(equity)) return null;
+    var delta = clamp01(equity) - clamp01(prevEquity);
+    if (Math.abs(delta) < minDelta) return null;
+    return {
+      side: delta > 0 ? "white" : "black", // who the swing moved equity TOWARD
+      delta: delta,
+      magnitude: Math.min(1, Math.abs(delta) / 0.4),
+    };
+  }
+
+  // Decaying momentum tracker (task 0208): a timer-free, tick-driven state machine (mirrors
+  // feed.js makeStaleTracker — the caller drives it, no clocks) so the arrow lingers and
+  // fades after a swing instead of blinking off the next move. `note(prevEq, eq)` feeds one
+  // position: a fresh swing (>= minDelta) sets the arrow to FULL strength in its direction;
+  // a quiet move decays the standing arrow by 1/decayTicks until it disappears after
+  // `decayTicks` quiet moves. Returns the render state {side, magnitude, strength} where
+  // strength is 1..0 (drives opacity), or null when there's nothing to show.
+  function makeMomentumTracker(opts) {
+    opts = opts || {};
+    var decayTicks = opts.decayTicks == null ? 4 : opts.decayTicks; // quiet moves until it clears
+    var step = decayTicks > 0 ? 1 / decayTicks : 1;
+    var side = null;       // direction of the standing swing
+    var magnitude = 0;     // normalized size of the swing that set the arrow (held while visible)
+    var strength = 0;      // 1 on a fresh swing, decays toward 0 each quiet tick
+    return {
+      note: function (prevEquity, equity) {
+        var m = momentum(prevEquity, equity, opts);
+        if (m) {
+          side = m.side;
+          magnitude = m.magnitude;
+          strength = 1;
+        } else {
+          strength = Math.max(0, strength - step);
+        }
+        if (strength <= 0 || side === null) return null;
+        return { side: side, magnitude: magnitude, strength: strength };
+      },
+      // Current render state without advancing (for tests/inspection).
+      peek: function () {
+        if (strength <= 0 || side === null) return null;
+        return { side: side, magnitude: magnitude, strength: strength };
+      },
+    };
+  }
+
   // Streamer rating override (task 0021): when the setup page sets ?welo=/?belo=,
   // that rating wins over whatever the feed reports. Useful because Maia-2's top
   // band is a coarse ">2000" — a caster can pin the real ratings for context.
@@ -351,6 +407,8 @@
   // Previous position, so caster mode can measure the swing into THIS move.
   let prevEquity = null;
   let prevCp = null;
+  // Decaying momentum arrow (task 0208): lingers a few moves after a swing, then fades.
+  let momentumTracker = makeMomentumTracker();
 
   function applyGame(evt, cfg) {
     cfg = cfg || {};
@@ -436,6 +494,11 @@
       const d = dramaSwing(prevEquity, eq, prevCp, evt.cp);
       if (d) showDrama(d, evt.drama);
     }
+
+    // Momentum arrow (task 0208): always-on glance cue for the direction + size of the
+    // last swing. Fed every move (even quiet ones) so the standing arrow decays and clears.
+    showMomentum(momentumTracker.note(prevEquity, eq));
+
     prevEquity = eq;
     prevCp = evt.cp;
 
@@ -520,6 +583,28 @@
     }, 4000);
   }
 
+  // Momentum arrow (task 0208): render the decaying last-swing cue. `m` is the tracker
+  // state {side, magnitude, strength} or null. Hidden when null (negligible / decayed
+  // out). The arrow points UP when equity moved toward White, DOWN toward Black; its
+  // opacity follows `strength` (fades over the decay window) and its size hints at the
+  // swing `magnitude`, so it reads at a glance without text.
+  function showMomentum(m) {
+    const el = q("[data-momentum]");
+    if (!el) return;
+    if (!m) {
+      el.hidden = true;
+      return;
+    }
+    const up = m.side === "white";
+    el.textContent = up ? "▲" : "▼";
+    el.classList.toggle("white", up);
+    el.classList.toggle("black", !up);
+    // Opacity carries the decay; font-size nudges up with the swing magnitude.
+    el.style.opacity = (0.25 + 0.75 * m.strength).toFixed(2);
+    el.style.fontSize = (15 + Math.round(9 * m.magnitude)) + "px";
+    el.hidden = false;
+  }
+
   // Live board selector for a multi-game round (task 0185). Hidden for a single board
   // (<= 1 known), revealed and populated otherwise; changing it tells the router which
   // board to follow, and subsequent events for that board flow to the bar.
@@ -585,6 +670,7 @@
 
   function start() {
     const cfg = params();
+    momentumTracker = makeMomentumTracker(); // fresh decay state per (re)start
     boardRouter = makeBoardRouter({
       autofollow: cfg.autofollow,
       lockPlies: isNaN(cfg.focuslock) ? undefined : cfg.focuslock,
@@ -644,6 +730,8 @@
     dramaHeadline: dramaHeadline,
     humanEdge: humanEdge,
     edgeLabel: edgeLabel,
+    momentum: momentum,
+    makeMomentumTracker: makeMomentumTracker,
     makeBoardRouter: makeBoardRouter,
   };
 

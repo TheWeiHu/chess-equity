@@ -132,6 +132,13 @@ overlay.
 - In **caster mode** (`?caster=1`), a **drama flare** on big practical equity
   swings, glowing gold when it's a swing the engine bar misses (e.g. a clock
   scramble the centipawn eval calls quiet) — the caster's "look at THIS" cue.
+- A **momentum arrow** (bottom-right, always on) showing the direction and size of
+  the last equity swing — ▲ accent when equity moved toward White, ▼ when toward
+  Black — so a viewer sees *who just gained* at a glance (task 0208). It's derived
+  purely from the move-to-move equity delta (no extra feed field), stays hidden
+  while equity is steady (swing < 2 points), and **fades out over the next few
+  moves** after a swing rather than blinking off. Distinct from the drama flare
+  (which only fires in caster mode, on big engine-blind swings).
 
 The bundled `mock-game.json` is a bullet time-scramble: around the time scramble
 the centipawn eval reads ≈0.00 (or slightly for Black) while the clock-aware
