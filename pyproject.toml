@@ -39,6 +39,13 @@ maia2 = [
     "tqdm",
     "pyyaml",
 ]
+# The end-to-end board → WDL net (task 0013, `--model wdl-net` / `train-net`). Just
+# torch — the board encoder is pure python-chess and the trainer needs nothing from the
+# maia2 extra, so this is the light way to train/score Approach D without pulling maia2 +
+# gdown + the Maia-2 checkpoint. (torch also ships with the `maia2` extra.)
+wdl-net = [
+    "torch",
+]
 # Reliability-curve plots for the validation gate (task 0036, `validate --plots`).
 # Optional: every numeric metric and the Markdown reports work without it.
 plots = [

@@ -121,6 +121,12 @@ def build_model(
         from chess_equity.wdl_regression import build_wdl_a_equity
 
         return build_wdl_a_equity()
+    if name == "wdl-net":
+        # Approach D (0013): the end-to-end board → WDL net. Lazy import so the
+        # baseline path never pulls torch; loads the committed artifact.
+        from chess_equity.wdl_net import build_wdl_net_equity
+
+        return build_wdl_net_equity()
     if name == "maia-rollout":
         from chess_equity.rollout import build_maia_rollout
 
@@ -137,7 +143,7 @@ def build_model(
         return LichessBaselineModel(engine=resolve_objective_engine(depth=depth))
     raise ValueError(
         f"unknown model {name!r}; choose from: "
-        "baseline, maia2, wdl-a, maia-rollout, maia-search"
+        "baseline, maia2, wdl-a, wdl-net, maia-rollout, maia-search"
     )
 
 
@@ -829,6 +835,41 @@ def _run_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_train_net(args: argparse.Namespace) -> int:
+    """Fit the end-to-end board → WDL net (Approach D, task 0013) and save it."""
+    from chess_equity.data.build import load_rows
+    from chess_equity.wdl_net import default_artifact_path, train_wdl_net
+
+    try:
+        rows = load_rows(args.data)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not rows:
+        print(f"error: no rows in {args.data}", file=sys.stderr)
+        return 1
+    if all(r.fen is None for r in rows):
+        print(
+            f"error: {args.data} has no FEN column; rebuild with --with-fen "
+            "(wdl-net learns straight from the board)",
+            file=sys.stderr,
+        )
+        return 1
+    net = train_wdl_net(
+        rows,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        seed=args.seed,
+        train_month=args.train_month,
+        log=lambda m: print(m, file=sys.stderr),
+    )
+    out = args.out or str(default_artifact_path())
+    net.save(out)
+    print(f"wrote {out} (n_train={net.cfg.n_train}, epochs={net.cfg.epochs})")
+    return 0
+
+
 def _run_personal(args: argparse.Namespace) -> int:
     """Mine a player's profile and (optionally) show how it bends the equity bar."""
     import io
@@ -1210,6 +1251,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     tr.add_argument("--lr", type=float, default=0.5, help="learning rate")
     tr.add_argument("--l2", type=float, default=1e-4, help="L2 regularisation strength")
 
+    tn = sub.add_parser(
+        "train-net",
+        help="fit the end-to-end board → WDL net (Approach D, task 0013; needs torch + a --with-fen dataset)",
+    )
+    tn.add_argument("--data", required=True, help="path to a --with-fen dataset (csv/parquet)")
+    tn.add_argument("--out", help="artifact path (default: the packaged wdl_net.pt)")
+    tn.add_argument("--epochs", type=int, default=8, help="training epochs (default 8)")
+    tn.add_argument("--batch-size", type=int, default=512, help="minibatch size (default 512)")
+    tn.add_argument("--lr", type=float, default=1e-3, help="Adam learning rate (default 1e-3)")
+    tn.add_argument("--seed", type=int, default=0, help="RNG seed for shuffling + init")
+    tn.add_argument(
+        "--train-month",
+        default=None,
+        help="YYYY-MM the dataset came from, stamped into the artifact for the leakage guard",
+    )
+
     dr = sub.add_parser(
         "doctor",
         help="check the optional engines (Stockfish, Maia-2) are installed and working",
@@ -1269,6 +1326,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_headline(args.data, out=args.out, bootstrap=args.bootstrap, seed=args.seed)
     if args.command == "train":
         return _run_train(args)
+    if args.command == "train-net":
+        return _run_train_net(args)
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":

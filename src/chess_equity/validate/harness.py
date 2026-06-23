@@ -159,9 +159,20 @@ def _build_maia_search() -> EquityModel:
     return build_maia_search()
 
 
+def _build_wdl_net() -> EquityModel:
+    # Approach D (task 0013): the end-to-end board → rating-conditioned WDL net,
+    # scored as a board predictor so the 0009 gate can ask the task's real question —
+    # does predicting WDL straight from the board beat regression-on-Stockfish-eval
+    # (``wdl-a``)? Loads the committed artifact; torch stays unimported until scored.
+    from chess_equity.wdl_net import build_wdl_net_equity
+
+    return build_wdl_net_equity()
+
+
 BOARD_MODELS: Dict[str, Callable[[], EquityModel]] = {
     "maia2": _build_maia2,
     "maia-search": _build_maia_search,
+    "wdl-net": _build_wdl_net,
 }
 
 
