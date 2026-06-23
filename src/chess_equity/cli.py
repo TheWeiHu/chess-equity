@@ -628,7 +628,24 @@ def _run_validate(args: argparse.Namespace) -> int:
             seed=args.seed,
         )
 
-    report = format_report(reports, title=title, comparisons=comparisons)
+    # Per-slice significance CIs (task 0068), computed up front so the report's worst-slice
+    # line can carry a clears-zero / straddles-zero caveat (task 0161) and so the per-slice
+    # CI section below can reuse the same object. Needs the baseline + a challenger.
+    h2h_ci = None
+    if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
+        from chess_equity.validate.harness import head_to_head_slice_cis
+
+        h2h_ci = head_to_head_slice_cis(
+            rows,
+            predictors,
+            baseline_name=baseline_name,
+            n_resamples=args.bootstrap,
+            seed=args.seed,
+        )
+
+    report = format_report(
+        reports, title=title, comparisons=comparisons, head_to_head_cis=h2h_ci
+    )
     leak_block = format_leakage_warning(leaks, eval_month)
     if leak_block:
         # Insert just below the H1 so the warning leads the artifact, above the gate verdict.
@@ -660,21 +677,10 @@ def _run_validate(args: argparse.Namespace) -> int:
     # within each rating / clock / phase slice (task 0068), so the report can tell a real
     # band-level equity win from small-n noise — the overall CI (0060) can't. Same
     # --bootstrap budget / seed; needs the baseline plus at least one challenger.
-    if args.bootstrap > 0 and baseline_name in predictors and len(predictors) > 1:
-        from chess_equity.validate.harness import (
-            format_head_to_head_cis,
-            head_to_head_slice_cis,
-        )
+    if h2h_ci is not None and h2h_ci.slices:
+        from chess_equity.validate.harness import format_head_to_head_cis
 
-        h2h_ci = head_to_head_slice_cis(
-            rows,
-            predictors,
-            baseline_name=baseline_name,
-            n_resamples=args.bootstrap,
-            seed=args.seed,
-        )
-        if h2h_ci is not None and h2h_ci.slices:
-            report = report + "\n" + format_head_to_head_cis(h2h_ci)
+        report = report + "\n" + format_head_to_head_cis(h2h_ci)
 
     # By time-control bucket (task 0155): the torch-free step toward the streaming /
     # time-pressure north star — does equity still beat the centipawn baseline within each
