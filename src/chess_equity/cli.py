@@ -914,6 +914,49 @@ def _run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_divergence(args: argparse.Namespace) -> int:
+    """Measure how far the equity bar diverges from the Stockfish bar (task 0171)."""
+    from chess_equity.data.build import load_rows
+    from chess_equity.data.source_month import read_source_month
+    from chess_equity.validate.divergence import format_divergence, measure_divergence
+    from chess_equity.validate.harness import build_predictors
+
+    try:
+        predictors = build_predictors([args.equity, args.stockfish])
+    except KeyError as exc:
+        print(f"error: {exc.args[0]}", file=sys.stderr)
+        return 1
+    try:
+        rows = load_rows(args.data)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not rows:
+        print(f"error: no rows in {args.data}", file=sys.stderr)
+        return 1
+
+    report = measure_divergence(
+        rows,
+        predictors[args.equity],
+        equity_name=args.equity,
+        stockfish=predictors[args.stockfish],
+        stockfish_name=args.stockfish,
+    )
+    month = read_source_month(args.data) or "unknown"
+    header = (
+        f"# Divergence — real Lichess dump `{month}`, n={len(rows)} "
+        f"(equity=`{args.equity}` vs Stockfish=`{args.stockfish}`)"
+    )
+    text = format_divergence(report, header=header)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        print(f"wrote {args.out}")
+    else:
+        print(text)
+    return 0
+
+
 def _run_precompute(args: argparse.Namespace) -> int:
     """Evaluate a whole game's equity in one cache-backed pass → UI-ready JSON (0012)."""
     from chess_equity.cache import CachingEquityModel
@@ -1453,6 +1496,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     hd.add_argument("--seed", type=int, default=0, help="RNG seed for the bootstrap")
 
+    dv = sub.add_parser(
+        "divergence",
+        help="measure how far the equity bar DIVERGES from the Stockfish bar (task 0171)",
+    )
+    dv.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
+    dv.add_argument(
+        "--equity",
+        default="wdl-a",
+        help="the rating-aware equity predictor to compare (default wdl-a; any "
+        "validate --models name that reads cp_eval, e.g. baseline+clock)",
+    )
+    dv.add_argument(
+        "--stockfish",
+        default="baseline",
+        help="the classic Stockfish-bar predictor to diverge from (default baseline: "
+        "Lichess Win%% of cp_eval)",
+    )
+    dv.add_argument("--out", help="write the Markdown report here (default: stdout)")
+
     tr = sub.add_parser("train", help="fit the wdl-a rating-conditioned WDL model (task 0004)")
     tr.add_argument("--data", required=True, help="path to a built dataset (csv/parquet)")
     tr.add_argument("--out", help="artifact path (default: the packaged wdl_a.json)")
@@ -1546,6 +1608,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         from chess_equity.validate.headline import run_headline
 
         return run_headline(args.data, out=args.out, bootstrap=args.bootstrap, seed=args.seed)
+    if args.command == "divergence":
+        return _run_divergence(args)
     if args.command == "train":
         return _run_train(args)
     if args.command == "train-net":
