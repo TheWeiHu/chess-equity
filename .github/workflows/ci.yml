@@ -53,3 +53,8 @@ jobs:
       # next few quiet moves (task 0208).
       - name: Run overlay momentum JS tests
         run: node overlay/test_momentum.test.js
+      # The game-over card (overlay/overlay.js gameOverCard + router playersFor) is gated
+      # by a dependency-free node test: a terminal result maps to result/winner/headline
+      # and the followed board's roster names the winner (task 0213).
+      - name: Run overlay game-over JS tests
+        run: node overlay/test_gameover.test.js
