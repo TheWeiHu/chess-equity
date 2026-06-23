@@ -17,6 +17,11 @@ the bar. The live ingestion task (**0018**) produces that feed; the equity model
 (**0005**) fills in the numbers. Until those land, a bundled **mock replay**
 (`mock-game.json`) drives the overlay so it's demonstrable today.
 
+> **Going live for a real broadcast?** See the end-to-end
+> [`docs/STREAMING.md`](../docs/STREAMING.md) runbook — Lichess round URL →
+> `chess-equity broadcast --serve-sse` → OBS browser source → troubleshooting.
+> This page is the front-end's option reference.
+
 ## Quick start (under 2 minutes)
 
 ```bash
