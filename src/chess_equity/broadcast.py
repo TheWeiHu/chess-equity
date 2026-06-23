@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, TextIO
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, TextIO, Tuple
 
 import chess
 import chess.pgn
@@ -292,10 +292,10 @@ def write_ledger(events: "Iterable[MoveEvent]", fh: "TextIO") -> int:
 CAPTION_CUE_SECONDS = 3.0
 
 
-def build_captions_vtt(
+def _caption_cues(
     events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
-) -> str:
-    """Render a graded game's caster captions as a timestamped WebVTT track.
+) -> List[Tuple[float, float, str]]:
+    """Shared source of truth for the caption timeline: ``(start, end, text)`` cues.
 
     Each graded move (the ones :func:`live_caption` voices) becomes one cue whose text
     is that caster sentence and whose start is the elapsed game time the move was made.
@@ -305,10 +305,10 @@ def build_captions_vtt(
     which has no prior reading) advances by ``cue_seconds`` instead, so a clock-less PGN
     degrades to even move-index spacing. Cue starts are forced strictly increasing and
     each cue ends where the next begins (the last holds for ``cue_seconds``), keeping the
-    output valid even when two clock readings collide.
+    output valid even when two clock readings collide. Both :func:`build_captions_vtt` and
+    :func:`build_captions_srt` render these exact cues so the two tracks stay cue-for-cue
+    identical and only differ in container/timestamp dialect.
     """
-    from chess_equity.reel import _vtt_escape, _vtt_timestamp
-
     prev_white: Optional[float] = None
     prev_black: Optional[float] = None
     elapsed = 0.0
@@ -339,14 +339,54 @@ def build_captions_vtt(
         starts.append(start)
         texts.append(text)
 
+    cues: List[Tuple[float, float, str]] = []
+    for i, (start, text) in enumerate(zip(starts, texts)):
+        end = starts[i + 1] if i + 1 < len(starts) else start + cue_seconds
+        cues.append((start, end, text))
+    return cues
+
+
+def build_captions_vtt(
+    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+) -> str:
+    """Render a graded game's caster captions as a timestamped WebVTT track.
+
+    One cue per graded move (see :func:`_caption_cues` for the timeline). WebVTT cues
+    carry a ``WEBVTT`` header, ``HH:MM:SS.mmm`` (dot-decimal) timestamps, and escape the
+    three reserved characters ``& < >``.
+    """
+    from chess_equity.reel import _vtt_escape, _vtt_timestamp
+
     lines = ["WEBVTT", ""]
-    for i, (start, text) in enumerate(zip(starts, texts), start=1):
-        end = starts[i] if i < len(starts) else start + cue_seconds
+    for i, (start, end, text) in enumerate(_caption_cues(events, cue_seconds=cue_seconds), start=1):
         lines.append(str(i))
         lines.append(f"{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}")
         lines.append(_vtt_escape(text))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_captions_srt(
+    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+) -> str:
+    """Render a graded game's caster captions as an SRT (SubRip) subtitle track.
+
+    Mirrors :func:`build_captions_vtt` cue-for-cue — same :func:`_caption_cues` timeline,
+    same 1-based numbering, same boundaries — so the caster narration drops into any
+    non-web editor (Premiere/Resolve/CapCut) that can't ingest WebVTT. Only the container
+    differs: no ``WEBVTT`` header, ``HH:MM:SS,mmm`` comma-decimal timestamps, raw cue text
+    (SRT, unlike WebVTT, does not reserve ``& < >``), and blank-line-separated blocks.
+    """
+    from chess_equity.reel import _srt_timestamp
+
+    blocks = []
+    for i, (start, end, text) in enumerate(_caption_cues(events, cue_seconds=cue_seconds), start=1):
+        blocks.append(
+            f"{i}\n"
+            f"{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n"
+            f"{text}"
+        )
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
 # Human-readable labels for the equity model driving the bar (task 0222), keyed by the
