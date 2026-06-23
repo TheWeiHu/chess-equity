@@ -66,6 +66,24 @@ check("stm-POV with Black to move flips the white-POV value (1 - eq)", () => {
   assert.ok(Math.abs(O.orient(eq, "stm", false) - (1 - O.orient(eq, "white", false))) < 1e-12);
 });
 
+// --- stm-bar POV (task 0223): the whole bar flips, same mapping as stm -------------
+// Unlike plain stm (readout-only), stm-bar drives the FILL through orient(), so the
+// bar fill itself flips sign relative to the White-POV value when Black is to move.
+check("stm-bar with White to move equals the white-POV value (no flip)", () => {
+  assert.strictEqual(O.orient(0.7, "stm-bar", true), 0.7);
+  assert.strictEqual(O.orient(0.42, "stm-bar", true), 0.42);
+});
+
+check("stm-bar with Black to move flips the fill (1 - eq), like stm", () => {
+  assert.ok(Math.abs(O.orient(0.7, "stm-bar", false) - 0.3) < 1e-12);
+  assert.ok(Math.abs(O.orient(0.3, "stm-bar", false) - 0.7) < 1e-12);
+  // The defining fill property: stm-bar fill is the white-POV fill, sign-flipped on Black.
+  const eq = 0.62;
+  assert.ok(Math.abs(O.orient(eq, "stm-bar", false) - (1 - O.orient(eq, "white", false))) < 1e-12);
+  // And it tracks plain stm exactly — same mapping, different consumer (fill vs readout).
+  assert.strictEqual(O.orient(eq, "stm-bar", false), O.orient(eq, "stm", false));
+});
+
 check("orient clamps out-of-range equity before mapping", () => {
   assert.strictEqual(O.orient(1.5, "white", true), 1);
   assert.strictEqual(O.orient(-0.2, "white", true), 0);
