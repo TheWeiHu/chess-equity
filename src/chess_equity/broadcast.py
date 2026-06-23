@@ -41,6 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
+from itertools import groupby
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, TextIO, Tuple
 
 import chess
@@ -299,23 +300,40 @@ def _caption_cues(
 
     Each graded move (the ones :func:`live_caption` voices) becomes one cue whose text
     is that caster sentence and whose start is the elapsed game time the move was made.
+    See :func:`_game_caption_cues` for how one game's timeline is laid out from its
+    [%clk] deltas. Both :func:`build_captions_vtt` and :func:`build_captions_srt` render
+    these exact cues so the two tracks stay cue-for-cue identical and only differ in
+    container/timestamp dialect.
+
+    A snapshot can carry **several games** (a multi-board round, task 0185), whose events
+    arrive grouped by ``game_id`` in board order. Clocks reset per game, so each game's
+    timeline must restart at its own ``t=0`` — otherwise a 2nd/3rd board's cues pile up
+    behind board 1's *total* elapsed time and land at ever-growing, wrong timestamps
+    (task 0230). We therefore lay out **each game independently** (its own cue list, so a
+    cue's end never crosses a game boundary onto the next game's smaller start) and
+    concatenate; a single-game snapshot is one group, so its timeline is byte-identical
+    to before. Cue numbering stays globally sequential (the renderers number the merged
+    list). Cues from different games may overlap in time by design — they subtitle each
+    board's own per-game recording, not one merged reel.
+    """
+    cues: List[Tuple[float, float, str]] = []
+    for _gid, group in groupby(events, key=lambda e: e.game_id):
+        cues.extend(_game_caption_cues(group, cue_seconds=cue_seconds))
+    return cues
+
+
+def _game_caption_cues(
+    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+) -> List[Tuple[float, float, str]]:
+    """Caption cues for the events of a **single** game (one ``game_id``).
+
     Elapsed time is accumulated from the per-side [%clk] deltas — the mover's think time
     is ``previous_remaining - current_remaining`` (clamped at 0; clock increments are
     folded into this net change). A move with no clock (or the first move of each side,
     which has no prior reading) advances by ``cue_seconds`` instead, so a clock-less PGN
     degrades to even move-index spacing. Cue starts are forced strictly increasing and
     each cue ends where the next begins (the last holds for ``cue_seconds``), keeping the
-    output valid even when two clock readings collide. Both :func:`build_captions_vtt` and
-    :func:`build_captions_srt` render these exact cues so the two tracks stay cue-for-cue
-    identical and only differ in container/timestamp dialect.
-
-    For a multi-game feed (a multi-game ``--pgn``) the timeline **resets per game**:
-    clocks reset each game, so accumulating elapsed time across game boundaries would
-    push a later board's cues to ever-growing (wrong) timestamps. Whenever ``game_id``
-    changes the running clocks and elapsed time restart from zero, so each board's first
-    cue lands near ``t=0`` keyed to its own clock. Cue numbering stays globally
-    sequential. A single-game feed has one ``game_id``, so nothing resets and the output
-    is byte-identical to before.
+    output valid even when two clock readings collide.
     """
     prev_white: Optional[float] = None
     prev_black: Optional[float] = None
@@ -324,16 +342,7 @@ def _caption_cues(
     texts: List[str] = []
     last_start = -1.0
     min_step = 0.001
-    cur_game_id: Optional[str] = None
     for event in events:
-        # Game boundary: clocks reset per game, so restart the timeline rather than
-        # piling a later board's deltas onto the prior board's accumulated elapsed.
-        if event.game_id != cur_game_id:
-            cur_game_id = event.game_id
-            prev_white = None
-            prev_black = None
-            elapsed = 0.0
-            last_start = -1.0
         mover_white = not event.white_to_move
         if mover_white:
             cur = event.white_clock
