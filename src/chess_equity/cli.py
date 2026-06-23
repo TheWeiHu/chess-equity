@@ -211,8 +211,16 @@ def _run_eval(args: argparse.Namespace) -> int:
 def _run_grade(args: argparse.Namespace) -> int:
     model = build_model(args.model, depth=args.depth)
     try:
-        for line in _grade_pgn(model, args.pgn, args.white_elo, args.black_elo):
-            print(line)
+        if args.annotate_pgn:
+            from chess_equity.annotate import annotate_pgn_file
+
+            n = annotate_pgn_file(
+                args.pgn, args.annotate_pgn, model, args.white_elo, args.black_elo
+            )
+            print(f"wrote {n} annotated moves to {args.annotate_pgn}")
+        else:
+            for line in _grade_pgn(model, args.pgn, args.white_elo, args.black_elo):
+                print(line)
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1309,6 +1317,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     gr.add_argument(
         "--depth", type=int, default=2,
         help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
+    gr.add_argument(
+        "--annotate-pgn", metavar="OUT",
+        help="instead of printing, write an equity-annotated PGN to OUT "
+             "({[%%equity 0..1]} White-POV + grade label/NAG, preserving [%%eval]/[%%clk])",
     )
     add_model_arg(gr)
 
