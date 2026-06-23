@@ -157,3 +157,56 @@ def test_grader_mover_pov_alternates():
     grades = EquityGrader(LichessBaselineModel()).grade_game(game, 1500, 1500)
     assert grades[0].mover_white is True
     assert grades[1].mover_white is False
+
+
+# --------------------------------------------------------------------------- #
+# Per-side scoreline — caster accuracy-style summary (task 0200)
+# --------------------------------------------------------------------------- #
+
+
+def _sample_grades():
+    """Grade the first game of the committed sample PGN (real fixture, baseline model)."""
+    from pathlib import Path
+
+    pgn = Path(__file__).resolve().parents[1] / "data" / "sample" / "sample_games.pgn"
+    with open(pgn, encoding="utf-8") as fh:
+        game = chess.pgn.read_game(fh)
+    return EquityGrader(LichessBaselineModel()).grade_game(game, 1500, 1500)
+
+
+def test_scoreline_counts_sum_to_move_count_per_side():
+    from chess_equity.grading import GRADE_LABELS, scoreline
+
+    grades = _sample_grades()
+    line = scoreline(grades)
+    for side, sl in (("white", line.white), ("black", line.black)):
+        # Every label is present, and the per-label counts sum to the side's move count.
+        assert set(sl.label_counts) == set(GRADE_LABELS)
+        assert sum(sl.label_counts.values()) == sl.n_moves
+        assert sl.n_moves == sum(1 for g in grades if g.mover_white == (side == "white"))
+    # And both sides together account for every move exactly once.
+    assert line.white.n_moves + line.black.n_moves == len(grades)
+
+
+def test_scoreline_worst_move_is_min_delta_peer_per_side():
+    from chess_equity.grading import scoreline
+
+    grades = _sample_grades()
+    line = scoreline(grades)
+    for white, sl in ((True, line.white), (False, line.black)):
+        side_moves = [g for g in grades if g.mover_white == white]
+        assert sl.worst is not None
+        # The worst move's drop is the minimum grade_peer over that side's moves.
+        assert sl.worst.grade_peer == min(g.grade_peer for g in side_moves)
+        # And its label matches the move it points at.
+        assert sl.worst.label in {g.label for g in side_moves}
+
+
+def test_scoreline_round_trips_to_json_dict():
+    from chess_equity.grading import scoreline
+
+    line = scoreline(_sample_grades())
+    d = line.to_dict()
+    assert set(d) == {"white", "black"}
+    assert d["white"]["worst"]["san"]  # nested MoveGrade dict is JSON-friendly
+    assert isinstance(d["white"]["mean_peer"], float)

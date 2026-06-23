@@ -67,15 +67,19 @@ def _eval_pgn(model: EquityModel, path: str, white_elo: int, black_elo: int) -> 
     return lines
 
 
-def _grade_pgn(model: EquityModel, path: str, white_elo: int, black_elo: int) -> List[str]:
-    """Annotate every move of a PGN with its peer-relative Δequity grade."""
+def _grade_game(model: EquityModel, path: str, white_elo: int, black_elo: int):
+    """Grade every move of the first game in ``path``; returns its MoveGrade list."""
     with open(path, encoding="utf-8") as fh:
         game = chess.pgn.read_game(fh)
     if game is None:
         raise ValueError(f"no game found in {path}")
-    grader = EquityGrader(model)
+    return EquityGrader(model).grade_game(game, white_elo, black_elo)
+
+
+def _grade_lines(grades) -> List[str]:
+    """One text line per graded move (peer-relative Δequity + classic Δbest/cp)."""
     lines = []
-    for g in grader.grade_game(game, white_elo, black_elo):
+    for g in grades:
         cp = "" if g.cp_loss is None else f"  cp_loss {g.cp_loss:+.0f}"
         # +Δ vs peers is the headline; Δ vs best is the classic "left on the table".
         lines.append(
@@ -219,8 +223,21 @@ def _run_grade(args: argparse.Namespace) -> int:
             )
             print(f"wrote {n} annotated moves to {args.annotate_pgn}")
         else:
-            for line in _grade_pgn(model, args.pgn, args.white_elo, args.black_elo):
+            from chess_equity.grading import render_scoreline, scoreline
+
+            grades = _grade_game(model, args.pgn, args.white_elo, args.black_elo)
+            for line in _grade_lines(grades):
                 print(line)
+            # Per-side caster scoreline (task 0200): a one-glance accuracy-style summary
+            # aggregated only from the per-move grades — no extra model calls.
+            line = scoreline(grades)
+            print()
+            for row in render_scoreline(line):
+                print(row)
+            if args.summary_json:
+                with open(args.summary_json, "w", encoding="utf-8") as fh:
+                    json.dump(line.to_dict(), fh, indent=2)
+                print(f"wrote scoreline JSON to {args.summary_json}")
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1322,6 +1339,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--annotate-pgn", metavar="OUT",
         help="instead of printing, write an equity-annotated PGN to OUT "
              "({[%%equity 0..1]} White-POV + grade label/NAG, preserving [%%eval]/[%%clk])",
+    )
+    gr.add_argument(
+        "--summary-json", metavar="OUT",
+        help="also write the per-side scoreline (grade-label counts, mean Δpeer, "
+             "worst move per color) as machine-readable JSON to OUT",
     )
     add_model_arg(gr)
 
