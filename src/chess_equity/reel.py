@@ -31,13 +31,18 @@ from chess_equity.drama import DramaEvent, detect
 # Mirrors the priority :func:`chess_equity.drama.score_event` itself checks in.
 _KIND_PRIORITY = {"missed_win": 0, "escape": 1, "clutch": 2, "scramble": 3}
 
-# Caster-facing label + emoji per drama kind (markdown only).
+# Caster-facing label + emoji per drama kind (markdown + caption lower-thirds).
 _KIND_LABEL = {
     "clutch": ("🎯", "Clutch"),
     "missed_win": ("💥", "Missed win"),
     "escape": ("🛟", "Escape"),
     "scramble": ("⏱", "Scramble"),
 }
+
+# On-stream lower-third dwell time, seconds. Bigger swings linger longer (sized by the
+# 0..1 drama magnitude) so a clutch p90 swing flashes briefly while a missed win holds.
+_CAPTION_MIN_S = 3.0
+_CAPTION_MAX_S = 6.0
 
 
 def _rank_key(d: DramaEvent) -> Tuple[float, int, int]:
@@ -74,6 +79,49 @@ def reel_payload(reel: List[DramaEvent], *, title: str = "Highlight reel") -> Di
         "by_kind": by_kind(reel),
         "moments": [d.to_dict() for d in reel],
     }
+
+
+def _caption_duration(magnitude: float) -> float:
+    """Lower-third dwell time (s), scaled by 0..1 drama magnitude (saturating)."""
+    span = _CAPTION_MAX_S - _CAPTION_MIN_S
+    return round(_CAPTION_MIN_S + max(0.0, min(1.0, magnitude)) * span, 1)
+
+
+def caption(d: DramaEvent) -> Dict[str, object]:
+    """One OBS-ready lower-third caption for a drama moment.
+
+    ``text`` is a compact on-stream headline built from the shared ``_KIND_LABEL``
+    (emoji + caster label) plus the side and signed Δequity — e.g.
+    ``💥 Missed win — White (-20 pts)``. ``kind`` and ``ply`` let the overlay sync the
+    caption to the reel; ``duration_s`` is how long to hold it on screen.
+    """
+    emoji, label = _KIND_LABEL.get(d.kind, ("", d.kind))
+    side = "White" if d.mover_white else "Black"
+    text = f"{emoji} {label} — {side} ({d.delta_equity:+.0f} pts)"
+    return {
+        "text": text,
+        "kind": d.kind,
+        "ply": d.ply,
+        "duration_s": _caption_duration(d.magnitude),
+    }
+
+
+def caption_payload(
+    reel: List[DramaEvent], *, title: str = "Highlight reel"
+) -> Dict[str, object]:
+    """Structured caption payload: ranked lower-thirds an OBS source can drive."""
+    return {
+        "title": title,
+        "count": len(reel),
+        "captions": [caption(d) for d in reel],
+    }
+
+
+def render_captions(
+    reel: List[DramaEvent], *, title: str = "Highlight reel", indent: int = 2
+) -> str:
+    """Render the reel's lower-third captions as a JSON string for an OBS source."""
+    return json.dumps(caption_payload(reel, title=title), indent=indent)
 
 
 def render_json(reel: List[DramaEvent], *, title: str = "Highlight reel", indent: int = 2) -> str:
