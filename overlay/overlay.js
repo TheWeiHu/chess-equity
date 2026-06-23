@@ -114,6 +114,40 @@
     return h > 0 ? h + ":" + String(m).padStart(2, "0") + ":" + ss : m + ":" + ss;
   }
 
+  // Multi-board routing (task 0185). A live broadcast round can carry many boards;
+  // the feed announces them with a ``{type:"boards", boards:[{index, game_id, white,
+  // black}]}`` event, and this pure router decides which board's events reach the bar.
+  // Before any roster is known (a single-board feed) every event is accepted — the
+  // prior single-board behaviour, unchanged. Once a roster arrives it defaults to the
+  // first board until the caster picks another; ``accepts`` then routes only the
+  // selected board's ``game``/``position`` events. Events without a ``game_id`` (older
+  // feeds) are always accepted, so the switcher never silences a legacy stream.
+  function makeBoardRouter() {
+    var roster = [];
+    var selected = null; // game_id currently shown; null => accept everything
+    return {
+      setRoster: function (boards) {
+        roster = Array.isArray(boards) ? boards.slice() : [];
+        if (selected == null && roster.length) selected = roster[0].game_id;
+        return roster;
+      },
+      select: function (gameId) {
+        selected = gameId;
+      },
+      selected: function () {
+        return selected;
+      },
+      boards: function () {
+        return roster.slice();
+      },
+      accepts: function (evt) {
+        if (selected == null) return true;
+        if (!evt || evt.game_id == null) return true;
+        return evt.game_id === selected;
+      },
+    };
+  }
+
   // ---- DOM wiring --------------------------------------------------------
 
   function params() {
@@ -301,8 +335,48 @@
     }, 4000);
   }
 
+  // The live board switcher's state (task 0185). Module-scoped so dispatch and the
+  // selector's change handler share one router.
+  var boardRouter = makeBoardRouter();
+
+  // Render/refresh the board selector from a feed ``boards`` event. The selector is
+  // hidden for single-board rounds (<=1 board) so the default overlay is unchanged;
+  // for a multi-board round it lists "Board N: White – Black" and, on change, routes
+  // the chosen board's events to the bar.
+  function applyRoster(evt) {
+    var boards = boardRouter.setRoster(evt.boards || []);
+    var sel = q("[data-board-select]");
+    if (!sel) return;
+    if (boards.length <= 1) {
+      sel.hidden = true;
+      return;
+    }
+    sel.innerHTML = "";
+    boards.forEach(function (b) {
+      var opt = document.createElement("option");
+      opt.value = b.game_id;
+      var n = (b.index == null ? 0 : b.index) + 1;
+      opt.textContent = "Board " + n + ": " + (b.white || "White") + " – " + (b.black || "Black");
+      sel.appendChild(opt);
+    });
+    sel.value = boardRouter.selected();
+    sel.hidden = false;
+    sel.onchange = function () {
+      boardRouter.select(sel.value);
+      // A board switch is not a real move: reset the swing baseline so caster mode
+      // doesn't flare a phantom drama from the previous board's last equity.
+      prevEquity = null;
+      prevCp = null;
+    };
+  }
+
   function dispatch(evt, cfg) {
     if (!evt || !evt.type) return;
+    if (evt.type === "boards") {
+      applyRoster(evt);
+      return;
+    }
+    if (!boardRouter.accepts(evt)) return;
     if (evt.type === "game") applyGame(evt, cfg);
     else if (evt.type === "position") applyPosition(evt, cfg);
   }
@@ -364,6 +438,7 @@
     dramaHeadline: dramaHeadline,
     humanEdge: humanEdge,
     edgeLabel: edgeLabel,
+    makeBoardRouter: makeBoardRouter,
   };
 
   if (typeof document !== "undefined") {

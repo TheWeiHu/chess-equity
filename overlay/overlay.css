@@ -259,3 +259,24 @@ html, body {
 @keyframes stalepulse { 50% { opacity: 0.55; } }
 
 .theme-light .player { color: #111; text-shadow: 0 1px 2px rgba(255,255,255,0.6); }
+
+/* Live board switcher (task 0185): a small, unobtrusive selector that appears only
+   for multi-board rounds. Spans the grid so it sits above the bar in both layouts. */
+.board-select {
+  grid-column: 1 / -1;
+  justify-self: center;
+  max-width: 360px;
+  margin-bottom: 4px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--white);
+  background: rgba(20, 20, 20, 0.78);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+.board-select[hidden] { display: none; }
+.theme-light .board-select { color: #111; background: rgba(245, 245, 240, 0.85); }

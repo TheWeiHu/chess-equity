@@ -128,6 +128,11 @@ class MoveEvent:
         """
         event: Dict[str, object] = {
             "type": "position",
+            # The board this move belongs to, so the overlay's multi-board switcher
+            # (task 0185) can route only the selected board's moves. Single-board
+            # rounds carry it too but the overlay accepts everything until a roster
+            # arrives, so the default behaviour is unchanged.
+            "game_id": self.game_id,
             "ply": self.ply,
             "move": {"san": self.san},
             "equity": self.equity / 100.0,
@@ -891,7 +896,26 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
     poll yields the :data:`HEARTBEAT` sentinel instead of a ``position`` dict.
     """
     queued: List[Dict[str, object]] = []
-    ingestor.on_game = lambda game: queued.append(game.to_overlay())
+    # Roster of boards seen so far, in announcement order. Once a round reveals a
+    # SECOND board we emit a ``boards`` event so the overlay can show its live board
+    # switcher (task 0185); a single-board round never emits one, so the overlay keeps
+    # its default single-board behaviour and shows no selector.
+    roster: List[Dict[str, object]] = []
+
+    def _announce(game: "GameEvent") -> None:
+        roster.append(
+            {
+                "index": len(roster),
+                "game_id": game.game_id,
+                "white": game.white_name or "White",
+                "black": game.black_name or "Black",
+            }
+        )
+        queued.append(game.to_overlay())
+        if len(roster) > 1:
+            queued.append({"type": "boards", "boards": [dict(b) for b in roster]})
+
+    ingestor.on_game = _announce
     for move_event in ingestor.stream(**stream_kwargs):
         if move_event is None:  # idle-poll heartbeat tick from stream()
             yield HEARTBEAT
