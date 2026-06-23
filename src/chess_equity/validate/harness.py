@@ -576,14 +576,35 @@ BASELINE_NAME = "baseline"
 HEADLINE_METRIC = "log_loss"
 
 
-# Below this held-out n the gate refuses to call a PASS — it reads INCONCLUSIVE instead
-# (task 0132). With only a handful of rows a lucky point win and a barely-non-straddling
-# bootstrap CI can read green by chance, overstating the thesis; the committed 15-row
-# `validation_sample.md` is far under this floor, while the real proof run is n=8000. Set
-# at the n>=2000 size the synthetic PASS fixture (task 0131) is built to clear, so an
-# honest PASS needs a sample with the statistical power to back it. Pass ``min_n=0`` to
-# :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+# --- the two sample-size floors (single-sourced here, task 0196) ---------------------
+#
+# The gate trusts a number only when it rests on enough rows, and there are *two* distinct
+# "too few rows" floors because power is needed at two different granularities. They live
+# together here so the rationale for each — and why one is larger than the other — is in
+# one place rather than as two unexplained magic numbers 400 lines apart.
+#
+# 1. ``MIN_GATE_N`` — the *gate-level* floor. The headline PASS/FAIL verdict is computed on
+#    the WHOLE held-out sample, so this is the floor on that aggregate. With only a handful
+#    of rows a lucky point win and a barely-non-straddling bootstrap CI can read green by
+#    chance, overstating the thesis; below this the gate reads INCONCLUSIVE rather than PASS
+#    (task 0132). The committed 15-row ``validation_sample.md`` is far under it, the real
+#    proof run is n>=8000. Set at the n>=2000 size the synthetic PASS fixture (task 0131) is
+#    built to clear, so an honest PASS needs the statistical power to back it. Pass
+#    ``min_n=0`` to :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+#
+# 2. ``H2H_UNDERPOWERED_N`` — the *per-band* floor. A single rating / clock / phase band
+#    splits the sample into a small slice, so a per-band beats/loses claim needs its OWN
+#    floor. It is deliberately LOWER than ``MIN_GATE_N`` (1000 vs 2000): a single band only
+#    has to support a directional "equity wins / loses here" read, not the headline PASS,
+#    and holding bands to the full gate floor would silence almost every slice on a typical
+#    dump. But it is not tiny — on the real n=12k run the high-rating ``2000-2399`` band held
+#    only **n=415** and read as a wdl-a *loss* purely from small-n (its 95% CI straddles
+#    zero), a spurious thesis regression; 1000 is the floor below which exactly that kind of
+#    band is excluded from any per-band win/loss count. (A *third*, much smaller floor,
+#    ``H2H_SLICE_MIN_N=30`` near :func:`head_to_head_slice_cis`, is only the minimum for
+#    computing a per-slice bootstrap CI at all — orthogonal to these two power floors.)
 MIN_GATE_N = 2000
+H2H_UNDERPOWERED_N = 1000
 
 
 @dataclass(frozen=True)
@@ -963,14 +984,11 @@ def head_to_head_deltas(
     )
 
 
-# Per-band sample floor for a head-to-head beats/loses claim (task 0146). A single
-# rating / clock / phase band with fewer than this many rows is too small to trust its
-# own win or loss against the baseline: the point delta (and even a bootstrap CI that
-# happens to clear zero) is dominated by sampling noise. On real data the 2000-2399 band
-# at n=415 reads as a wdl-a *loss* purely from small-n — a spurious thesis regression.
-# Bands below this floor are marked ``underpowered (n=…)`` and excluded from any per-band
-# beats/loses claim (the win count and the worst-slice verdict). Set 0 to disable.
-H2H_UNDERPOWERED_N = 1000
+# Per-band sample floor for a head-to-head beats/loses claim (task 0146). Defined and
+# fully documented above alongside ``MIN_GATE_N`` (the two sample-size floors are
+# single-sourced there, task 0196): a band below this floor is marked ``underpowered
+# (n=…)`` and excluded from any per-band beats/loses claim (the win count and the
+# worst-slice verdict). Pass ``underpowered_n=0`` to disable.
 
 
 def _worst_slice_ci_caveat(
@@ -1093,6 +1111,13 @@ def format_head_to_head(
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
     out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
+    if underpowered_n > 0:
+        out.append(
+            f"Bands with fewer than n={underpowered_n} rows are tagged `(underpowered)` "
+            "and excluded from the worst-slice beats/loses claim — a single band that small "
+            "can flip its own win or loss on a handful of games, so its per-band Δ is "
+            "small-n noise, not the thesis."
+        )
     verdict = worst_slice_verdict(h2h, underpowered_n=underpowered_n, cis=cis)
     if verdict:
         out.append(verdict)
