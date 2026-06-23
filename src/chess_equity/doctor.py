@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from math import isfinite
 from pathlib import Path
 from typing import Any, Callable, List, Optional, TextIO
 
@@ -33,11 +34,23 @@ START_FEN = chess.STARTING_FEN
 
 @dataclass
 class Check:
-    """The outcome of probing one optional engine."""
+    """The outcome of probing one optional engine.
+
+    ``warn`` flags a *soft* problem: the check still passes (``ok`` stays True, exit code
+    unaffected) but something is off enough to surface as ``WARN`` rather than ``PASS``
+    (e.g. a model artifact that works but lacks leakage-guard provenance — task 0199).
+    """
 
     name: str
     ok: bool
     detail: str
+    warn: bool = False
+
+
+class DoctorWarning(Exception):
+    """A soft preflight failure: the probe's subject works, but a non-fatal caveat should
+    surface as ``WARN`` (passing) instead of ``PASS``. :func:`check` maps it to a passing
+    :class:`Check` with ``warn=True``; any *other* exception is a hard ``FAIL``."""
 
 
 # A probe runs the real engine and returns a human-readable "it works" detail string,
@@ -419,15 +432,119 @@ def probe_evidence(directory: Optional[Path] = None) -> str:
     )
 
 
+# --- active equity-model preflight (task 0199) -----------------------------------------
+#
+# `doctor`'s engine checks prove Stockfish/Maia-2 *can* run and the bundle/feed are
+# shippable, but not that the model the overlay is configured to use will actually
+# produce a bar. `probe_model` loads the selected `--model` and evaluates one fixture FEN
+# so a missing/garbled artifact (or a NaN/out-of-range bar) turns doctor red *before* air,
+# while a model that works but lacks leakage-guard provenance surfaces as WARN.
+
+# A wdl-a artifact fit on this few rows or fewer is the committed tiny smoke-test seed,
+# not a real fit — the bar still renders, but the numbers aren't trustworthy on air (WARN).
+# The real shipped artifact is n_train=50000, well clear of this floor.
+_WDL_A_SEED_MAX_TRAIN = 1000
+
+# Fixture inputs for the "does it produce a sane bar?" probe — startpos at a mid rating.
+_MODEL_FIXTURE_FEN = START_FEN
+_MODEL_FIXTURE_ELO = 1500
+
+
+def _wdl_a_provenance_warnings(meta: dict) -> List[str]:
+    """Soft caveats on a wdl-a artifact's fit metadata (absent → empty list = clean PASS).
+
+    A missing ``fit_month`` means the 0112 leakage guard can't refuse an eval set that *is*
+    the training month; an ``n_train`` at/under the seed floor means it's the committed
+    overfit smoke seed. Either is a WARN, not a FAIL — the model still evaluates.
+    """
+    warnings: List[str] = []
+    if not meta.get("fit_month"):
+        warnings.append("artifact has no fit_month (the 0112 leakage guard can't run)")
+    n_train = meta.get("n_train")
+    if isinstance(n_train, (int, float)) and not isinstance(n_train, bool):
+        if n_train <= _WDL_A_SEED_MAX_TRAIN:
+            warnings.append(
+                f"n_train={n_train} looks like the tiny overfit seed, not a real fit"
+            )
+    return warnings
+
+
+def _default_build_model(model_name: str):
+    """Construct the named model via the CLI registry (lazy import avoids a cycle)."""
+    from chess_equity.cli import build_model
+
+    return build_model(model_name)
+
+
+def probe_model(
+    model_name: str = "baseline",
+    build: Optional[Callable[[str], Any]] = None,
+    artifact_path: Optional[Path] = None,
+) -> str:
+    """Assert the ACTIVE equity model loads and produces a sane bar before going live (0199).
+
+    The reliability gap doctor's engine checks leave: the overlay reads *one* configured
+    ``--model``, and nothing verifies it actually works until the first live position. This
+    closes it:
+
+    * the model **constructs** — ``--model wdl-a`` loads + parses its committed artifact;
+      ``--model baseline`` builds its objective engine. A missing/garbled artifact FAILs;
+    * it evaluates one fixture FEN to a **finite White-POV bar in [0,100]** — a NaN or
+      out-of-range equity FAILs (the overlay would render a broken bar);
+    * (wdl-a only) the artifact carries **fit provenance**: a missing ``fit_month`` (the
+      leakage guard can't run) or a seed-sized ``n_train`` is a WARN, not a FAIL.
+
+    Loads the model but no datasets/network — safe to run unattended for ``baseline`` and
+    ``wdl-a``. ``build``/``artifact_path`` are injectable for tests. Raises ``ValueError``
+    on a hard problem (FAIL); raises :class:`DoctorWarning` for a soft one (WARN).
+    """
+    build = build or _default_build_model
+    provenance: Optional[str] = None
+    warnings: List[str] = []
+
+    if model_name == "wdl-a":
+        from chess_equity.wdl_regression import default_artifact_path, load_wdl_a_model
+
+        path = Path(artifact_path) if artifact_path else default_artifact_path()
+        if not path.is_file():
+            raise ValueError(f"--model wdl-a artifact missing on disk: {path}")
+        try:
+            fitted = load_wdl_a_model(str(path))
+        except Exception as exc:  # noqa: BLE001 - report the parse/shape failure as a FAIL
+            raise ValueError(f"--model wdl-a artifact unreadable ({path.name}): {exc}") from exc
+        meta = fitted.meta or {}
+        warnings = _wdl_a_provenance_warnings(meta)
+        provenance = f"n_train={meta.get('n_train')}, fit_month={meta.get('fit_month') or 'absent'}"
+
+    model = build(model_name)  # unknown model / failed load → FAIL via check()
+    equity = model.evaluate(_MODEL_FIXTURE_FEN, _MODEL_FIXTURE_ELO, _MODEL_FIXTURE_ELO)
+    bar = equity.equity_white
+    if not isinstance(bar, (int, float)) or isinstance(bar, bool) or not isfinite(bar):
+        raise ValueError(f"--model {model_name} produced a non-finite bar: {bar!r}")
+    if not 0.0 <= float(bar) <= 100.0:
+        raise ValueError(f"--model {model_name} bar {bar} is outside [0,100]% White-POV")
+
+    win = float(bar) / 100.0
+    detail = f"--model {model_name} loads; startpos win-equity {win:.2f} (0..1)"
+    if provenance is not None:
+        detail += f"; {provenance}"
+    if warnings:
+        raise DoctorWarning(detail + " — WARN: " + "; ".join(warnings))
+    return detail
+
+
 def check(name: str, probe: Probe) -> Check:
     """Run one probe, mapping success/exception to a :class:`Check`.
 
-    A clean exception (e.g. ``StockfishNotFound`` / ``Maia2NotInstalled``) becomes a
-    failed check carrying its install hint; any other exception is reported as
-    installed-but-broken so the message distinguishes the two.
+    A :class:`DoctorWarning` becomes a *passing* check flagged ``warn`` (a soft caveat,
+    exit code unaffected). A clean failure exception (e.g. ``StockfishNotFound`` /
+    ``Maia2NotInstalled``) becomes a failed check carrying its install hint; any other
+    exception is reported as installed-but-broken so the message distinguishes the two.
     """
     try:
         return Check(name, True, probe())
+    except DoctorWarning as warn:
+        return Check(name, True, str(warn) or warn.__class__.__name__, warn=True)
     except Exception as exc:  # noqa: BLE001 - the whole point is to report, not crash
         return Check(name, False, str(exc) or exc.__class__.__name__)
 
@@ -439,7 +556,7 @@ def run_doctor(checks: List[Check], out: Optional[TextIO] = None) -> int:
     out = out if out is not None else sys.stdout
     failures = 0
     for c in checks:
-        mark = "PASS" if c.ok else "FAIL"
+        mark = "FAIL" if not c.ok else ("WARN" if c.warn else "PASS")
         print(f"[{mark}] {c.name}: {c.detail}", file=out)
         if not c.ok:
             failures += 1
@@ -455,6 +572,7 @@ def doctor(
     broadcast_probe: Optional[Probe] = None,
     overlay_probe: Optional[Probe] = None,
     evidence_probe: Optional[Probe] = None,
+    model_probe: Optional[Probe] = None,
 ) -> int:
     """Probe the optional engines with the real backends (override ``probes`` in tests).
 
@@ -474,6 +592,10 @@ def doctor(
     real-data gate reports listed in ``reports/SUMMARY.md`` are present and still state
     their expected verdict (task 0195) — so a missing/regressed proof turns doctor red.
     Reads report text but no datasets — safe to run unattended.
+
+    ``model_probe`` (set by ``doctor --model NAME``) appends a preflight that the active
+    equity model loads and produces a finite in-range bar (task 0199): a missing/garbled
+    artifact FAILs, missing wdl-a fit provenance WARNs. Torch-free for baseline/wdl-a.
     """
     probes = probes or {"stockfish": _probe_stockfish, "maia2": _probe_maia2}
     if engines:
@@ -485,4 +607,6 @@ def doctor(
         checks.append(check("overlay", overlay_probe))
     if evidence_probe is not None:
         checks.append(check("evidence", evidence_probe))
+    if model_probe is not None:
+        checks.append(check("model", model_probe))
     return run_doctor(checks, out=out)

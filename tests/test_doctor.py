@@ -421,6 +421,154 @@ def test_doctor_nonzero_when_evidence_check_fails(tmp_path):
     assert "[FAIL] evidence" in out.getvalue()
 
 
+# --------------------------------------------------------------------------- #
+# active equity-model preflight (task 0199)
+# --------------------------------------------------------------------------- #
+
+from chess_equity.doctor import (  # noqa: E402
+    DoctorWarning,
+    _wdl_a_provenance_warnings,
+    probe_model,
+)
+from chess_equity.types import WDL, Equity  # noqa: E402
+
+
+class _FakeModel:
+    """A stand-in EquityModel returning a fixed White-POV bar (0..100)."""
+
+    def __init__(self, bar):
+        self._bar = bar
+
+    def evaluate(self, fen, white_elo, black_elo):
+        return Equity(wdl=WDL(0.5, 0.0, 0.5), equity_white=self._bar, source="fake")
+
+
+def test_probe_model_passes_on_a_healthy_baseline():
+    # acceptance: a healthy model asserts PASS — loads + finite in-range bar.
+    detail = probe_model("baseline", build=lambda name: _FakeModel(63.0))
+    assert "loads" in detail
+    assert "win-equity 0.63" in detail
+
+
+def test_probe_model_fails_on_a_non_finite_bar():
+    with pytest.raises(ValueError, match="non-finite bar"):
+        probe_model("baseline", build=lambda name: _FakeModel(float("nan")))
+
+
+def test_probe_model_fails_on_an_out_of_range_bar():
+    with pytest.raises(ValueError, match=r"outside \[0,100\]"):
+        probe_model("baseline", build=lambda name: _FakeModel(150.0))
+
+
+def test_probe_model_fails_on_unknown_model():
+    # build raising (unknown name / failed load) is a hard FAIL via check().
+    def boom(name):
+        raise ValueError("unknown model 'nope'")
+
+    with pytest.raises(ValueError, match="unknown model"):
+        probe_model("nope", build=boom)
+
+
+def test_probe_model_real_baseline_loads_and_passes():
+    # the real baseline is torch-free; it must construct and produce a sane bar.
+    detail = probe_model("baseline")
+    assert "--model baseline loads" in detail
+
+
+def test_probe_model_wdl_a_real_artifact_passes():
+    # acceptance: the committed wdl-a artifact is healthy (n_train=50000, fit_month set).
+    detail = probe_model("wdl-a")
+    assert "n_train=50000" in detail
+    assert "fit_month=2016-05" in detail
+
+
+def test_probe_model_wdl_a_missing_artifact_fails(tmp_path):
+    # acceptance: a missing artifact asserts FAIL before the model is even built.
+    missing = tmp_path / "gone.json"
+    with pytest.raises(ValueError, match="artifact missing on disk"):
+        probe_model("wdl-a", build=lambda name: _FakeModel(50.0), artifact_path=missing)
+
+
+def test_probe_model_wdl_a_garbled_artifact_fails(tmp_path):
+    # acceptance: a garbled artifact asserts FAIL (parse/shape failure surfaced).
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ this is not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact unreadable"):
+        probe_model("wdl-a", build=lambda name: _FakeModel(50.0), artifact_path=bad)
+
+
+def test_probe_model_wdl_a_missing_fit_month_warns(tmp_path):
+    # acceptance: a model that works but lacks fit_month is a WARN, not a FAIL.
+    import json
+
+    art = tmp_path / "wdl_a.json"
+    art.write_text(
+        json.dumps(
+            {
+                "feature_version": 1,
+                "weights": [[0.0] * 10, [0.0] * 10, [0.0] * 10],
+                "meta": {"n_train": 50000},  # n_train fine, but no fit_month
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(DoctorWarning, match="no fit_month"):
+        probe_model("wdl-a", build=lambda name: _FakeModel(50.0), artifact_path=art)
+
+
+def test_probe_model_wdl_a_seed_n_train_warns(tmp_path):
+    import json
+
+    art = tmp_path / "wdl_a.json"
+    art.write_text(
+        json.dumps(
+            {
+                "feature_version": 1,
+                "weights": [[0.0] * 10, [0.0] * 10, [0.0] * 10],
+                "meta": {"n_train": 50, "fit_month": "2016-05"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(DoctorWarning, match="overfit seed"):
+        probe_model("wdl-a", build=lambda name: _FakeModel(50.0), artifact_path=art)
+
+
+def test_wdl_a_provenance_warnings_clean_on_real_meta():
+    assert _wdl_a_provenance_warnings({"n_train": 50000, "fit_month": "2016-05"}) == []
+
+
+def test_doctor_appends_model_check_and_marks_warn():
+    # WARN is a passing state: exit 0 but the line reads [WARN], not [PASS].
+    def warns():
+        raise DoctorWarning("--model wdl-a loads — WARN: artifact has no fit_month")
+
+    out = io.StringIO()
+    rc = doctor(out=out, probes={"stockfish": lambda: "ok"}, model_probe=warns)
+    assert rc == 0
+    text = out.getvalue()
+    assert "[WARN] model" in text
+    assert "[FAIL]" not in text
+
+
+def test_doctor_nonzero_when_model_check_fails():
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok"},
+        model_probe=lambda: probe_model("baseline", build=lambda n: _FakeModel(float("nan"))),
+    )
+    assert rc == 1
+    assert "[FAIL] model" in out.getvalue()
+
+
+def test_doctor_appends_model_check_and_passes_real_baseline():
+    out = io.StringIO()
+    rc = doctor(out=out, probes={"stockfish": lambda: "ok"}, model_probe=lambda: probe_model("baseline"))
+    assert rc == 0
+    assert "[PASS] model" in out.getvalue()
+
+
 def test_feed_from_spec_dispatches_on_the_source_shape(tmp_path):
     from chess_equity.broadcast import LichessRoundFeed, UrlPgnFeed
 
