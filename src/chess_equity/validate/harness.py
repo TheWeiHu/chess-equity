@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
+from chess_equity.validate.failure_modes import failure_mode
 from chess_equity.types import lichess_win_percent
 from chess_equity.validate.bootstrap import (
     METRIC_TERMS,
@@ -255,6 +256,9 @@ SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "phase": lambda row: row.phase,
     "clock": clock_band,
     "rating_gap": rating_gap_band,
+    # The most direct read on the thesis: score ON the two named failure modes (task 0111),
+    # tagged from baseline/failure_modes.json. See validate/failure_modes.py.
+    "failure_mode": failure_mode,
 }
 
 

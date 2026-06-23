@@ -151,6 +151,67 @@ def test_rating_gap_slice_in_report_and_head_to_head():
     assert gap_slices["300+"].delta > gap_slices["<100"].delta
 
 
+# --- failure-mode slicer (task 0111) -------------------------------------------
+
+def test_failure_mode_tags_rows_by_curated_anchor():
+    from chess_equity.validate.failure_modes import UNTAGGED, failure_mode
+
+    # cp≈0 -> the drawn failure mode; cp≈±1000 -> the absurd-refutation mode (symmetric
+    # in colour, so a Black-side -1000 counts too); anything else -> the untagged bucket.
+    assert failure_mode(_row(cp=0)) == "dead-draw-hard"
+    assert failure_mode(_row(cp=70)) == "dead-draw-hard"  # inside the ±75cp window
+    assert failure_mode(_row(cp=1000)) == "absurd-refutation"
+    assert failure_mode(_row(cp=-1000)) == "absurd-refutation"  # colour mirror
+    assert failure_mode(_row(cp=400)) == UNTAGGED  # off every anchor (the +0.76 band)
+
+
+def test_failure_mode_slice_in_report():
+    # Rows on the two named modes plus an off-mode row: the slice must surface all three
+    # buckets and the report must render a `## By failure_mode` section with a per-mode
+    # baseline-vs-wdl-a row (the most direct read on the thesis, objective 0003).
+    rows = (
+        [_row(cp=0, result=0.5)] * 8  # dead-draw-hard: engine 0.00
+        + [_row(cp=1000, result=1.0)] * 8  # absurd-refutation: engine winning
+        + [_row(cp=400, result=1.0)] * 8  # off-mode -> "none"
+    )
+
+    def wdl_a(row):  # a stand-in rating-aware model; value is irrelevant to the slicing
+        return 0.6
+
+    reports = evaluate(rows, {"baseline": baseline_cp, "wdl-a": wdl_a})
+    base = next(r for r in reports if r.name == "baseline")
+    assert "failure_mode" in base.slices
+    assert set(base.slices["failure_mode"]) == {
+        "dead-draw-hard",
+        "absurd-refutation",
+        "none",
+    }
+    assert base.slices["failure_mode"]["dead-draw-hard"].n == 8
+
+    text = format_report(reports)
+    assert "## By failure_mode" in text
+    # Both predictors get a per-mode row in the section.
+    assert "| baseline | dead-draw-hard" in text
+    assert "| wdl-a | absurd-refutation" in text
+
+
+def test_failure_mode_anchors_match_committed_json():
+    # Drift guard: the slicer's anchors are derived from baseline/failure_modes.json, so if
+    # a curated position's category/engine_cp changes, this catches the slicer going stale.
+    import json
+    from pathlib import Path
+
+    from chess_equity.validate.failure_modes import _FAILURE_MODES_JSON, _anchors
+
+    data = json.loads(Path(_FAILURE_MODES_JSON).read_text())
+    expected: dict = {}
+    for pos in data["positions"]:
+        expected.setdefault(pos["category"], set()).add(float(pos["engine_cp"]))
+    assert {k: set(v) for k, v in _anchors().items()} == expected
+    # The two named modes from objective 0003 are present.
+    assert {"dead-draw-hard", "absurd-refutation"} <= set(_anchors())
+
+
 # --- harness end to end --------------------------------------------------------
 
 def test_evaluate_overall_and_slices():
