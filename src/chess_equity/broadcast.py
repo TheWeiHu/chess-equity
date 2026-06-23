@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Callable, Dict, Iterator, List, Optional
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, TextIO
 
 import chess
 import chess.pgn
@@ -195,6 +195,72 @@ class MoveEvent:
                 "headline": drama.headline,
             }
         return event
+
+
+# Flat, spreadsheet-friendly column order for the post-show ledger (task 0204). One row
+# per published move; reuses only fields the event already carries (no extra model calls).
+# ``drama_label``/``drama_score`` come from the same :func:`chess_equity.drama.score_event`
+# classifier the overlay/captions use, and are blank on a non-dramatic move.
+LEDGER_COLUMNS: List[str] = [
+    "ply",
+    "side",
+    "san",
+    "equity",
+    "delta_equity",
+    "grade",
+    "drama_label",
+    "drama_score",
+    "white_clock",
+    "black_clock",
+]
+
+
+def ledger_row(event: "MoveEvent") -> Dict[str, object]:
+    """One flat CSV row (keyed by :data:`LEDGER_COLUMNS`) for a published move.
+
+    ``side`` is the mover (in the post-move FEN the side *to* move is the opponent, so
+    the mover is White exactly when it's now Black to move — same convention as
+    :func:`live_caption`). Equities/deltas are rounded to whole percentage points to
+    match the overlay bar; clocks pass through as remaining seconds (blank without
+    ``[%clk]``). Drama columns are blank unless the classifier fires.
+    """
+    # Lazy import: drama imports MoveEvent from this module, so a top-level import cycles.
+    from chess_equity.drama import score_event
+
+    drama = score_event(event)
+    mover_white = not event.white_to_move
+    return {
+        "ply": event.ply,
+        "side": "white" if mover_white else "black",
+        "san": event.san,
+        "equity": round(event.equity, 1),
+        "delta_equity": None
+        if event.delta_equity is None
+        else round(event.delta_equity, 1),
+        "grade": event.last_move_grade or "",
+        "drama_label": drama.kind if drama is not None else "",
+        "drama_score": round(drama.magnitude, 3) if drama is not None else "",
+        "white_clock": event.white_clock,
+        "black_clock": event.black_clock,
+    }
+
+
+def write_ledger(events: "Iterable[MoveEvent]", fh: "TextIO") -> int:
+    """Write a per-move equity ledger CSV (header + one row per move) to ``fh``.
+
+    Returns the number of move rows written (the header is not counted). The flat
+    tabular counterpart to the equity-annotated PGN (task 0197): same per-move data,
+    shaped for spreadsheets and post-show graphics instead of a chess GUI.
+    """
+    import csv
+
+    writer = csv.DictWriter(fh, fieldnames=LEDGER_COLUMNS)
+    writer.writeheader()
+    rows = 0
+    for event in events:
+        writer.writerow(ledger_row(event))
+        rows += 1
+    return rows
 
 
 @dataclass(frozen=True)
