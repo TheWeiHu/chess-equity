@@ -614,6 +614,18 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
             print(f"wrote {len(reel)} moment(s): {args.html}", file=sys.stderr)
         return 0
 
+    # --srt PATH writes the narration as a standalone SRT subtitle file (or stdout
+    # when PATH is "-"). Like --html, it can stand alone or sit alongside --out-dir.
+    if args.srt is not None and args.out_dir is None:
+        srt_doc = reel_mod.build_srt(reel)
+        if args.srt == "-":
+            print(srt_doc, end="")
+        else:
+            with open(args.srt, "w", encoding="utf-8") as fh:
+                fh.write(srt_doc)
+            print(f"wrote {len(reel)} moment(s): {args.srt}", file=sys.stderr)
+        return 0
+
     if args.out_dir is None:
         print(reel_mod.render_markdown(reel, title=title, sources=sources))
         return 0
@@ -631,6 +643,11 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         with open(html_path, "w", encoding="utf-8") as fh:
             fh.write(reel_mod.render_html(reel, title=title, sources=sources))
         written.append(html_path)
+    if args.srt is not None:
+        srt_path = args.srt if args.srt != "-" else os.path.join(args.out_dir, "reel.srt")
+        with open(srt_path, "w", encoding="utf-8") as fh:
+            fh.write(reel_mod.build_srt(reel))
+        written.append(srt_path)
     print(f"wrote {len(reel)} moment(s): {', '.join(written)}", file=sys.stderr)
     return 0
 
@@ -1622,6 +1639,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "emit a self-contained HTML clip player (no deps/CDN, opens offline) to "
             "PATH (or stdout if PATH omitted; reel.html in --out-dir if both given)"
+        ),
+    )
+    rl.add_argument(
+        "--srt",
+        nargs="?",
+        const="-",
+        default=None,
+        metavar="PATH",
+        help=(
+            "emit the narration as an SRT subtitle file (for Premiere/Resolve/CapCut) "
+            "to PATH (or stdout if PATH omitted; reel.srt in --out-dir if both given)"
         ),
     )
     rl.add_argument("--title", default="Highlight reel", help="reel title")

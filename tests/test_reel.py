@@ -17,6 +17,7 @@ from chess_equity.drama import score_event
 from chess_equity.reel import (
     _KIND_LABEL,
     build_reel,
+    build_srt,
     build_webvtt,
     by_kind,
     caption,
@@ -299,6 +300,51 @@ def test_build_webvtt_one_cue_per_clip_with_contiguous_timings():
         expected_start = end
 
 
+def _srt_seconds(stamp: str) -> float:
+    """Parse an ``HH:MM:SS,mmm`` SRT timestamp into seconds."""
+    h, m, rest = stamp.split(":")
+    s, ms = rest.split(",")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def _srt_cues(srt: str):
+    """Return [(index, start_s, end_s, text), ...] for every block in an SRT document."""
+    cues = []
+    for block in srt.strip().split("\n\n"):
+        lines = block.splitlines()
+        index = int(lines[0])
+        start, end = lines[1].split(" --> ")
+        text = "\n".join(lines[2:])
+        cues.append((index, _srt_seconds(start), _srt_seconds(end), text))
+    return cues
+
+
+def test_build_srt_matches_webvtt_cue_parity():
+    reel = build_reel(_ONE_OF_EACH)
+    srt = build_srt(reel)
+    vtt_cues = _vtt_cues(build_webvtt(reel))
+    srt_cues = _srt_cues(srt)
+    # One SRT block per WebVTT cue per clip.
+    assert len(srt_cues) == len(vtt_cues) == len(reel)
+    # Sequential 1-based indices.
+    assert [c[0] for c in srt_cues] == list(range(1, len(reel) + 1))
+    # SRT timestamps use the comma decimal separator (HH:MM:SS,mmm), not a period.
+    assert re.search(r"\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}", srt)
+    assert "WEBVTT" not in srt
+    for (vstart, vend, vtext), (_idx, sstart, send, stext), d in zip(
+        vtt_cues, srt_cues, reel
+    ):
+        # Cue boundaries match the WebVTT track cue-for-cue.
+        assert abs(sstart - vstart) < 1e-6
+        assert abs(send - vend) < 1e-6
+        # Same narration payload (WebVTT escapes & < >; SRT carries it raw).
+        assert stext == caption(d)["text"]
+
+
+def test_build_srt_empty_reel_is_empty():
+    assert build_srt([]) == ""
+
+
 def test_render_html_embeds_inline_webvtt_captions_track():
     reel = build_reel(_ONE_OF_EACH)
     doc = render_html(reel)
@@ -343,3 +389,28 @@ def test_cli_reel_html_alongside_out_dir(tmp_path):
     assert (out / "reel.json").exists()
     assert (out / "reel.html").exists()
     assert (out / "reel.html").read_text().startswith("<!doctype html>")
+
+
+def test_cli_reel_writes_srt(tmp_path):
+    from chess_equity.cli import main
+
+    # The committed sample's baseline swings are muted (no drama), so this only
+    # asserts the SRT artifact lands; cue content/format parity is covered by
+    # test_build_srt_matches_webvtt_cue_parity over synthesized drama events.
+    srt_path = tmp_path / "clip.srt"
+    rc = main(["reel", "--pgn", "data/sample/sample_games.pgn", "--srt", str(srt_path)])
+    assert rc == 0
+    assert srt_path.exists()
+
+
+def test_cli_reel_srt_alongside_out_dir(tmp_path):
+    from chess_equity.cli import main
+
+    out = tmp_path / "reel"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--out-dir", str(out), "--srt"]
+    )
+    assert rc == 0
+    # With --out-dir and bare --srt, reel.srt lands next to reel.json/reel.md.
+    assert (out / "reel.json").exists()
+    assert (out / "reel.srt").exists()
