@@ -53,6 +53,8 @@ background is transparent, so only the bar composites over your stream.
 | `legend` | `0` | **legend key** — a compact one-line key (bar = White win-equity %; green = good/brilliant, red = inaccuracy/blunder) so first-time viewers can read the bar (task 0201) |
 | `autofollow` | `0` | **auto-director** — in a multi-game round, auto-switch focus to the board with the biggest live `drama`; a manual pick pins and overrides (task 0188) |
 | `focuslock` | `6` | autofollow focus-lock window (plies) — a switched board is held this long so noise can't thrash the bar |
+| `dramamargin` | `0.1` | autofollow anti-flap — a rival board must out-drama the followed board by at least this magnitude before it can cut (task 0203) |
+| `challenge` | `2` | autofollow anti-flap — a rival must sustain that margin lead for this many **consecutive** ticks before it cuts, so a busy round can't flip-flop (task 0203) |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
 | `welo`   | _(feed)_ | override the White rating shown (Maia-2's top band is a coarse `>2000` — pin the real number) |
 | `belo`   | _(feed)_ | override the Black rating shown |
@@ -203,7 +205,10 @@ the overlay shows a selector; the chosen board's events flow to the bar (default
 only one board exists, no selector appears and every event renders). With `?autofollow=1`
 the overlay becomes an **auto-director**: it follows whichever board's latest `drama`
 magnitude is highest, holding focus for `?focuslock=` plies after each switch so a real
-swing — not noise — wins; the caster can still click the selector to pin a board (which
+swing — not noise — wins. To stop a busy round from flip-flopping every move, a rival
+board must also out-drama the followed board by `?dramamargin=` (default `0.1`) for
+`?challenge=` **consecutive** ticks (default `2`) before it can cut. The caster can still
+click the selector to pin a board (which
 disables autofollow until reset). When the followed board's game ends, a `result` event
 auto-advances focus to the next still-live board — unless the caster pinned a board by
 picking it from the selector (task 0189). The
