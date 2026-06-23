@@ -182,6 +182,17 @@ values are **seconds remaining**.
     { "index": 1, "players": { "white": { "name": "Nepo" }, "black": { "name": "Ding" } } }
   ]
 }
+
+// board result — emitted once when a board's game ends (task 0189). Routing metadata
+// (never rendered): when the FOLLOWED board finishes and the caster hasn't manually
+// pinned it, the overlay auto-advances focus to the next still-live board so a caster
+// isn't stranded on an ended game. Multi-game rounds only.
+{
+  "type": "result",
+  "board": 0,
+  "game_id": "abcd1234",
+  "result": "1-0"                            // "1-0" | "0-1" | "1/2-1/2"
+}
 ```
 
 Only `type` and (for positions) `equity` are required; everything else degrades
@@ -192,7 +203,9 @@ only one board exists, no selector appears and every event renders). With `?auto
 the overlay becomes an **auto-director**: it follows whichever board's latest `drama`
 magnitude is highest, holding focus for `?focuslock=` plies after each switch so a real
 swing — not noise — wins; the caster can still click the selector to pin a board (which
-disables autofollow until reset). The
+disables autofollow until reset). When the followed board's game ends, a `result` event
+auto-advances focus to the next still-live board — unless the caster pinned a board by
+picking it from the selector (task 0189). The
 optional `drama` payload mirrors `chess_equity.drama.DramaEvent` — when present it
 supplies the caster-mode flare's headline; otherwise caster mode derives a flare
 from the equity swing itself, so it works on any feed.
