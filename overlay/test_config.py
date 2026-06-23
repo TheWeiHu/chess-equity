@@ -14,6 +14,7 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "config.html")
 OVERLAY_JS = os.path.join(HERE, "overlay.js")
+INDEX = os.path.join(HERE, "index.html")
 
 
 def _read(path):
@@ -60,6 +61,30 @@ def test_config_persists_setup_in_localstorage():
     assert "localStorage.getItem" in html, "config must READ the setup back on load"
     # restore() must run before the first render so saved fields are rehydrated.
     assert "restore()" in html and html.index("restore()") < html.index("build();")
+
+
+def test_legend_toggle_is_wired_and_off_by_default():
+    """The legend key (task 0201) must be a config-driven, default-off toggle.
+
+    No JS runtime, so assert the contract by content across the three files:
+    - index.html ships the legend element, ``hidden`` by default (off);
+    - overlay.js reads ``?legend=1`` and reveals it only then;
+    - config.html offers the toggle and emits the param into the built URL;
+    - the toggle is a persisted form field (rides the localStorage save like 0056).
+    """
+    index, js, html = _read(INDEX), _read(OVERLAY_JS), _read(CONFIG)
+    # Element present and hidden (off) by default.
+    assert "data-legend" in index, "index.html must ship the legend element"
+    legend_tag = index[index.index("data-legend"):]
+    legend_tag = legend_tag[: legend_tag.index(">")]
+    assert "hidden" in legend_tag, "legend must be hidden (off) by default"
+    # overlay.js gates it on ?legend=1.
+    assert 'p.get("legend")' in js, "overlay.js must read the ?legend param"
+    assert "[data-legend]" in js, "overlay.js must reveal the legend element"
+    # config.html toggles + emits the param, and persists it (in FIELDS/CHECKS).
+    assert 'id="legend"' in html, "config page must offer a legend checkbox"
+    assert 'params.set("legend"' in html, "config must emit ?legend into the URL"
+    assert '"legend"' in html, "legend must be a persisted form field (FIELDS)"
 
 
 if __name__ == "__main__":

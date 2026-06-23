@@ -50,6 +50,7 @@ background is transparent, so only the bar composites over your stream.
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
 | `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |
+| `legend` | `0` | **legend key** — a compact one-line key (bar = White win-equity %; green = good/brilliant, red = inaccuracy/blunder) so first-time viewers can read the bar (task 0201) |
 | `autofollow` | `0` | **auto-director** — in a multi-game round, auto-switch focus to the board with the biggest live `drama`; a manual pick pins and overrides (task 0188) |
 | `focuslock` | `6` | autofollow focus-lock window (plies) — a switched board is held this long so noise can't thrash the bar |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
