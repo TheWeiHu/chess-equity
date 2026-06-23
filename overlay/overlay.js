@@ -42,9 +42,12 @@
   //     the readout always measures the player on the move. This is the one place the
   //     two POVs diverge — a stm value is the white-POV value with its sign flipped
   //     whenever it's Black's turn.
+  //   pov="stm-bar" (task 0223): the same side-to-move flip, but applied to the WHOLE
+  //     bar (board-flip style) — fill and readout both adopt the mover's POV. The
+  //     mapping is identical to "stm"; only the caller differs (it drives the fill too).
   function orient(equityWhite, pov, isWhiteToMove) {
     const w = clamp01(equityWhite);
-    if (pov === "stm" && isWhiteToMove === false) return 1 - w;
+    if ((pov === "stm" || pov === "stm-bar") && isWhiteToMove === false) return 1 - w;
     return w;
   }
 
@@ -407,7 +410,7 @@
       src: p.get("src") || "./mock-game.json",
       layout: p.get("layout") || "horizontal",
       theme: p.get("theme") || "dark",
-      pov: p.get("pov") === "stm" ? "stm" : "white",   // bar POV: classic White vs side-to-move
+      pov: (p.get("pov") === "stm" || p.get("pov") === "stm-bar") ? p.get("pov") : "white", // bar POV: classic White, side-to-move readout, or side-to-move full-bar flip
       cp: p.get("cp") !== "0",
       cpbar: p.get("cpbar") === "1",
       caster: p.get("caster") === "1",
@@ -456,24 +459,29 @@
 
   function applyPosition(evt, cfg) {
     const eq = clamp01(evt.equity);
-    lastBarEquity = eq; // remembered for the game-over card (task 0213)
+    lastBarEquity = eq; // remembered for the game-over card (task 0213) — always White-honest
+
+    const wtm = whiteToMove(evt);
+    // The equity the FILL draws. Default white / readout-only stm keep the bar
+    // White-honest (never jumps mid-game). In ?pov=stm-bar the whole bar flips to the
+    // side-to-move POV (board-flip style), so the fill itself adopts orient()'s mapping.
+    const barEq = cfg.pov === "stm-bar" ? orient(eq, "stm-bar", wtm) : eq;
 
     // Bar widths.
     const whiteEl = q("[data-bar-white]");
     if (whiteEl) {
       const dim = cfg.layout === "vertical" ? "height" : "width";
-      whiteEl.style[dim] = (eq * 100).toFixed(1) + "%";
+      whiteEl.style[dim] = (barEq * 100).toFixed(1) + "%";
     }
-    setText("[data-white-pct]", pct(eq, "white"));
-    setText("[data-black-pct]", pct(eq, "black"));
+    setText("[data-white-pct]", pct(barEq, "white"));
+    setText("[data-black-pct]", pct(barEq, "black"));
 
-    // Side-to-move readout (?pov=stm). The bar stays player-honest (white-fill is
-    // always White's equity — it never jumps mid-game), so the POV toggle reframes
-    // only the numeric readout to whoever is on the move, via orient().
+    // Side-to-move readout (?pov=stm and ?pov=stm-bar). For plain stm the bar stays
+    // player-honest, so this pill is the only thing reframed to the mover; for stm-bar
+    // it matches the now-flipped fill. Either way it names who is on the move.
     const stmEl = q("[data-stm-pct]");
     if (stmEl) {
-      if (cfg.pov === "stm") {
-        const wtm = whiteToMove(evt);
+      if (cfg.pov === "stm" || cfg.pov === "stm-bar") {
         const mover = wtm ? "White" : "Black";
         stmEl.textContent = mover + " to move · " + Math.round(orient(eq, "stm", wtm) * 100) + "%";
         stmEl.hidden = false;
@@ -757,7 +765,7 @@
     if (root) {
       root.classList.remove("layout-horizontal", "layout-vertical");
       root.classList.add("layout-" + cfg.layout);
-      root.classList.toggle("pov-stm", cfg.pov === "stm");
+      root.classList.toggle("pov-stm", cfg.pov === "stm" || cfg.pov === "stm-bar");
     }
     document.body.className = "theme-" + cfg.theme;
 
