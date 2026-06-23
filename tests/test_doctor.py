@@ -288,6 +288,61 @@ def test_doctor_nonzero_when_overlay_check_fails(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# live SSE wiring go-live preflight (task 0209)
+# --------------------------------------------------------------------------- #
+
+from chess_equity.doctor import probe_serve_sse, sample_pgn_path  # noqa: E402
+
+
+def test_probe_serve_sse_passes_on_the_committed_sample_pgn():
+    # acceptance: binds the real serve-sse server on an ephemeral port over the committed
+    # offline sample game and confirms /sse emits >=1 overlay position event.
+    if sample_pgn_path() is None:
+        pytest.skip("data/sample PGN not present (installed wheel)")
+    detail = probe_serve_sse()
+    assert "/sse bound on 127.0.0.1:" in detail
+    assert "first position ply" in detail
+
+
+def test_probe_serve_sse_passes_on_an_explicit_pgn(tmp_path):
+    pgn = tmp_path / "game.pgn"
+    pgn.write_text(GAME_PGN, encoding="utf-8")
+    detail = probe_serve_sse(pgn)
+    assert "overlay frame(s)" in detail
+
+
+def test_probe_serve_sse_raises_on_missing_pgn(tmp_path):
+    with pytest.raises(ValueError, match="sample PGN not found"):
+        probe_serve_sse(tmp_path / "does-not-exist.pgn")
+
+
+def test_doctor_appends_serve_sse_check_and_passes(tmp_path):
+    pgn = tmp_path / "game.pgn"
+    pgn.write_text(GAME_PGN, encoding="utf-8")
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok"},
+        serve_sse_probe=lambda: probe_serve_sse(pgn),
+    )
+    assert rc == 0
+    text = out.getvalue()
+    assert "[PASS] stockfish" in text
+    assert "[PASS] serve-sse" in text
+
+
+def test_doctor_nonzero_when_serve_sse_check_fails(tmp_path):
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok"},
+        serve_sse_probe=lambda: probe_serve_sse(tmp_path / "nope.pgn"),
+    )
+    assert rc == 1
+    assert "[FAIL] serve-sse" in out.getvalue()
+
+
+# --------------------------------------------------------------------------- #
 # evidence gate preflight (task 0195)
 # --------------------------------------------------------------------------- #
 
