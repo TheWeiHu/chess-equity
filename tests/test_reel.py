@@ -7,17 +7,21 @@ A separate smoke test drives the real CLI over the committed sample fixture and 
 asserts both artifacts land and are well-formed.
 """
 
+import base64
 import dataclasses
 import json
+import re
 
 from chess_equity.broadcast import MoveEvent
 from chess_equity.drama import score_event
 from chess_equity.reel import (
     _KIND_LABEL,
     build_reel,
+    build_webvtt,
     by_kind,
     caption,
     caption_payload,
+    clip_durations,
     rank,
     reel_payload,
     render_captions,
@@ -188,9 +192,12 @@ def test_render_html_is_self_contained_and_lists_moments():
     assert doc.startswith("<!doctype html>")
     assert "<title>My reel</title>" in doc
     assert doc.rstrip().endswith("</html>")
-    # Self-contained: no external deps / CDN / scripts.
+    # Self-contained: no external deps / CDN / scripts. The only src= permitted is
+    # the inline WebVTT data: URI (the captions track) — never an external fetch.
     assert "http://" not in doc and "https://" not in doc
-    assert "<script" not in doc and "src=" not in doc and "<link" not in doc
+    assert "<script" not in doc and "<link" not in doc
+    for src in re.findall(r'src="([^"]*)"', doc):
+        assert src.startswith("data:"), f"non-inline src in self-contained doc: {src}"
     # Every drama kind's caster label/emoji surfaces.
     for kind in ("clutch", "missed_win", "escape", "scramble"):
         d = next(x for x in reel if x.kind == kind)
@@ -222,6 +229,62 @@ def test_render_html_escapes_dynamic_text():
     doc = render_html([], title="<b>x</b> & y")
     assert "<b>x</b>" not in doc
     assert "&lt;b&gt;x&lt;/b&gt; &amp; y" in doc
+
+
+def _vtt_seconds(stamp: str) -> float:
+    """Parse an ``HH:MM:SS.mmm`` WebVTT timestamp into seconds."""
+    h, m, rest = stamp.split(":")
+    s, ms = rest.split(".")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def _vtt_cues(vtt: str):
+    """Return [(start_s, end_s, text), ...] for every cue in a WebVTT document."""
+    cues = []
+    lines = vtt.splitlines()
+    for i, line in enumerate(lines):
+        if " --> " in line:
+            start, end = line.split(" --> ")
+            text = lines[i + 1] if i + 1 < len(lines) else ""
+            cues.append((_vtt_seconds(start), _vtt_seconds(end), text))
+    return cues
+
+
+def test_build_webvtt_one_cue_per_clip_with_contiguous_timings():
+    reel = build_reel(_ONE_OF_EACH)
+    vtt = build_webvtt(reel)
+    assert vtt.startswith("WEBVTT")
+    cues = _vtt_cues(vtt)
+    # One cue per clip, narrating the move-grade + signed swing (caster caption).
+    assert len(cues) == len(reel)
+    for (start, end, text), d in zip(cues, reel):
+        assert text == caption(d)["text"]
+        assert end > start
+    # Cue timings line up with the clip boundaries: clips play back-to-back, each
+    # for its caption dwell time, so cue i ends exactly where cue i+1 begins.
+    durations = clip_durations(reel)
+    expected_start = 0.0
+    for (start, end, _), dur in zip(cues, durations):
+        assert abs(start - expected_start) < 1e-6
+        assert abs(end - (expected_start + dur)) < 1e-6
+        expected_start = end
+
+
+def test_render_html_embeds_inline_webvtt_captions_track():
+    reel = build_reel(_ONE_OF_EACH)
+    doc = render_html(reel)
+    assert '<track kind="captions"' in doc
+    # The track is inline (a base64 data: URI) so the file stays self-contained.
+    m = re.search(r'src="data:text/vtt;base64,([^"]+)"', doc)
+    assert m is not None
+    vtt = base64.b64decode(m.group(1)).decode("utf-8")
+    assert vtt.startswith("WEBVTT")
+    assert len(_vtt_cues(vtt)) == len(reel)
+
+
+def test_render_html_empty_reel_has_no_track():
+    doc = render_html([])
+    assert "<track" not in doc and "data:text/vtt" not in doc
 
 
 def test_cli_reel_writes_html_clip_player(tmp_path):

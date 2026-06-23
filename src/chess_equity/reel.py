@@ -22,6 +22,7 @@ a committed PGN) and it emits the reel with no extra model calls.
 
 from __future__ import annotations
 
+import base64
 import html
 import io
 import json
@@ -378,7 +379,82 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 .headline { color: #c3c8d1; font-size: 14px; margin-bottom: 6px; }
 .swing { font-size: 13px; color: #ffd479; }
 .loc { color: #6b7280; }
+.reel-clips { width: 100%; max-width: 360px; margin: 0 0 6px; background: #000;
+  border: 1px solid #2a2d38; border-radius: 8px; }
+.clips-note { color: #9aa0aa; font-size: 13px; margin: 0 0 18px; }
 """.strip()
+
+
+# --- WebVTT narration track (task 0205) --------------------------------------
+#
+# The clip player plays each ranked moment as a back-to-back "clip"; a <track
+# kind="captions"> carries one narration cue per clip so the export is accessible
+# and social-ready. The cue text reuses the caster caption (move-grade + signed
+# swing); the cue timings line up with the clip boundaries (each clip dwells for
+# its caption duration). The track is embedded as an inline data: URI so the HTML
+# stays a single self-contained file (no sidecar .vtt).
+
+
+def _vtt_timestamp(seconds: float) -> str:
+    """Format a second offset as a WebVTT cue timestamp (``HH:MM:SS.mmm``)."""
+    ms = int(round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def _vtt_escape(text: str) -> str:
+    """Escape the three characters WebVTT cue payloads reserve (``&``, ``<``, ``>``)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def clip_durations(reel: List[DramaEvent]) -> List[float]:
+    """Per-clip dwell time (s) — the player holds each moment for its caption duration."""
+    return [_caption_duration(d.magnitude) for d in reel]
+
+
+def build_webvtt(reel: List[DramaEvent]) -> str:
+    """Render the reel as a WebVTT caption track — one cue per clip.
+
+    Clips play back-to-back, so cue *i* spans ``[start_i, start_i + duration_i)``
+    where ``start_i`` is the summed duration of every earlier clip and
+    ``duration_i`` is that moment's caption dwell time (:func:`caption`). Each cue
+    narrates the move-grade + signed equity swing, reusing the caster caption text
+    verbatim, so the cue count equals the clip count and the timings line up with
+    the clip boundaries.
+    """
+    lines = ["WEBVTT", ""]
+    start = 0.0
+    for i, d in enumerate(reel, start=1):
+        end = start + _caption_duration(d.magnitude)
+        lines.append(str(i))
+        lines.append(f"{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}")
+        lines.append(_vtt_escape(str(caption(d)["text"])))
+        lines.append("")
+        start = end
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _webvtt_track_html(reel: List[DramaEvent]) -> str:
+    """A <video> clip timeline carrying the reel's narration as an inline WebVTT track.
+
+    The track's ``src`` is a base64 ``data:`` URI, so the document stays one
+    self-contained file (no sidecar .vtt). Empty reel → no track.
+    """
+    if not reel:
+        return ""
+    vtt = build_webvtt(reel)
+    b64 = base64.b64encode(vtt.encode("utf-8")).decode("ascii")
+    uri = f"data:text/vtt;base64,{b64}"
+    return (
+        '<video class="reel-clips" controls preload="none" '
+        'aria-label="highlight clip timeline">'
+        f'<track kind="captions" srclang="en" label="Narration" default src="{uri}">'
+        "</video>\n"
+        '<p class="clips-note">Narration captions (one cue per clip) are embedded '
+        "as a WebVTT track for accessible, social-ready export.</p>"
+    )
 
 
 def render_html(
@@ -391,8 +467,10 @@ def render_html(
 
     No external dependencies, CDNs, or scripts — opens offline straight from disk.
     Each ranked moment is a card with a Unicode board (from the FEN), the drama
-    kind/emoji, the caster caption, and the equity swing. Stays graceful on an
-    empty reel (a quiet game). With ``sources`` (a round recap), each card names its
+    kind/emoji, the caster caption, and the equity swing. A <track kind="captions">
+    (inline WebVTT data URI, one cue per clip — see :func:`build_webvtt`) rides
+    along so the export is accessible and social-ready. Stays graceful on an empty
+    reel (a quiet game). With ``sources`` (a round recap), each card names its
     source board + pairing and the subtitle reports how many boards the pool spans.
     """
     esc_title = html.escape(title)
@@ -412,9 +490,10 @@ def render_html(
             f'<p class="sub">{len(reel)} moment(s), {span}ranked by drama magnitude '
             f"· {html.escape(summary)}</p>"
         )
-        body = "\n".join(
+        cards = "\n".join(
             _moment_card_html(i, d, sources) for i, d in enumerate(reel, start=1)
         )
+        body = f"{_webvtt_track_html(reel)}\n{cards}"
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
