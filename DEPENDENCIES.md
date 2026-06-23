@@ -21,7 +21,8 @@ Read it top-to-bottom on a fresh machine and every currently-parked task becomes
 | **data** extra (`zstandard`, `pyarrow`, `pandas`) | pip-extra | `uv sync --extra data` | 0002/0024/0034/0040 — `.zst` streaming + Parquet/DataFrame | no (CSV path is fake-free) |
 | **plots** extra (`matplotlib>=3.5`) | pip-extra | `uv sync --extra plots` | 0036 — `validate --plots` reliability PNGs | no |
 | **maia2** extra (`maia2`) | pip-extra (heavy, pulls **torch**) | `uv sync --extra maia2` (or `pip install maia2`) | 0005/0014 — `--model maia2` | no (fake inference backend) |
-| **torch** | pip (heavy, transitive via `maia2`) | comes with the `maia2` extra | 0005/0013/0014 — neural models | no |
+| **wdl-net** extra (`torch`) | pip-extra (heavy: torch only) | `uv sync --extra wdl-net` | 0013 — `train-net` / `--model wdl-net` (end-to-end board→WDL net; lighter than `maia2`) | no (torch-gated tests `importorskip`; encoder is pure-chess) |
+| **torch** | pip (heavy, via `maia2` or `wdl-net` extras) | comes with the `maia2` or `wdl-net` extra | 0005/0013/0014 — neural models | no |
 | **Stockfish binary** (UCI) | system-binary | `brew install stockfish` / `apt-get install stockfish`; or `export STOCKFISH_PATH=/path/to/stockfish` | 0028/0035/0042/0043 — the real centipawn bar | no (injectable `Backend`; never silently falls back to material) |
 | **Maia-2 weights** (~23M-param checkpoint) | model-weights | auto-downloaded by `maia2` on first `evaluate(...)`, cached by the library | 0005/0014 | no |
 | **Lichess monthly dump** (`.pgn.zst`, multi-GB) | dataset | `chess-equity data build --month YYYY-MM` prints the canonical URL to `curl`; the build **streams** the `.zst` (never fully unpacked) | 0024/0034/0013 — real ~50k-row training/validation data | no (15-row `data/sample/` fixture covers tests) |
