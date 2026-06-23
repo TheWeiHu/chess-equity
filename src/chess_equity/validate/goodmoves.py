@@ -213,7 +213,10 @@ def _fmt(x: Optional[float], spec: str = "+.2f") -> str:
 
 
 def format_good_moves(
-    reports: Sequence[GoodMovesReport], *, baseline: str = "baseline"
+    reports: Sequence[GoodMovesReport],
+    *,
+    baseline: str = "baseline",
+    see_also: Optional[str] = None,
 ) -> str:
     """Render the good-moves measurement as a Markdown section (task 0117).
 
@@ -222,6 +225,11 @@ def format_good_moves(
     (baseline-biased) magnitude correlation. A verdict line states whether the equity
     bar reads good moves *at least as positively* as the baseline — the literal thesis.
     Returns ``""`` when there is nothing to show.
+
+    ``see_also`` (task 0158): when given a path, append a one-line pointer to the fuller
+    move-level write-up (``reports/goodmoves_real.md``) so a reader of a single gate
+    artifact (``reports/validation_real.md``) can reach the positive-direction half of the
+    thesis and its "what this proves / doesn't" caveats.
     """
     if not reports:
         return ""
@@ -254,6 +262,15 @@ def format_good_moves(
 
     for line in _good_moves_verdict(reports, baseline=baseline):
         out.append(line)
+        out.append("")
+
+    if see_also:
+        out.append(
+            f"See [`{see_also}`]({see_also}) for the fuller move-level write-up — the "
+            "reproduce recipe, the rating-signal (blunder-leniency) read, and what this "
+            "slice proves and does *not* prove (the rating-conditioned good-move upside "
+            "needs Maia's policy — task 0008/0005)."
+        )
         out.append("")
     return "\n".join(out)
 
