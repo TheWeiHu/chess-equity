@@ -137,6 +137,22 @@ def test_round_html_names_source_board():
     assert "http://" not in doc and "https://" not in doc
 
 
+def test_round_caption_names_board_and_player():
+    # --round captions name the source board + the actual mover (not bare "White").
+    reel = build_reel(_ROUND_EVENTS)
+    sources = game_sources(_ROUND_PGN)
+    payload = json.loads(render_json(reel, sources=sources))
+    # Board 1's leading missed_win: White=alice was the mover.
+    assert (
+        payload["moments"][0]["caption"]
+        == "Board 1 — alice lets a win slip on Nf3, missed win (-20 vs peers)"
+    )
+    # Board 2's clutch: Black=dave was the mover (white_to_move=False ⇒ White moved...
+    # but this event has the default white_to_move=False, so White=carol moved).
+    board2 = next(m for m in payload["moments"] if m["board"] == 2)
+    assert board2["caption"].startswith("Board 2 — carol finds ")
+
+
 def test_single_game_output_unchanged_without_sources():
     # Regression: without sources the moment location is the bare game id, as before.
     reel = build_reel([ev(_G1, ply=4, equity=65.0, delta_equity=-20.0)])

@@ -43,6 +43,15 @@ _KIND_LABEL = {
     "scramble": ("⏱", "Scramble"),
 }
 
+# Verb that reads naturally for the one-line shareable caption, per drama kind —
+# e.g. "Carlsen *finds* Qxf7#" / "White *lets a win slip on* Rd1".
+_KIND_VERB = {
+    "clutch": "finds",
+    "missed_win": "lets a win slip on",
+    "escape": "claws back with",
+    "scramble": "swings the bar on",
+}
+
 # On-stream lower-third dwell time, seconds. Bigger swings linger longer (sized by the
 # 0..1 drama magnitude) so a clutch p90 swing flashes briefly while a missed win holds.
 _CAPTION_MIN_S = 3.0
@@ -109,6 +118,42 @@ def _source_text(d: DramaEvent, sources: Optional[Dict[str, GameSource]]) -> str
     return f"game {d.game_id}"
 
 
+def _mover_name(d: DramaEvent, sources: Optional[Dict[str, GameSource]]) -> str:
+    """The mover's display name — the actual player in a round recap, else the side.
+
+    Only a round recap's ``sources`` map carries player names, so a single-game reel
+    falls back to ``White``/``Black`` (which is all the event itself knows).
+    """
+    if sources and d.game_id in sources:
+        src = sources[d.game_id]
+        return src.white if d.mover_white else src.black
+    return "White" if d.mover_white else "Black"
+
+
+def social_caption(
+    d: DramaEvent, sources: Optional[Dict[str, GameSource]] = None
+) -> str:
+    """One human, ready-to-post line summarising a moment for a social caption/title.
+
+    Composes the shareable headline from the pieces a viewer cares about: the source
+    board/pairing (round recap only), the mover, the move, the grade label, and the
+    signed practical-equity swing — e.g.
+    ``Board 3 — Carlsen finds Qxf7#, clutch (+48 vs peers)``. Without ``sources`` the
+    mover is the bare side and no board prefix is shown
+    (``White lets a win slip on Rd1, missed win (-20 vs peers)``).
+    """
+    _, label = _KIND_LABEL.get(d.kind, ("", d.kind))
+    verb = _KIND_VERB.get(d.kind, "plays")
+    mover = _mover_name(d, sources)
+    prefix = ""
+    if sources and d.game_id in sources:
+        prefix = f"Board {sources[d.game_id].board} — "
+    return (
+        f"{prefix}{mover} {verb} {d.san}, "
+        f"{label.lower()} ({d.delta_equity:+.0f} vs peers)"
+    )
+
+
 def _rank_key(d: DramaEvent) -> Tuple[float, int, int]:
     # magnitude desc (negated), then kind priority asc, then ply asc — fully deterministic.
     return (-d.magnitude, _KIND_PRIORITY.get(d.kind, 99), d.ply)
@@ -143,9 +188,11 @@ def reel_payload(
 ) -> Dict[str, object]:
     """The structured JSON-ready payload for a ranked reel.
 
-    When ``sources`` is given (a round recap), each moment gains a ``source`` label and
-    ``board`` number, and a top-level ``games`` count is added so downstream tooling can
-    see the pool spanned multiple boards. Without it, the payload is unchanged.
+    Every moment carries a ``caption`` — a ready-to-post one-line social headline
+    (see :func:`social_caption`). When ``sources`` is given (a round recap), each moment
+    additionally gains a ``source`` label and ``board`` number, its caption names the
+    source board + player, and a top-level ``games`` count is added so downstream tooling
+    can see the pool spanned multiple boards.
     """
     moments: List[Dict[str, object]] = []
     for d in reel:
@@ -154,6 +201,9 @@ def reel_payload(
             src = sources.get(d.game_id)
             m["source"] = _source_text(d, sources)
             m["board"] = src.board if src is not None else None
+        # One ready-to-post shareable line per moment (names the board/player on a
+        # round recap, the bare side single-game). Carried on every moment.
+        m["caption"] = social_caption(d, sources)
         moments.append(m)
     payload: Dict[str, object] = {
         "title": title,
@@ -329,6 +379,7 @@ def _moment_card_html(
     """
     emoji, label = _KIND_LABEL.get(d.kind, ("", d.kind))
     cap = str(caption(d)["text"])
+    share = social_caption(d, sources)
     side = "White" if d.mover_white else "Black"
     swing = (
         f"{d.delta_equity:+.0f} pts → {d.equity:.0f}% (White POV)"
@@ -343,6 +394,8 @@ def _moment_card_html(
         f'<span class="label">{html.escape(label)}</span>'
         f'<span class="mag">magnitude {d.magnitude:.2f}</span></div>'
         f'<div class="caption">{html.escape(cap)}</div>'
+        f'<div class="share" aria-label="shareable caption">'
+        f'📋 {html.escape(share)}</div>'
         f'<div class="headline">{html.escape(d.headline)}</div>'
         f'<div class="swing">{html.escape(side)} · {html.escape(swing)} '
         f'<span class="loc">{html.escape(loc)}</span></div>'
@@ -376,6 +429,7 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 .label { font-weight: 700; font-size: 18px; }
 .mag { color: #9aa0aa; font-size: 12px; }
 .caption { font-size: 15px; margin-bottom: 4px; }
+.share { font-size: 13px; color: #9fd0ff; margin-bottom: 4px; user-select: all; }
 .headline { color: #c3c8d1; font-size: 14px; margin-bottom: 6px; }
 .swing { font-size: 13px; color: #ffd479; }
 .loc { color: #6b7280; }
