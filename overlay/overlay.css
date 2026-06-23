@@ -191,6 +191,25 @@ html, body {
 .human-edge.black { background: #cbd5e1; color: #0b1220; }
 .human-edge[hidden] { display: none; }
 
+/* Momentum arrow (task 0208): a single up/down glyph at the bottom-right marking the
+   direction of the last equity swing. White-gaining points up (accent), Black-gaining
+   points down (light). Opacity + font-size are set inline by overlay.js so the arrow
+   fades over the decay window and grows with the swing — kept clear of the human-edge
+   badge (bottom-left). */
+.momentum {
+  position: absolute;
+  bottom: -30px;
+  right: 4px;
+  line-height: 1;
+  font-weight: 900;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.4s ease, font-size 0.2s ease;
+}
+.momentum.white { color: var(--accent); }
+.momentum.black { color: #e2e8f0; }
+.momentum[hidden] { display: none; }
+
 .equity-readout {
   position: absolute;
   inset: 0;
