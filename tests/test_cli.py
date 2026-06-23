@@ -1,3 +1,5 @@
+import json
+
 import chess
 
 from chess_equity.cli import main
@@ -20,6 +22,43 @@ def test_eval_bad_fen_errors_cleanly(capsys):
     rc = main(["eval", "not-a-fen"])
     assert rc == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_eval_fens_json_array(capsys):
+    # Batch-score the committed fixture: 2 FENs (blank/# lines skipped) → JSON array.
+    rc = main(["eval", "--fens", "tests/fixtures/sample_fens.txt", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    records = json.loads(out)
+    assert len(records) == 2
+    for rec in records:
+        assert set(rec) == {"fen", "white_equity", "label"}
+        assert rec["label"] in ("White", "Black")
+        assert 0.0 <= rec["white_equity"] <= 100.0
+    # The fixture's start position is balanced (~50%); the second FEN is White up a queen.
+    assert records[1]["label"] == "White"
+
+
+def test_eval_fens_text_lines(capsys):
+    rc = main(["eval", "--fens", "tests/fixtures/sample_fens.txt"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # One line per FEN, each carrying a percentage and a side tag.
+    lines = [ln for ln in out.splitlines() if "%" in ln]
+    assert len(lines) == 2
+    assert "(White)" in out or "(Black)" in out
+
+
+def test_eval_fens_stdin(monkeypatch, capsys):
+    import io as _io
+
+    monkeypatch.setattr("sys.stdin", _io.StringIO(chess.STARTING_FEN + "\n"))
+    rc = main(["eval", "--fens", "-", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    records = json.loads(out)
+    assert len(records) == 1
+    assert records[0]["fen"] == chess.STARTING_FEN
 
 
 def test_eval_pgn_annotates_every_move(tmp_path, capsys):

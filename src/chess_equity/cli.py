@@ -222,24 +222,77 @@ def _eval_search_fen(model: MaiaSearchModel, fen: str, white_elo: int, black_elo
     )
 
 
-def _eval_equity(model: EquityModel, args: argparse.Namespace):
-    """Resolve a single :class:`Equity` for ``args.fen`` across model kinds.
+def _equity_for_fen(model: EquityModel, fen: str, args: argparse.Namespace):
+    """Resolve a single :class:`Equity` for ``fen`` across model kinds.
 
-    Mirrors the dispatch in :func:`_run_eval` but returns the raw ``Equity`` (used by
-    the ``--svg`` snapshot, which renders an image rather than the text line).
+    The one place per-model dispatch lives: rollout/search go through their estimate
+    → ``estimate_to_equity`` path, everything else through ``evaluate`` (profile-wrapped).
+    Both the single-eval (``--svg``) and batch (``--fens``) paths call through here so
+    they score identically.
     """
     if isinstance(model, MaiaRolloutModel):
-        return estimate_to_equity(model.estimate(args.fen, args.white_elo, args.black_elo),
-                                  args.fen, model.SOURCE)
+        return estimate_to_equity(model.estimate(fen, args.white_elo, args.black_elo),
+                                  fen, model.SOURCE)
     if isinstance(model, MaiaSearchModel):
-        return search_estimate_to_equity(model.estimate(args.fen, args.white_elo, args.black_elo),
-                                         args.fen, model.SOURCE)
-    return _apply_profiles(model, args).evaluate(args.fen, args.white_elo, args.black_elo)
+        return search_estimate_to_equity(model.estimate(fen, args.white_elo, args.black_elo),
+                                         fen, model.SOURCE)
+    return _apply_profiles(model, args).evaluate(fen, args.white_elo, args.black_elo)
+
+
+def _eval_equity(model: EquityModel, args: argparse.Namespace):
+    """Resolve a single :class:`Equity` for ``args.fen`` (used by the ``--svg`` snapshot)."""
+    return _equity_for_fen(model, args.fen, args)
+
+
+def _equity_label(equity_white: float) -> str:
+    """Favoured-side verdict for the White-POV bar value (matches :func:`bar.render_bar`)."""
+    return "White" if equity_white >= 50.0 else "Black"
+
+
+def _read_fen_lines(path: str) -> List[str]:
+    """Read one FEN per line from ``path`` ( ``-`` = stdin); skip blank and ``#`` lines."""
+    fh = sys.stdin if path == "-" else open(path, encoding="utf-8")
+    try:
+        fens = []
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                fens.append(line)
+        return fens
+    finally:
+        if fh is not sys.stdin:
+            fh.close()
+
+
+def _eval_fens(model: EquityModel, args: argparse.Namespace) -> int:
+    """Batch-score every FEN in ``args.fens`` through the shared single-eval path (0221).
+
+    Emits a JSON array of ``{fen, white_equity, label}`` with ``--json``, else one text
+    line per FEN (``<fen>\\t<bar>``). Reuses :func:`_equity_for_fen` so a batch score is
+    bit-identical to the single-position score.
+    """
+    fens = _read_fen_lines(args.fens)
+    records = []
+    for fen in fens:
+        equity = _equity_for_fen(model, fen, args)
+        records.append({
+            "fen": fen,
+            "white_equity": round(equity.equity_white, 2),
+            "label": _equity_label(equity.equity_white),
+        })
+    if getattr(args, "json", False):
+        print(json.dumps(records, indent=2))
+    else:
+        for rec in records:
+            print(f"{rec['fen']}\t{rec['white_equity']:.1f}% ({rec['label']})")
+    return 0
 
 
 def _run_eval(args: argparse.Namespace) -> int:
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
     try:
+        if getattr(args, "fens", None):
+            return _eval_fens(model, args)
         if getattr(args, "svg", None) and not args.pgn:
             from chess_equity.bar import render_svg
 
@@ -1486,6 +1539,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev = sub.add_parser("eval", help="evaluate a position or a whole game")
     ev.add_argument("fen", nargs="?", default=START_FEN, help="FEN (default: startpos)")
     ev.add_argument("--pgn", help="annotate every move of a PGN file instead")
+    ev.add_argument(
+        "--fens", metavar="FILE",
+        help="batch-score many FENs: one FEN per line from FILE (- for stdin; blank/# lines "
+             "skipped). With --json emits a JSON array of {fen, white_equity, label}; else one "
+             "'<fen>\\t<pct> (side)' line per FEN. Reuses the single-eval scoring path.",
+    )
+    ev.add_argument(
+        "--json", action="store_true",
+        help="with --fens, emit the batch results as a JSON array instead of text lines",
+    )
     ev.add_argument(
         "--svg", metavar="OUT",
         help="write a self-contained White-POV equity-bar SVG snapshot for FEN to OUT "

@@ -1,0 +1,6 @@
+# Illustrative FEN fixture for `eval --fens` batch smoke tests (not evidence).
+# One FEN per line; blank lines and # comments are skipped.
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+
+# White is up a queen here (Black has no queen), White to move:
+rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
