@@ -332,7 +332,8 @@ def _run_grade(args: argparse.Namespace) -> int:
 
             # Pool every board's move grades by player and rank the round (task 0207).
             games = _grade_round(model, args.pgn, args.white_elo, args.black_elo)
-            scores = round_leaderboard(games)
+            # A min-moves floor (task 0227) ranks brief cameos below qualified players.
+            scores = round_leaderboard(games, min_moves=args.min_moves)
             # --json/--csv emit ONLY the machine-readable leaderboard to stdout (task 0214)
             # so it pipes cleanly into broadcast lower-third graphics; --json wins if both.
             if getattr(args, "json", False):
@@ -340,7 +341,7 @@ def _run_grade(args: argparse.Namespace) -> int:
             elif getattr(args, "csv", False):
                 print(render_leaderboard_csv(scores), end="")
             else:
-                for row in render_leaderboard(scores):
+                for row in render_leaderboard(scores, min_moves=args.min_moves):
                     print(row)
             if args.summary_json:
                 with open(args.summary_json, "w", encoding="utf-8") as fh:
@@ -1606,6 +1607,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--csv", action="store_true",
         help="with --round, print the leaderboard to stdout as CSV with the same columns "
              "as --json (suppresses the text table)",
+    )
+    gr.add_argument(
+        "--min-moves", type=int, default=5, metavar="N",
+        help="with --round, a player with fewer than N graded moves is marked unqualified "
+             "and ranked below every qualified player (so a brief cameo can't top the "
+             "board); the --json/--csv export carries a `qualified` bool (default 5; 0 = off)",
     )
     add_model_arg(gr)
 
