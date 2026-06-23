@@ -206,6 +206,26 @@ html, body {
 .pct-white { color: #1a1a1a; text-shadow: none; }
 .pct-black { color: #f5f5f0; }
 
+/* Side-to-move readout (?pov=stm, task 0206): a small centered pill above the bar
+   naming the player on the move and their equity. Off by default. In stm POV the
+   per-player percentages get out of the way so the one oriented number reads clearly. */
+.stm-readout {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.stm-readout[hidden] { display: none; }
+.pov-stm .equity-readout { opacity: 0.55; }
+
 /* Δequity grade pill — flashes when a move beats the player's level. */
 .grade-pill {
   position: absolute;

@@ -21,6 +21,31 @@
     return Math.round(v * 100) + "%";
   }
 
+  // Who is to move in the position an event describes? Honor an explicit
+  // white_to_move/stm field if a feed adds one; otherwise derive from ply parity.
+  // White moves on ODD plies, so the position AFTER an even ply is White-to-move.
+  // Defaults to White (matching the white-POV default) when nothing says otherwise.
+  function whiteToMove(evt) {
+    if (!evt) return true;
+    if (typeof evt.white_to_move === "boolean") return evt.white_to_move;
+    if (evt.stm === "white") return true;
+    if (evt.stm === "black") return false;
+    if (typeof evt.ply === "number" && !isNaN(evt.ply)) return evt.ply % 2 === 0;
+    return true;
+  }
+
+  // Orient a White-POV equity (0..1) for the chosen point of view.
+  //   pov="white" (default, classic bar): always White's win equity — side ignored.
+  //   pov="stm" (side-to-move): the value flips to 1 - eq when Black is to move, so
+  //     the readout always measures the player on the move. This is the one place the
+  //     two POVs diverge — a stm value is the white-POV value with its sign flipped
+  //     whenever it's Black's turn.
+  function orient(equityWhite, pov, isWhiteToMove) {
+    const w = clamp01(equityWhite);
+    if (pov === "stm" && isWhiteToMove === false) return 1 - w;
+    return w;
+  }
+
   // Centipawns (White POV) -> a 0..1 position for the ghost tick, via the
   // standard logistic Lichess uses. Independent of the practical equity, so
   // the two visibly diverge under time pressure — the whole point.
@@ -295,6 +320,7 @@
       src: p.get("src") || "./mock-game.json",
       layout: p.get("layout") || "horizontal",
       theme: p.get("theme") || "dark",
+      pov: p.get("pov") === "stm" ? "stm" : "white",   // bar POV: classic White vs side-to-move
       cp: p.get("cp") !== "0",
       cpbar: p.get("cpbar") === "1",
       caster: p.get("caster") === "1",
@@ -350,6 +376,21 @@
     }
     setText("[data-white-pct]", pct(eq, "white"));
     setText("[data-black-pct]", pct(eq, "black"));
+
+    // Side-to-move readout (?pov=stm). The bar stays player-honest (white-fill is
+    // always White's equity — it never jumps mid-game), so the POV toggle reframes
+    // only the numeric readout to whoever is on the move, via orient().
+    const stmEl = q("[data-stm-pct]");
+    if (stmEl) {
+      if (cfg.pov === "stm") {
+        const wtm = whiteToMove(evt);
+        const mover = wtm ? "White" : "Black";
+        stmEl.textContent = mover + " to move · " + Math.round(orient(eq, "stm", wtm) * 100) + "%";
+        stmEl.hidden = false;
+      } else {
+        stmEl.hidden = true;
+      }
+    }
 
     const cpPos = cpToWhitePos(evt.cp);
 
@@ -554,6 +595,7 @@
     if (root) {
       root.classList.remove("layout-horizontal", "layout-vertical");
       root.classList.add("layout-" + cfg.layout);
+      root.classList.toggle("pov-stm", cfg.pov === "stm");
     }
     document.body.className = "theme-" + cfg.theme;
 
@@ -591,6 +633,8 @@
   global.EquityOverlay = {
     clamp01: clamp01,
     pct: pct,
+    orient: orient,
+    whiteToMove: whiteToMove,
     cpToWhitePos: cpToWhitePos,
     formatClock: formatClock,
     timePressure: timePressure,

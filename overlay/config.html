@@ -95,6 +95,11 @@
           <option value="dark">Dark</option>
           <option value="light">Light</option>
         </select></div>
+      <div><label for="pov">Equity point of view</label>
+        <select id="pov">
+          <option value="white">White-POV (classic bar)</option>
+          <option value="stm">Side to move</option>
+        </select></div>
     </div>
     <div class="checks">
       <label><input type="checkbox" id="cp" checked /> Centipawn ghost tick</label>
@@ -124,7 +129,7 @@
   var $ = function (id) { return document.getElementById(id); };
 
   // Every form field, so persistence covers exactly what build() reads.
-  var FIELDS = ["feed","round","custom","welo","belo","layout","theme","cp","cpbar","caster","legend"];
+  var FIELDS = ["feed","round","custom","welo","belo","layout","theme","pov","cp","cpbar","caster","legend"];
   var CHECKS = { cp: true, cpbar: true, caster: true, legend: true };
   var STORE_KEY = "chess-equity-overlay-config";
 
@@ -170,6 +175,7 @@
     if (src !== "./mock-game.json") params.set("src", src);
     if ($("layout").value !== "horizontal") params.set("layout", $("layout").value);
     if ($("theme").value !== "dark") params.set("theme", $("theme").value);
+    if ($("pov").value !== "white") params.set("pov", $("pov").value);
     if (!$("cp").checked) params.set("cp", "0");
     if ($("cpbar").checked) params.set("cpbar", "1");
     if ($("caster").checked) params.set("caster", "1");
