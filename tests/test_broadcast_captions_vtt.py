@@ -136,6 +136,14 @@ def test_build_captions_vtt_resets_timeline_per_game():
     vtt = build_captions_vtt(events)
     cue_lines = [ln for ln in vtt.splitlines() if _CUE_RE.match(ln)]
     starts = [_ts_to_seconds(_CUE_RE.match(c).group(1)) for c in cue_lines]
+    ends = [_ts_to_seconds(_CUE_RE.match(c).group(2)) for c in cue_lines]
+
+    # Every cue holds for a positive duration — including the last cue of each board,
+    # where the next game restarts near t=0. Laying out cues per game (rather than
+    # ending each cue at the next start in one flat list) keeps the boundary cue from
+    # ending *before* it starts, which would be a malformed WebVTT/SRT block.
+    for i in range(len(starts)):
+        assert ends[i] > starts[i], (i, starts[i], ends[i])
 
     # Map each graded cue back to its game so we can find each board's first cue.
     captioned = [e for e in events if live_caption(e) is not None]
