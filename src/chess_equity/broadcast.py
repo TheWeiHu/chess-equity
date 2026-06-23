@@ -243,6 +243,48 @@ def game_event(
     )
 
 
+# The three terminal PGN results; "*" means the game is still in progress.
+_TERMINAL_RESULTS = frozenset({"1-0", "0-1", "1/2-1/2"})
+
+
+def terminal_result(headers: chess.pgn.Headers) -> Optional[str]:
+    """Return the game's final result (``"1-0"``/``"0-1"``/``"1/2-1/2"``) once the PGN
+    reaches one, else ``None`` while it's still ``"*"`` (in progress).
+
+    The ``Result`` header is the canonical broadcast end-signal — a Lichess/operator
+    feed stamps it the moment a game ends (checkmate, resignation, flag, draw). Catching
+    a game-over from the moves alone (checkmate with the header still ``"*"``) is left to
+    a follow-up; the header covers the real broadcast case.
+    """
+    result = headers.get("Result", "*").strip()
+    return result if result in _TERMINAL_RESULTS else None
+
+
+@dataclass(frozen=True)
+class ResultEvent:
+    """A game-end signal for a board in a multi-game round (task 0189).
+
+    Emitted once, the moment a board's PGN reaches a terminal :class:`Result`, so the
+    overlay can advance focus off the finished board to a still-live one (an idle caster
+    isn't stranded on an ended game). ``board`` is the 0-based round index — single-game
+    feeds don't emit results, since there's nothing to advance to.
+    """
+
+    game_id: str
+    board: int
+    result: str  # one of "1-0" / "0-1" / "1/2-1/2"
+
+    def to_overlay(self) -> Dict[str, object]:
+        """Render as the overlay's ``{type: "result", board, game_id, result}`` event —
+        routing metadata the board router consumes (never drawn on the bar)."""
+        return {
+            "type": "result",
+            "board": self.board,
+            "game_id": self.game_id,
+            "result": self.result,
+        }
+
+
 @dataclass(frozen=True)
 class BoardSelector:
     """Pick which board of a multi-game round to follow on the live feed.
@@ -726,6 +768,11 @@ class BroadcastIngestor:
         # game line before that game's moves.
         self.on_game: Optional[Callable[["GameEvent"], None]] = None
         self._announced: set[str] = set()
+        # Fired once per game, the first time its PGN reaches a terminal result, with a
+        # :class:`ResultEvent` so the overlay can auto-advance off a finished board (task
+        # 0189). Only multi-board rounds fire it (a single game has nowhere to advance).
+        self.on_result: Optional[Callable[["ResultEvent"], None]] = None
+        self._finished: set[str] = set()
 
     def _tracker_for(self, game_id: str) -> GameTracker:
         tracker = self._trackers.get(game_id)
@@ -771,6 +818,18 @@ class BroadcastIngestor:
                     )
             new = self._tracker_for(gid).ingest(game_pgn)
             events.extend(new)
+            # Auto-advance signal (task 0189): once a followed board's game ends, the
+            # overlay should move focus to a still-live board. Announce the terminal
+            # result once per game. Multi-board only — a single-game feed has no other
+            # board to advance to, and we keep its event stream byte-identical.
+            if multi_board and gid not in self._finished:
+                result = terminal_result(headers)
+                if result is not None:
+                    self._finished.add(gid)
+                    if self.on_result is not None:
+                        self.on_result(
+                            ResultEvent(game_id=gid, board=index, result=result)
+                        )
         for ev in events:
             self.stats.max_compute_ms = max(self.stats.max_compute_ms, ev.compute_ms)
         self.stats.events += len(events)
@@ -958,7 +1017,13 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
             queued.append({"type": "boards", "boards": list(roster)})
         queued.append(ev)
 
+    def on_result(res: "ResultEvent") -> None:
+        # A board's game ended: queue a routing-only `result` event so the overlay's
+        # board router can advance focus off the finished board (task 0189).
+        queued.append(res.to_overlay())
+
     ingestor.on_game = on_game
+    ingestor.on_result = on_result
     for move_event in ingestor.stream(**stream_kwargs):
         if move_event is None:  # idle-poll heartbeat tick from stream()
             yield HEARTBEAT

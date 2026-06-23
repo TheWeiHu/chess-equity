@@ -156,6 +156,54 @@ check("autofollow is inert without the flag (default routing preserved)", () => 
   assert.strictEqual(r.autofollow(), false);
 });
 
+// ---- Auto-advance off a finished board (task 0189) -----------------------------
+const RESULT_BOARD0 = { type: "result", board: 0, game_id: "g0", result: "1-0" };
+
+check("the followed board finishing advances focus to the next live board", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT); // boards 0 and 1; board 0 auto-selected
+  assert.strictEqual(r.selected(), 0, "board 0 followed to start");
+  r.learn(RESULT_BOARD0); // board 0's game ends
+  assert.strictEqual(r.selected(), 1, "focus auto-advances to the still-live board 1");
+  assert.ok(r.accepts(posBoard1), "board 1's events now route");
+  assert.ok(!r.accepts(posBoard0), "the finished board's events no longer route");
+});
+
+check("a result event is routing metadata — never rendered", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  assert.ok(!r.accepts(RESULT_BOARD0), "the result event itself must not reach the bar");
+});
+
+check("a manually pinned board does NOT auto-advance when it finishes", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  r.select(0); // caster pins board 0
+  assert.ok(r.pinned(), "manual select pins");
+  r.learn(RESULT_BOARD0); // board 0 ends, but it's pinned
+  assert.strictEqual(r.selected(), 0, "pinned board keeps focus despite finishing");
+  r.learn(posBoard1); // a live board-1 event arrives — still no steal
+  assert.strictEqual(r.selected(), 0, "a pinned board never auto-advances");
+});
+
+check("a finished board with no live alternative keeps focus (final position stays)", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  r.learn(RESULT_BOARD0); // board 0 finishes -> advance to board 1
+  r.learn({ type: "result", board: 1, game_id: "g1", result: "0-1" }); // board 1 also ends
+  assert.strictEqual(r.selected(), 1, "every board finished — stay on the last live one");
+});
+
+check("advancing onto a board that finished earlier skips to a still-live one", () => {
+  const r = O.makeBoardRouter();
+  r.learn({ type: "game", board: 0, players: { white: { name: "A" }, black: { name: "B" } } });
+  r.learn({ type: "game", board: 1, players: { white: { name: "C" }, black: { name: "D" } } });
+  r.learn({ type: "game", board: 2, players: { white: { name: "E" }, black: { name: "F" } } });
+  r.learn({ type: "result", board: 1, game_id: "g1", result: "1-0" }); // board 1 ends (not followed)
+  r.learn(RESULT_BOARD0); // followed board 0 ends -> skip the already-finished board 1
+  assert.strictEqual(r.selected(), 2, "auto-advance lands on the next LIVE board, not a dead one");
+});
+
 if (failures) {
   console.error(failures + " failure(s)");
   process.exit(1);

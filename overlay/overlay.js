@@ -136,9 +136,10 @@
     var lockPlies = opts.lockPlies == null ? 6 : opts.lockPlies; // focus-lock window
     var boards = []; // [{index, players}], in board order
     var selected = null; // followed board index; null = none chosen yet
-    var pinned = false; // a manual select pins the board, disabling autofollow
+    var pinned = false; // a manual select pins the board, disabling autofollow + auto-advance
     var lockRemaining = 0; // plies left before autofollow may switch again
     var lastDrama = {}; // board index -> latest drama magnitude seen
+    var finished = {}; // board index -> true once its game has a terminal result (0189)
 
     function has(idx) {
       for (var i = 0; i < boards.length; i++) if (boards[i].index === idx) return true;
@@ -148,6 +149,23 @@
     function dramaMag(evt) {
       var d = evt && evt.drama;
       return d && typeof d.magnitude === "number" && !isNaN(d.magnitude) ? d.magnitude : 0;
+    }
+
+    // The next still-live board in round order, or null if every board has finished.
+    function nextLiveBoard() {
+      for (var i = 0; i < boards.length; i++) {
+        if (!finished[boards[i].index]) return boards[i].index;
+      }
+      return null;
+    }
+
+    // If the followed board has finished and the caster hasn't pinned it, advance focus
+    // to the next live board (task 0189). A no-op when nothing is selected, the board is
+    // still live, or every board has ended (stay put on the final position).
+    function autoAdvance() {
+      if (pinned || selected === null || !finished[selected]) return;
+      var next = nextLiveBoard();
+      if (next !== null) selected = next;
     }
 
     return {
@@ -160,10 +178,12 @@
       autofollow: function () {
         return autofollow && !pinned;
       },
+      // Whether the caster has manually pinned a board (autofollow + auto-advance disabled).
       pinned: function () {
         return pinned;
       },
-      // A manual pick (caster clicks the selector): pin the board and stop the director.
+      // A manual pick (caster clicks the selector): follow this board AND pin it, so neither
+      // the auto-director (0188) nor a finished-board auto-advance (0189) can yank focus away.
       select: function (idx) {
         selected = idx;
         pinned = true;
@@ -203,22 +223,28 @@
         }
       },
       // Update the roster from a routing event. A "boards" event carries the full
-      // roster; a "game" event with a numeric `board` adds one board. Auto-selects the
-      // first board so a fresh overlay isn't blank before the caster chooses.
+      // roster; a "game" event with a numeric `board` adds one board; a "result" event
+      // marks a board's game as ended. Auto-selects the first board so a fresh overlay
+      // isn't blank before the caster chooses, and auto-advances off a finished board.
       learn: function (evt) {
         if (!evt) return;
         if (evt.type === "boards" && Array.isArray(evt.boards)) {
           boards = evt.boards.slice();
         } else if (evt.type === "game" && typeof evt.board === "number") {
           if (!has(evt.board)) boards.push({ index: evt.board, players: evt.players });
+        } else if (evt.type === "result" && typeof evt.board === "number") {
+          finished[evt.board] = true;
         }
         if (selected === null && boards.length) selected = boards[0].index;
+        // Advance after every learn: a result for the followed board moves us now; a
+        // later live board appearing while we're stranded on a finished one moves us then.
+        autoAdvance();
       },
-      // Should this event be rendered, given the current selection? "boards" events are
-      // routing metadata (never rendered). Events with no `board` (single-game feed)
-      // always pass. When a board is selected, only that board's events pass.
+      // Should this event be rendered, given the current selection? "boards" and
+      // "result" events are routing metadata (never rendered). Events with no `board`
+      // (single-game feed) always pass. When a board is selected, only its events pass.
       accepts: function (evt) {
-        if (!evt || evt.type === "boards") return false;
+        if (!evt || evt.type === "boards" || evt.type === "result") return false;
         if (typeof evt.board !== "number") return true;
         if (selected === null) return true;
         return evt.board === selected;

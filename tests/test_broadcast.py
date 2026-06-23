@@ -560,6 +560,74 @@ def test_overlay_bridge_single_game_has_no_boards_or_index():
 
 
 # --------------------------------------------------------------------------- #
+# Auto-advance off a finished board — game-end result signal (task 0189)
+# --------------------------------------------------------------------------- #
+
+
+# Board 0 has ended (Result "1-0"); board 1 is still in progress (Result "*"). The
+# overlay bridge should announce board 0's result so the router can advance focus.
+def _round_with_board0_finished():
+    board1 = (
+        GAME_PGN.replace("Carlsen", "Ding")
+        .replace("Nakamura", "Firouzja")
+        .replace('Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"')
+    )
+    board0 = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]')
+    return board0 + "\n" + board1
+
+
+def test_overlay_bridge_emits_result_when_a_board_finishes():
+    """A board whose PGN reaches a terminal Result emits a `result` event carrying its
+    board index, so the overlay can auto-advance focus off the finished game."""
+    events = _overlay_events_for(_round_with_board0_finished())
+    results = [e for e in events if e.get("type") == "result"]
+    assert len(results) == 1, "exactly one board finished"
+    assert results[0]["board"] == 0
+    assert results[0]["result"] == "1-0"
+
+
+def test_overlay_bridge_no_result_while_games_in_progress():
+    """While every board's Result is still `*`, the bridge emits no result events —
+    nothing has ended to advance off of."""
+    events = _overlay_events_for(_two_board_round())
+    assert not any(e.get("type") == "result" for e in events)
+
+
+def test_overlay_bridge_single_game_finish_emits_no_result():
+    """A finished single-game feed emits no result event — there's no other board to
+    advance to, and its event stream stays unchanged (no `board`, no `result`)."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]')
+    events = _overlay_events_for(finished)
+    assert not any(e.get("type") == "result" for e in events)
+
+
+def test_ingestor_fires_on_result_once_per_finished_board():
+    """`on_result` fires exactly once per game, the first time it reaches a terminal
+    result — even across repeated snapshots of the same finished round."""
+    from chess_equity.broadcast import ResultEvent
+
+    snapshot = _round_with_board0_finished()
+
+    class _RepeatFeed(BroadcastFeed):
+        def __init__(self, snap, times):
+            self._snap, self._times = snap, times
+
+        def poll(self):
+            if self._times <= 0:
+                return None
+            self._times -= 1
+            return self._snap
+
+    ingestor = BroadcastIngestor(_RepeatFeed(snapshot, 3), _model())
+    results = []
+    ingestor.on_result = results.append
+    ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
+    assert len(results) == 1, "result announced once, not re-fired on every poll"
+    assert isinstance(results[0], ResultEvent)
+    assert results[0].board == 0 and results[0].result == "1-0"
+
+
+# --------------------------------------------------------------------------- #
 # Drama classifier attached to the overlay event (task 0053)
 # --------------------------------------------------------------------------- #
 
