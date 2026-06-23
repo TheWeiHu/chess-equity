@@ -15,8 +15,11 @@ from chess_equity.drama import score_event
 from chess_equity.reel import (
     build_reel,
     by_kind,
+    caption,
+    caption_payload,
     rank,
     reel_payload,
+    render_captions,
     render_json,
     render_markdown,
 )
@@ -113,6 +116,45 @@ def test_render_markdown_empty_reel_is_graceful():
     md = render_markdown([])
     assert "No highlight-worthy moments" in md
     assert "## Top moments" not in md
+
+
+def test_caption_payload_shape():
+    reel = build_reel(_ONE_OF_EACH)
+    payload = json.loads(render_captions(reel, title="My reel"))
+    assert payload["title"] == "My reel"
+    assert payload["count"] == len(reel)
+    caps = payload["captions"]
+    assert len(caps) == len(reel)
+    # Captions keep the ranked order and carry exactly the OBS lower-third schema.
+    assert [c["kind"] for c in caps] == [d.kind for d in reel]
+    assert [c["ply"] for c in caps] == [d.ply for d in reel]
+    for c in caps:
+        assert set(c) == {"text", "kind", "ply", "duration_s"}
+        assert isinstance(c["text"], str) and c["text"]
+        assert 3.0 <= c["duration_s"] <= 6.0
+    assert caption_payload(reel)["count"] == len(reel)
+
+
+def test_caption_text_reuses_kind_label_and_signed_delta():
+    # missed_win on White, Δ −20: text uses the shared _KIND_LABEL string + signed pts.
+    d = score_event(ev(ply=4, equity=65.0, delta_equity=-20.0))
+    c = caption(d)
+    assert "Missed win" in c["text"]
+    assert "White" in c["text"]
+    assert "-20 pts" in c["text"]
+
+
+def test_caption_duration_scales_with_magnitude():
+    # A bigger swing lingers longer on screen than a smaller one.
+    big = caption(score_event(ev(equity=65.0, delta_equity=-20.0)))     # mag 0.5
+    small = caption(score_event(ev(ply=8, equity=58.0, delta_equity=7.0, white_clock=8.0)))
+    assert big["duration_s"] > small["duration_s"]
+
+
+def test_render_captions_empty_reel_is_graceful():
+    payload = json.loads(render_captions([]))
+    assert payload["count"] == 0
+    assert payload["captions"] == []
 
 
 def test_cli_reel_writes_both_artifacts(tmp_path):
