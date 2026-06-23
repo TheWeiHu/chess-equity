@@ -297,6 +297,13 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             file=sys.stderr,
         )
 
+    # A multi-board round (Titled Tuesday, blitz events) carries many simultaneous
+    # games; --board narrows the stream to one (by player-name substring or board
+    # index), defaulting to follow-all when unset (task 0182).
+    from chess_equity.broadcast import parse_board_selector
+
+    selector = parse_board_selector(getattr(args, "board", None))
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -314,6 +321,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 black_elo=args.black_elo,
                 clock_aware=args.clock_aware,
                 engine=cp_engine,
+                select=selector,
             )
             return overlay_events(
                 ingestor,
@@ -340,6 +348,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         black_elo=args.black_elo,
         clock_aware=args.clock_aware,
         engine=cp_engine,
+        select=selector,
     )
 
     def emit(event: MoveEvent) -> None:
@@ -1296,6 +1305,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--moves-per-poll", type=int, default=1, help="replay pacing (local --pgn only)"
     )
     bc.add_argument("--token", default=None, help="Lichess API token (optional)")
+    bc.add_argument(
+        "--board",
+        default=None,
+        metavar="PLAYER|INDEX",
+        help="follow one board of a multi-game round: a case-insensitive player-name "
+        "substring, or a 0-based board index. Default: follow every board (task 0182).",
+    )
     bc.add_argument(
         "--clock-aware",
         action=argparse.BooleanOptionalAction,

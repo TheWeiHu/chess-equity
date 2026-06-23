@@ -358,6 +358,73 @@ def test_ingestor_routes_multiple_games():
     assert len(events) == 8
 
 
+# --------------------------------------------------------------------------- #
+# BoardSelector — follow one board of a multi-game round (task 0182)
+# --------------------------------------------------------------------------- #
+
+
+# Illustrative fixture only (NOT evidence): a tiny two-board round snapshot used to
+# unit-test board selection. Real broadcasts carry the same multi-game shape.
+def _two_board_round():
+    game2 = GAME_PGN.replace("Carlsen", "Ding").replace("Nakamura", "Firouzja").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    return GAME_PGN + "\n" + game2
+
+
+def test_parse_board_selector_modes():
+    from chess_equity.broadcast import BoardSelector, parse_board_selector
+
+    assert parse_board_selector(None) is None
+    assert parse_board_selector("  ") is None
+    assert parse_board_selector("1") == BoardSelector(index=1)
+    assert parse_board_selector("Carlsen") == BoardSelector(player="Carlsen")
+
+
+def test_ingestor_follows_one_board_by_player():
+    from chess_equity.broadcast import parse_board_selector
+
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("ding"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Only Ding's board streams (game_id is its Site URL); Carlsen's is filtered out.
+    game_ids = {e.game_id for e in events}
+    assert game_ids == {"https://lichess.org/wxyz9999"}
+    assert len(events) == 4  # the followed game's 4 moves only
+
+
+def test_ingestor_follows_one_board_by_index():
+    from chess_equity.broadcast import parse_board_selector
+
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("0"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Board 0 is the first game (Carlsen's, Site abcd1234).
+    assert {e.game_id for e in events} == {"https://lichess.org/abcd1234"}
+
+
+def test_ingestor_no_selector_follows_all_boards():
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model())  # default: follow every board
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    assert len({e.game_id for e in events}) == 2
+
+
+def test_selector_matches_either_color():
+    from chess_equity.broadcast import parse_board_selector
+
+    # The needle matches the *Black* player of board 1 (Firouzja).
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("firouzja"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Matched on Black; only board 1 (Ding vs Firouzja, Site wxyz9999) streams.
+    assert {e.game_id for e in events} == {"https://lichess.org/wxyz9999"}
+
+
 class _OneShotFeed(BroadcastFeed):
     """Returns a snapshot once, then None (a completed round)."""
 
