@@ -292,6 +292,7 @@ class PlayerScore:
     blunders: int  # count of "blunder" moves (== label_counts["blunder"])
     mistakes: int  # count of "mistake" moves (== label_counts["mistake"])
     mean_peer: float  # mean grade_peer (signed Δequity; positive = beat rating peers)
+    rating: int  # the player's rating this round (modal mover_elo of their pooled moves)
     worst: Optional[MoveGrade]  # the move with the minimum grade_peer (biggest drop)
 
     def to_dict(self) -> Dict[str, object]:
@@ -303,6 +304,7 @@ class PlayerScore:
             "blunders": self.blunders,
             "mistakes": self.mistakes,
             "mean_peer": self.mean_peer,
+            "rating": self.rating,
             "worst": None if self.worst is None else self.worst.to_dict(),
         }
 
@@ -324,8 +326,24 @@ def _player_score(name: str, grades: List[MoveGrade]) -> PlayerScore:
         blunders=counts.get("blunder", 0),
         mistakes=counts.get("mistake", 0),
         mean_peer=mean_peer,
+        rating=_modal_rating(grades),
         worst=worst,
     )
+
+
+def _modal_rating(grades: List[MoveGrade]) -> int:
+    """The player's rating for the round: the most common ``mover_elo`` of their moves.
+
+    A player can in principle appear with differing ratings across boards (per-game
+    headers), so we take the modal rating; ties break to the highest. ``0`` if empty.
+    """
+    if not grades:
+        return 0
+    counts: Dict[int, int] = {}
+    for g in grades:
+        counts[g.mover_elo] = counts.get(g.mover_elo, 0) + 1
+    # max by (frequency, rating) → most common, ties to the higher rating; deterministic.
+    return max(counts, key=lambda elo: (counts[elo], elo))
 
 
 def _leaderboard_rank_key(s: PlayerScore) -> tuple:
@@ -370,6 +388,45 @@ def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
             f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}"
         )
     return rows
+
+
+# Machine-readable leaderboard export (task 0214) — feeds broadcast lower-third
+# graphics. A stable, flat schema (one row per player) distinct from PlayerScore.to_dict():
+# `player`/`avg_delta` are the broadcast-facing names, plus `rating` and a 1-based `rank`.
+LEADERBOARD_COLUMNS = ["rank", "player", "rating", "n_moves", "accuracy", "avg_delta"]
+
+
+def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]]:
+    """Flat, stable per-player rows for JSON/CSV export, ranked in list order.
+
+    ``scores`` is the already-ranked output of :func:`round_leaderboard`; ``rank`` is its
+    1-based position. Accuracy is rounded to 1 decimal and ``avg_delta`` (== ``mean_peer``)
+    to 2, so the export is stable and lower-third-friendly. Pure projection — no model calls.
+    """
+    return [
+        {
+            "rank": i,
+            "player": s.name,
+            "rating": s.rating,
+            "n_moves": s.n_moves,
+            "accuracy": round(s.accuracy, 1),
+            "avg_delta": round(s.mean_peer, 2),
+        }
+        for i, s in enumerate(scores, start=1)
+    ]
+
+
+def render_leaderboard_csv(scores: List[PlayerScore]) -> str:
+    """The leaderboard export as CSV text (header + one row per player, trailing newline)."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=LEADERBOARD_COLUMNS)
+    writer.writeheader()
+    for row in leaderboard_export_rows(scores):
+        writer.writerow(row)
+    return buf.getvalue()
 
 
 def render_scoreline(line: GameScoreline) -> List[str]:

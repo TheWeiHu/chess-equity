@@ -245,13 +245,25 @@ def _run_grade(args: argparse.Namespace) -> int:
     model = build_model(args.model, depth=args.depth)
     try:
         if args.round:
-            from chess_equity.grading import render_leaderboard, round_leaderboard
+            from chess_equity.grading import (
+                leaderboard_export_rows,
+                render_leaderboard,
+                render_leaderboard_csv,
+                round_leaderboard,
+            )
 
             # Pool every board's move grades by player and rank the round (task 0207).
             games = _grade_round(model, args.pgn, args.white_elo, args.black_elo)
             scores = round_leaderboard(games)
-            for row in render_leaderboard(scores):
-                print(row)
+            # --json/--csv emit ONLY the machine-readable leaderboard to stdout (task 0214)
+            # so it pipes cleanly into broadcast lower-third graphics; --json wins if both.
+            if getattr(args, "json", False):
+                print(json.dumps(leaderboard_export_rows(scores), indent=2))
+            elif getattr(args, "csv", False):
+                print(render_leaderboard_csv(scores), end="")
+            else:
+                for row in render_leaderboard(scores):
+                    print(row)
             if args.summary_json:
                 with open(args.summary_json, "w", encoding="utf-8") as fh:
                     json.dump({"players": [s.to_dict() for s in scores]}, fh, indent=2)
@@ -1444,6 +1456,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="also write the per-side scoreline (grade-label counts, mean Δpeer, "
              "worst move per color) as machine-readable JSON to OUT — or, with --round, "
              "the per-player leaderboard rows",
+    )
+    gr.add_argument(
+        "--json", action="store_true",
+        help="with --round, print the leaderboard to stdout as a JSON array of "
+             "{rank, player, rating, n_moves, accuracy, avg_delta} (suppresses the text "
+             "table; pipeable into broadcast lower-third graphics)",
+    )
+    gr.add_argument(
+        "--csv", action="store_true",
+        help="with --round, print the leaderboard to stdout as CSV with the same columns "
+             "as --json (suppresses the text table)",
     )
     add_model_arg(gr)
 
