@@ -79,6 +79,45 @@ def grade_delta(delta_equity: Optional[float]) -> Optional[str]:
     return "blunder"
 
 
+def live_caption(event: "MoveEvent") -> Optional[str]:
+    """One caster-facing sentence for a just-played move, or ``None`` if ungraded.
+
+    The *live* counterpart to the offline reel's lower-thirds (``chess_equity.reel``,
+    task 0184): where the reel ranks a finished game's drama into OBS captions, this
+    composes a single spoken-style line per move as it streams — TTS/chat-ready, with
+    no new model calls. It reuses only fields the event already carries:
+
+    * the move (``san``), its grade (``last_move_grade``) and signed practical swing
+      (``delta_equity``, in equity percentage points), and the *mover's* rating — e.g.
+      ``"Qxf7 — brilliant, +12% for a 1800 here"``;
+    * when the move is dramatic enough that :func:`chess_equity.drama.score_event`
+      fires (a clutch / missed win / escape / scramble), the classifier's caster
+      ``headline`` is appended after a separator, so a real swing reads as the story it
+      is instead of a bare grade.
+
+    Returns ``None`` for the opening position (no prior move to grade), so a caller can
+    cleanly skip ungraded ticks.
+    """
+    if event.last_move_grade is None:
+        return None
+    # The mover is the side that just moved: in the post-move FEN the side *to* move is
+    # the opponent, so the mover is White exactly when it's now Black to move.
+    mover_white = not event.white_to_move
+    elo = event.white_elo if mover_white else event.black_elo
+    who = f"a {elo}" if elo else "an unrated player"
+    delta = event.delta_equity
+    swing = "" if delta is None else f", {delta:+.0f}% for {who}"
+    base = f"{event.san} — {event.last_move_grade}{swing} here"
+
+    # Lazy import: drama imports MoveEvent from this module, so a top-level import cycles.
+    from chess_equity.drama import score_event
+
+    drama = score_event(event)
+    if drama is not None:
+        return f"{base}  ·  {drama.headline}"
+    return base
+
+
 @dataclass(frozen=True)
 class MoveEvent:
     """One published move: position, clocks, ratings, and equity.

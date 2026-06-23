@@ -351,13 +351,34 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         select=selector,
     )
 
+    # --captions: a human caster sentence per graded move (TTS/chat-ready) instead of
+    # the machine JSONL stream (task 0190). The live counterpart to the offline reel.
+    captions = getattr(args, "captions", False)
+
     def emit(event: MoveEvent) -> None:
+        if captions:
+            from chess_equity.broadcast import live_caption
+
+            line = live_caption(event)
+            if line is not None:
+                out.write(line + "\n")
+                out.flush()
+            return
         out.write(_event_line(event) + "\n")
         out.flush()
 
     # Emit the overlay "game" metadata event (player names + ratings) once per game,
-    # before its moves, so the overlay name-plates are populated (task 0047).
+    # before its moves, so the overlay name-plates are populated (task 0047). In
+    # --captions mode announce the pairing as a plain caster intro line instead.
     def emit_game(game: GameEvent) -> None:
+        if captions:
+            white = game.white_name or "White"
+            black = game.black_name or "Black"
+            we = f" ({game.white_elo})" if game.white_elo else ""
+            be = f" ({game.black_elo})" if game.black_elo else ""
+            out.write(f"🎙 {white}{we} vs {black}{be}\n")
+            out.flush()
+            return
         out.write(json.dumps(game.to_overlay()) + "\n")
         out.flush()
 
@@ -1350,6 +1371,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="stream overlay events as Server-Sent-Events on this port instead of "
         "printing JSON Lines — point an OBS browser source at "
         "http://localhost:PORT/?src=/sse (task 0094)",
+    )
+    bc.add_argument(
+        "--captions",
+        action="store_true",
+        help="print one human caster sentence per graded move (TTS/chat-ready) instead "
+        "of JSON Lines — composed from the move grade, practical swing and mover "
+        "rating, with the drama headline appended on a real swing (task 0190)",
     )
     add_profile_args(bc)
     add_model_arg(bc)
