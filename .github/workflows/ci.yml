@@ -43,3 +43,8 @@ jobs:
       # bar instead of silently freezing on air (task 0202).
       - name: Run overlay stale-feed JS tests
         run: node overlay/test_stale.test.js
+      # The equity POV mapping (overlay/overlay.js orient/whiteToMove) is gated by a
+      # dependency-free node test: the side-to-move value flips sign vs white-POV when
+      # Black is on the move (task 0206).
+      - name: Run overlay POV JS tests
+        run: node overlay/test_pov.test.js

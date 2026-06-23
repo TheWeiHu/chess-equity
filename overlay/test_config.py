@@ -87,6 +87,32 @@ def test_legend_toggle_is_wired_and_off_by_default():
     assert '"legend"' in html, "legend must be a persisted form field (FIELDS)"
 
 
+def test_pov_toggle_is_wired_and_white_by_default():
+    """The bar POV toggle (task 0206) must be config-driven and default to White-POV.
+
+    No JS runtime, so assert the contract by content across the three files:
+    - overlay.js reads ``?pov`` (defaulting to "white") and exposes the pure mapping
+      helpers (``orient``/``whiteToMove``) plus the side-to-move readout element;
+    - index.html ships the ``data-stm-pct`` readout element, ``hidden`` by default (off);
+    - config.html offers the toggle, emits the param only when non-default, and persists it.
+    """
+    index, js, html = _read(INDEX), _read(OVERLAY_JS), _read(CONFIG)
+    # overlay.js parses the param (default white) and exposes the mapping helpers.
+    assert 'p.get("pov")' in js, "overlay.js must read the ?pov param"
+    assert "orient" in js and "whiteToMove" in js, "overlay.js must expose orient/whiteToMove"
+    assert "[data-stm-pct]" in js, "overlay.js must drive the side-to-move readout"
+    # index.html ships the readout element, hidden (off) by default.
+    assert "data-stm-pct" in index, "index.html must ship the side-to-move readout element"
+    stm_tag = index[index.index("data-stm-pct"):]
+    stm_tag = stm_tag[: stm_tag.index(">")]
+    assert "hidden" in stm_tag, "side-to-move readout must be hidden (off) by default"
+    # config.html toggles + emits the param (only when not the white default), and persists it.
+    assert 'id="pov"' in html, "config page must offer a POV select"
+    assert 'params.set("pov"' in html, "config must emit ?pov into the URL"
+    assert '!== "white"' in html, "config must emit ?pov only when it differs from the default"
+    assert '"pov"' in html, "pov must be a persisted form field (FIELDS)"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

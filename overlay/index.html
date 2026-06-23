@@ -17,6 +17,9 @@
                     .json replay file. Default: ./mock-game.json (replay).
     ?layout=horizontal|vertical   bar orientation (default horizontal).
     ?theme=dark|light             label theme (default dark).
+    ?pov=white|stm  equity point of view. white (default) = classic always-White bar.
+                    stm = add a readout for the side to move (flips when Black moves);
+                    the bar fill stays player-honest in both.
     ?cp=1|0         show the classic centipawn "ghost" tick for contrast.
     ?cpbar=1        render the centipawn eval as a full second bar (not just a tick).
     ?caster=1       caster mode: flare on big practical swings the engine bar misses.
@@ -50,6 +53,11 @@
           <span class="pct pct-white" data-white-pct>50%</span>
           <span class="pct pct-black" data-black-pct>50%</span>
         </div>
+        <!-- Side-to-move readout (?pov=stm, task 0206): reframes the equity to the
+             player on the move (flips when Black is to move). Off by default — the
+             classic bar is White-POV. The physical bar stays player-honest; only this
+             readout follows the side to move. -->
+        <div class="stm-readout" data-stm-pct title="equity for the side to move" hidden></div>
         <div class="grade-pill" data-grade hidden></div>
         <div class="drama-flare" data-drama hidden></div>
         <div class="human-edge" data-edge title="practical equity disagrees with the engine bar" hidden></div>
