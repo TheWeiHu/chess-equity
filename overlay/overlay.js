@@ -129,6 +129,7 @@
       welo: p.get("welo"),
       belo: p.get("belo"),
       lowclock: parseFloat(p.get("lowclock")) || 30,
+      stale: parseFloat(p.get("stale")) || 10,
     };
   }
 
@@ -306,6 +307,16 @@
     else if (evt.type === "position") applyPosition(evt, cfg);
   }
 
+  // Stale-feed UI (task 0178): when the live feed drops, the bar would otherwise
+  // freeze silently and mislead viewers. Dim the overlay and reveal a small
+  // "reconnecting" marker; clear both on the next event.
+  function setStale(on) {
+    const root = q("#overlay");
+    if (root) root.classList.toggle("feed-stale", !!on);
+    const marker = q("[data-stale]");
+    if (marker) marker.hidden = !on;
+  }
+
   function start() {
     const cfg = params();
     const root = q("#overlay");
@@ -322,12 +333,19 @@
     if (global.EquityFeed) {
       global.EquityFeed.connect(cfg.src, {
         speed: cfg.speed,
+        staleMs: cfg.stale * 1000,
         onEvent: function (evt) {
           dispatch(evt, cfg);
         },
         onError: function (e) {
           // Stay silent on-screen (it's an overlay); log for setup debugging.
           if (global.console) console.warn("[equity-overlay] feed error", e);
+        },
+        onStale: function () {
+          setStale(true);
+        },
+        onFresh: function () {
+          setStale(false);
         },
       });
     }
