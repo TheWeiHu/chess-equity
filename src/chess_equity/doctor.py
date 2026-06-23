@@ -65,6 +65,45 @@ def _probe_maia2() -> str:
     return f"startpos equity(1500/1500) = {eq}% White"
 
 
+def probe_broadcast(feed) -> str:
+    """Poll a broadcast feed once and confirm it emits at least one parseable move.
+
+    The go-live preflight (task 0183): before going on air a streamer needs the LIVE
+    path to work, not just the engines. We reuse :mod:`broadcast` *parsing only* — poll
+    the feed, split the snapshot into games, and parse the first with ``python-chess`` —
+    so the check never touches a model (no torch / Maia-2 needed). Raises on every
+    not-ready state so :func:`check` turns it into a FAIL with a streamer-readable hint:
+
+    * unreachable feed → the underlying :class:`~chess_equity.broadcast.FeedError`,
+    * reachable but no PGN / no moves yet → "round not started?" hints.
+    """
+    import io as _io
+
+    import chess.pgn
+
+    from chess_equity.broadcast import split_games
+
+    pgn = feed.poll()
+    if not pgn or not pgn.strip():
+        raise RuntimeError("feed reachable but emitted no PGN yet (round not started?)")
+    games = split_games(pgn)
+    if not games:
+        raise RuntimeError("feed returned data but no parseable PGN game (round not started?)")
+    game = chess.pgn.read_game(_io.StringIO(games[0]))
+    if game is None:
+        raise RuntimeError("could not parse a PGN game from the feed")
+    board = game.board()
+    moves = 0
+    last_san: Optional[str] = None
+    for move in game.mainline_moves():
+        last_san = board.san(move)
+        board.push(move)
+        moves += 1
+    if moves == 0:
+        raise RuntimeError("feed has a game header but no moves yet (round not started?)")
+    return f"{len(games)} game(s), first game {moves} move(s) (last: {last_san})"
+
+
 def check(name: str, probe: Probe) -> Check:
     """Run one probe, mapping success/exception to a :class:`Check`.
 
@@ -98,14 +137,21 @@ def doctor(
     out: Optional[TextIO] = None,
     probes: Optional[dict] = None,
     engines: Optional[List[str]] = None,
+    broadcast_probe: Optional[Probe] = None,
 ) -> int:
     """Probe the optional engines with the real backends (override ``probes`` in tests).
 
     ``engines`` restricts the probes to a subset (e.g. ``["stockfish"]`` for a
     binary-only CI runner that never installs torch/Maia-2); ``None`` checks all.
+
+    ``broadcast_probe`` (set by ``doctor --broadcast <spec>``) appends a go-live
+    preflight that verifies the LIVE feed is reachable and emitting a parseable move
+    (task 0183) — it runs alongside whatever engine checks ``engines`` selects.
     """
     probes = probes or {"stockfish": _probe_stockfish, "maia2": _probe_maia2}
     if engines:
         probes = {name: probes[name] for name in engines if name in probes}
     checks = [check(name, probe) for name, probe in probes.items()]
+    if broadcast_probe is not None:
+        checks.append(check("broadcast", broadcast_probe))
     return run_doctor(checks, out=out)

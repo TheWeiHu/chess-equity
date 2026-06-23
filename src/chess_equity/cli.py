@@ -1623,6 +1623,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="check only this engine (repeatable); default checks all. Use "
         "`--engine stockfish` on a binary-only runner with no torch/Maia-2.",
     )
+    dr.add_argument(
+        "--broadcast",
+        "--feed",
+        dest="broadcast",
+        metavar="SPEC",
+        default=None,
+        help="also run a go-live preflight on a broadcast feed before air: a Lichess "
+        "round id, a PGN URL, or a local .pgn file. Verifies the feed is reachable "
+        "and emitting at least one parseable move (no torch/engine needed).",
+    )
+    dr.add_argument(
+        "--token", default=None, help="Lichess API token for --broadcast round feeds (optional)"
+    )
 
     pp = sub.add_parser(
         "personal",
@@ -1684,9 +1697,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":
-        from chess_equity.doctor import doctor
+        from chess_equity.doctor import doctor, probe_broadcast
 
-        return doctor(engines=args.engine)
+        broadcast_probe = None
+        if args.broadcast:
+            from chess_equity.broadcast import feed_from_spec
+
+            feed = feed_from_spec(args.broadcast, token=args.token)
+            broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
+        return doctor(engines=args.engine, broadcast_probe=broadcast_probe)
     if args.command == "personal":
         return _run_personal(args)
 
