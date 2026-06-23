@@ -604,6 +604,11 @@ class IngestStats:
     events: int = 0
     errors: int = 0
     max_compute_ms: float = 0.0
+    # How many times the feed recovered after one or more consecutive errors (a
+    # transient drop that self-healed), and the longest backoff delay we waited. Lets
+    # the run summary show that a live stream rode out feed hiccups rather than crashing.
+    reconnects: int = 0
+    max_backoff_s: float = 0.0
 
 
 class BroadcastIngestor:
@@ -687,6 +692,10 @@ class BroadcastIngestor:
         max_idle_polls: Optional[int] = 1,
         sleep: Callable[[float], None] = time.sleep,
         heartbeat: bool = False,
+        reconnect_backoff: float = 1.0,
+        backoff_factor: float = 2.0,
+        backoff_max: float = 30.0,
+        on_reconnect: Optional[Callable[[int, float], None]] = None,
     ) -> Iterator[Optional[MoveEvent]]:
         """Yield events as they arrive. Generator so callers control the sink.
 
@@ -694,6 +703,17 @@ class BroadcastIngestor:
         unbounded, for a true live stream); ``max_idle_polls`` stops after that many
         consecutive polls produced no PGN (so a finished replay or a dead round ends).
         ``sleep`` is injectable for tests.
+
+        On a transient :class:`FeedError` (a dropped/erroring live feed) the loop does
+        not crash: it waits a **bounded exponential backoff** and retries, resuming from
+        the last seen move (each :class:`GameTracker` keeps its emitted prefix, so the
+        next good poll re-emits only genuinely new moves). The delay starts at
+        ``reconnect_backoff`` seconds, multiplies by ``backoff_factor`` per *consecutive*
+        error, is capped at ``backoff_max``, and **resets the moment a poll succeeds** —
+        so a feed that flickers doesn't ramp the wait forever. ``on_reconnect(attempt,
+        delay)`` is called each time we schedule a retry, so a caller (the CLI) can log a
+        visible 'reconnecting' state for the streamer. Healthy idle polls (a round that
+        hasn't started) still wait the normal ``interval``, not a backoff.
 
         With ``heartbeat=True`` an idle poll that does *not* end the stream yields
         ``None`` — a tick the SSE bridge turns into a keep-alive comment so an
@@ -704,9 +724,14 @@ class BroadcastIngestor:
         polls = 0
         idle = 0
         first = True
+        # Pending delay before the *next* poll: 0 means "use the normal interval". It
+        # grows geometrically per consecutive FeedError (the reconnect backoff) and is
+        # reset to 0 by any successful poll, so a recovered feed returns to cadence.
+        backoff = 0.0
+        consecutive_errors = 0
         while max_polls is None or polls < max_polls:
             if not first:
-                sleep(interval)
+                sleep(backoff if backoff > 0 else interval)
             first = False
             polls += 1
             self.stats.polls = polls
@@ -715,6 +740,15 @@ class BroadcastIngestor:
             except FeedError:
                 self.stats.errors += 1
                 idle += 1
+                consecutive_errors += 1
+                # Bounded exponential backoff before the next reconnect attempt.
+                backoff = min(
+                    backoff_max,
+                    reconnect_backoff * (backoff_factor ** (consecutive_errors - 1)),
+                )
+                self.stats.max_backoff_s = max(self.stats.max_backoff_s, backoff)
+                if on_reconnect is not None:
+                    on_reconnect(consecutive_errors, backoff)
                 if max_idle_polls is not None and idle >= max_idle_polls and polls > 1:
                     # Keep retrying live feeds; only give up if we never connected.
                     if not self._trackers:
@@ -722,6 +756,12 @@ class BroadcastIngestor:
                 if heartbeat:
                     yield None
                 continue
+            # A poll came back (even an empty one): the connection is healthy again, so
+            # clear any reconnect backoff and count the recovery if we'd been erroring.
+            if consecutive_errors:
+                self.stats.reconnects += 1
+            consecutive_errors = 0
+            backoff = 0.0
             if not snapshot:
                 idle += 1
                 if max_idle_polls is not None and idle >= max_idle_polls:
@@ -741,13 +781,25 @@ class BroadcastIngestor:
         max_polls: Optional[int] = None,
         max_idle_polls: Optional[int] = 1,
         sleep: Callable[[float], None] = time.sleep,
+        reconnect_backoff: float = 1.0,
+        backoff_factor: float = 2.0,
+        backoff_max: float = 30.0,
+        on_reconnect: Optional[Callable[[int, float], None]] = None,
     ) -> IngestStats:
-        """Drive :meth:`stream`, calling ``emit`` for each event. Returns stats."""
+        """Drive :meth:`stream`, calling ``emit`` for each event. Returns stats.
+
+        ``reconnect_backoff`` / ``backoff_factor`` / ``backoff_max`` / ``on_reconnect``
+        configure the reconnect behaviour documented on :meth:`stream`.
+        """
         for event in self.stream(
             interval=interval,
             max_polls=max_polls,
             max_idle_polls=max_idle_polls,
             sleep=sleep,
+            reconnect_backoff=reconnect_backoff,
+            backoff_factor=backoff_factor,
+            backoff_max=backoff_max,
+            on_reconnect=on_reconnect,
         ):
             if event is not None:  # heartbeat is off here, but stay type-safe
                 emit(event)
