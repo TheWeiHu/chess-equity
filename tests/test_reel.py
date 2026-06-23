@@ -13,6 +13,7 @@ import json
 from chess_equity.broadcast import MoveEvent
 from chess_equity.drama import score_event
 from chess_equity.reel import (
+    _KIND_LABEL,
     build_reel,
     by_kind,
     caption,
@@ -20,6 +21,7 @@ from chess_equity.reel import (
     rank,
     reel_payload,
     render_captions,
+    render_html,
     render_json,
     render_markdown,
 )
@@ -175,3 +177,77 @@ def test_cli_reel_writes_both_artifacts(tmp_path):
     mags = [m["magnitude"] for m in payload["moments"]]
     assert mags == sorted(mags, reverse=True)
     assert md_path.read_text().startswith("# Highlight reel")
+
+
+# --- HTML clip player (task 0184) --------------------------------------------
+
+def test_render_html_is_self_contained_and_lists_moments():
+    reel = build_reel(_ONE_OF_EACH)
+    doc = render_html(reel, title="My reel")
+    # A well-formed, standalone document.
+    assert doc.startswith("<!doctype html>")
+    assert "<title>My reel</title>" in doc
+    assert doc.rstrip().endswith("</html>")
+    # Self-contained: no external deps / CDN / scripts.
+    assert "http://" not in doc and "https://" not in doc
+    assert "<script" not in doc and "src=" not in doc and "<link" not in doc
+    # Every drama kind's caster label/emoji surfaces.
+    for kind in ("clutch", "missed_win", "escape", "scramble"):
+        d = next(x for x in reel if x.kind == kind)
+        emoji, label = _KIND_LABEL[kind]
+        assert label in doc and emoji in doc
+        # The caster caption text is reused verbatim, and the equity swing shown.
+        assert caption(d)["text"] in doc
+    assert "+15 pts" in doc and "-20 pts" in doc  # signed Δequity swings
+
+
+def test_render_html_renders_board_from_fen():
+    reel = build_reel(_ONE_OF_EACH)
+    doc = render_html(reel)
+    # The FEN carries through to the reel and a Unicode board is drawn.
+    assert reel[0].fen is not None
+    assert 'class="board"' in doc
+    assert "♘" in doc  # the knight from the _BASE fixture FEN
+
+
+def test_render_html_empty_reel_is_graceful():
+    doc = render_html([])
+    assert doc.startswith("<!doctype html>")
+    assert "No highlight-worthy moments" in doc
+    assert 'class="moment"' not in doc
+
+
+def test_render_html_escapes_dynamic_text():
+    # A title with HTML metacharacters must be escaped, not injected raw.
+    doc = render_html([], title="<b>x</b> & y")
+    assert "<b>x</b>" not in doc
+    assert "&lt;b&gt;x&lt;/b&gt; &amp; y" in doc
+
+
+def test_cli_reel_writes_html_clip_player(tmp_path):
+    from chess_equity.cli import main
+
+    html_path = tmp_path / "clip.html"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--html", str(html_path)]
+    )
+    assert rc == 0
+    assert html_path.exists()
+    doc = html_path.read_text()
+    assert doc.startswith("<!doctype html>")
+    # Opens offline — nothing fetched from the network.
+    assert "http://" not in doc and "https://" not in doc
+
+
+def test_cli_reel_html_alongside_out_dir(tmp_path):
+    from chess_equity.cli import main
+
+    out = tmp_path / "reel"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--out-dir", str(out), "--html"]
+    )
+    assert rc == 0
+    # With --out-dir and bare --html, reel.html lands next to reel.json/reel.md.
+    assert (out / "reel.json").exists()
+    assert (out / "reel.html").exists()
+    assert (out / "reel.html").read_text().startswith("<!doctype html>")

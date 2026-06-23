@@ -110,6 +110,10 @@ class DramaEvent:
     delta_equity: float
     mover_clock: Optional[float]
     headline: str
+    # Board snapshot (FEN) *after* the move — carried through from the source
+    # ``MoveEvent`` so a post-game reel can render the position. Optional/defaulted
+    # for back-compat with synthetic events that don't supply one.
+    fen: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -188,6 +192,7 @@ def score_event(event: MoveEvent) -> Optional[DramaEvent]:
         delta_equity=delta,
         mover_clock=mover_clock,
         headline=headline,
+        fen=event.fen,
     )
 
 

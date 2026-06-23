@@ -438,6 +438,19 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     events = ingestor.ingest_snapshot(pgn_text)
     reel = reel_mod.build_reel(events, top=args.top)
 
+    # --html PATH writes ONE self-contained HTML clip player (opens offline). It can
+    # stand alone (print to stdout when PATH is "-") or sit alongside --out-dir's
+    # json+md. Either flag may be used on its own.
+    if args.html is not None and args.out_dir is None:
+        html_doc = reel_mod.render_html(reel, title=args.title)
+        if args.html == "-":
+            print(html_doc, end="")
+        else:
+            with open(args.html, "w", encoding="utf-8") as fh:
+                fh.write(html_doc)
+            print(f"wrote {len(reel)} moment(s): {args.html}", file=sys.stderr)
+        return 0
+
     if args.out_dir is None:
         print(reel_mod.render_markdown(reel, title=args.title))
         return 0
@@ -445,11 +458,17 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     os.makedirs(args.out_dir, exist_ok=True)
     json_path = os.path.join(args.out_dir, "reel.json")
     md_path = os.path.join(args.out_dir, "reel.md")
+    written = [json_path, md_path]
     with open(json_path, "w", encoding="utf-8") as fh:
         fh.write(reel_mod.render_json(reel, title=args.title) + "\n")
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write(reel_mod.render_markdown(reel, title=args.title))
-    print(f"wrote {len(reel)} moment(s): {json_path}, {md_path}", file=sys.stderr)
+    if args.html is not None:
+        html_path = args.html if args.html != "-" else os.path.join(args.out_dir, "reel.html")
+        with open(html_path, "w", encoding="utf-8") as fh:
+            fh.write(reel_mod.render_html(reel, title=args.title))
+        written.append(html_path)
+    print(f"wrote {len(reel)} moment(s): {', '.join(written)}", file=sys.stderr)
     return 0
 
 
@@ -1366,6 +1385,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--out-dir",
         default=None,
         help="write reel.json + reel.md here (otherwise print markdown to stdout)",
+    )
+    rl.add_argument(
+        "--html",
+        nargs="?",
+        const="-",
+        default=None,
+        metavar="PATH",
+        help=(
+            "emit a self-contained HTML clip player (no deps/CDN, opens offline) to "
+            "PATH (or stdout if PATH omitted; reel.html in --out-dir if both given)"
+        ),
     )
     rl.add_argument("--title", default="Highlight reel", help="reel title")
     rl.add_argument(
