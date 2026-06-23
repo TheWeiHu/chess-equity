@@ -426,13 +426,25 @@ def _modal_rating(grades: List[MoveGrade]) -> int:
     return max(counts, key=lambda elo: (counts[elo], elo))
 
 
-def _leaderboard_rank_key(s: PlayerScore) -> tuple:
-    # accuracy desc, then mean Δpeer desc, then fewer blunders, then name — deterministic.
+# Leaderboard sort modes (task 0234): which metric is the PRIMARY rank key. Every mode
+# keeps the same deterministic tail (the remaining metrics, then name) so ties always
+# break identically. 'accuracy' is the historical default and unchanged.
+LEADERBOARD_SORTS = ("accuracy", "lead", "blunders")
+
+
+def _leaderboard_rank_key(s: PlayerScore, sort: str = "accuracy") -> tuple:
+    # accuracy desc / lead = mean Δpeer desc / blunders = fewest first; the unused metrics
+    # follow as deterministic tie-breaks, always ending in name.
+    if sort == "lead":
+        return (-s.mean_peer, -s.accuracy, s.blunders, s.name)
+    if sort == "blunders":
+        return (s.blunders, -s.accuracy, -s.mean_peer, s.name)
     return (-s.accuracy, -s.mean_peer, s.blunders, s.name)
 
 
 def round_leaderboard(
     games: List[tuple],
+    sort: str = "accuracy",
 ) -> List[PlayerScore]:
     """Rank every player across a round by pooled move quality.
 
@@ -440,8 +452,12 @@ def round_leaderboard(
     where ``grades`` is that game's :class:`MoveGrade` list. A player's moves are pooled
     across *every* board they appear on (White on one, Black on another all count), keyed
     by player name, then scored with the same per-move grade math the single-game
-    :func:`scoreline` uses. Pure reduction — no model calls. Ranked by accuracy %, then
-    mean Δpeer, then fewer blunders, then name (fully deterministic).
+    :func:`scoreline` uses. Pure reduction — no model calls.
+
+    ``sort`` picks the PRIMARY rank key (one of :data:`LEADERBOARD_SORTS`): ``accuracy``
+    (default) ranks by accuracy %; ``lead`` by mean Δpeer desc (rewarding beating peers
+    over avoiding mistakes); ``blunders`` fewest-first. The remaining metrics, then name,
+    always follow as deterministic tie-breaks.
     """
     by_player: Dict[str, List[MoveGrade]] = {}
     for white_name, black_name, grades in games:
@@ -449,7 +465,7 @@ def round_leaderboard(
             name = white_name if g.mover_white else black_name
             by_player.setdefault(name, []).append(g)
     scores = [_player_score(name, gs) for name, gs in by_player.items()]
-    scores.sort(key=_leaderboard_rank_key)
+    scores.sort(key=lambda s: _leaderboard_rank_key(s, sort))
     return scores
 
 

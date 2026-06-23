@@ -332,7 +332,7 @@ def _run_grade(args: argparse.Namespace) -> int:
 
             # Pool every board's move grades by player and rank the round (task 0207).
             games = _grade_round(model, args.pgn, args.white_elo, args.black_elo)
-            scores = round_leaderboard(games)
+            scores = round_leaderboard(games, sort=getattr(args, "sort", "accuracy"))
             # --json/--csv emit ONLY the machine-readable leaderboard to stdout (task 0214)
             # so it pipes cleanly into broadcast lower-third graphics; --json wins if both.
             if getattr(args, "json", False):
@@ -1616,6 +1616,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="pool a multi-game broadcast PGN and print an accuracy leaderboard ranking "
              "every player (accuracy %%, blunder/mistake counts, mean Δequity) across all "
              "boards; with --summary-json emits per-player rows",
+    )
+    gr.add_argument(
+        "--sort", choices=("accuracy", "lead", "blunders"), default="accuracy",
+        help="with --round, pick the PRIMARY leaderboard key: 'accuracy' (default, "
+             "accuracy %% desc), 'lead' (mean Δpeer desc — rewards beating peers over "
+             "avoiding mistakes), or 'blunders' (fewest first); the other metrics then "
+             "name remain as deterministic tie-breaks",
     )
     gr.add_argument(
         "--summary-json", metavar="OUT",

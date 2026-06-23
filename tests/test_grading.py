@@ -285,6 +285,35 @@ def test_round_leaderboard_is_ranked_deterministically():
     assert keys == sorted(keys)
 
 
+def test_round_leaderboard_sort_modes_pick_the_primary_key():
+    from chess_equity.grading import (
+        LEADERBOARD_SORTS,
+        _leaderboard_rank_key,
+        round_leaderboard,
+    )
+
+    games = _round_games()
+    assert LEADERBOARD_SORTS == ("accuracy", "lead", "blunders")
+    # Every mode sorts by its own rank key — and the same membership, just reordered.
+    base = {s.name for s in round_leaderboard(games)}
+    for sort in LEADERBOARD_SORTS:
+        scores = round_leaderboard(games, sort=sort)
+        assert {s.name for s in scores} == base
+        keys = [_leaderboard_rank_key(s, sort) for s in scores]
+        assert keys == sorted(keys)
+    # 'lead' leads with mean Δpeer desc; 'blunders' leads with fewest blunders first.
+    lead = round_leaderboard(games, sort="lead")
+    assert [s.mean_peer for s in lead] == sorted(
+        (s.mean_peer for s in lead), reverse=True
+    )
+    blun = round_leaderboard(games, sort="blunders")
+    assert [s.blunders for s in blun] == sorted(s.blunders for s in blun)
+    # Default is unchanged (accuracy) and equals an explicit accuracy sort.
+    assert [s.name for s in round_leaderboard(games)] == [
+        s.name for s in round_leaderboard(games, sort="accuracy")
+    ]
+
+
 def test_round_leaderboard_round_trips_to_json_rows():
     from chess_equity.grading import round_leaderboard
 
