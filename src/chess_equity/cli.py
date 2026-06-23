@@ -531,6 +531,20 @@ def _run_validate(args: argparse.Namespace) -> int:
             return 1
     full_rows = list(rows)
 
+    # N-aware shrinkage knob (task 0163): with --shrink-wdl-a-k > 0, swap the wdl-a
+    # predictor for one that blends toward the rating-blind baseline by per-cell weight
+    # n/(n+k), so sparse high-rating cells (the 2000-2399 ECE blowup) fall back to the
+    # baseline. Counts come from the full dataset (the support), computed before any
+    # holdout split. K=0 leaves wdl-a untouched, so the default run is byte-identical.
+    shrink_k = getattr(args, "shrink_wdl_a_k", 0.0) or 0.0
+    if shrink_k > 0 and "wdl-a" in predictors:
+        from chess_equity.validate.shrinkage import make_shrunk_predictor
+
+        predictors["wdl-a"] = make_shrunk_predictor(full_rows, shrink_k)
+        title_shrink = f" [wdl-a shrunk k={shrink_k:g}]"
+    else:
+        title_shrink = ""
+
     # The dataset's own source month, read from its sidecar (task 0127): the recorded
     # truth of which Lichess month --data was drawn from. It is what the leakage guard
     # uses to default --eval-month (so the operator can't silently get it wrong), and is
@@ -568,7 +582,7 @@ def _run_validate(args: argparse.Namespace) -> int:
             )
             return 2
 
-    title = f"Validation report — {args.data}"
+    title = f"Validation report — {args.data}{title_shrink}"
     if data_month:
         title += f" (data month: {data_month})"
 
@@ -746,10 +760,17 @@ def _run_validate(args: argparse.Namespace) -> int:
         # so the band-level calibration claims carry error bars; --bootstrap 0 turns it off.
         # When the report's predictor isn't the baseline itself, thread the baseline in as a
         # second predictor (task 0089) so each band also shows the paired ECE delta vs baseline.
-        cal_baseline = PREDICTORS[baseline_name] if name != baseline_name else None
+        # Use the local `predictors` dict so any --shrink-wdl-a-k override (task 0163) is
+        # reflected here too; fall back to the global registry for a baseline not in --models.
+        cal_predictor = predictors.get(name) or PREDICTORS[name]
+        cal_baseline = (
+            (predictors.get(baseline_name) or PREDICTORS[baseline_name])
+            if name != baseline_name
+            else None
+        )
         bands = band_reliability(
             rows,
-            PREDICTORS[name],
+            cal_predictor,
             baseline=cal_baseline,
             bins=args.ece_bins,
             bootstrap=args.bootstrap,
@@ -1242,6 +1263,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="N",
         help="reliability-bin count for ECE and the calibration tables (default 10); "
         "raise on large dumps / lower on small samples to sensitivity-check the ECE CIs",
+    )
+    val.add_argument(
+        "--shrink-wdl-a-k",
+        type=float,
+        default=0.0,
+        metavar="K",
+        help="n-aware shrinkage of wdl-a toward the rating-blind baseline (task 0163): "
+        "blend each prediction toward baseline by per-cell weight n/(n+K), so sparse "
+        "high-rating cells (where wdl-a over-predicts and the 2000-2399 ECE blows up) "
+        "fall back to the baseline while well-populated cells are unchanged. K=0 (the "
+        "default) is a no-op, so committed numbers don't move unless you opt in",
     )
     val.add_argument(
         "--eval-month",
