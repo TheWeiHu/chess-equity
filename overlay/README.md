@@ -46,6 +46,7 @@ background is transparent, so only the bar composites over your stream.
 | --- | --- | --- |
 | `src`    | `./mock-game.json` | SSE endpoint, `ws[s]://` WebSocket, or a `.json` replay file |
 | `layout` | `horizontal` | `horizontal` (names flank a wide bar) or `vertical` (classic eval-bar) |
+| `pov`    | `white` | whose point of view the bar reads from — see [Point of view](#point-of-view-pov) below |
 | `theme`  | `dark` | `dark` or `light` label text |
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
@@ -61,6 +62,28 @@ background is transparent, so only the bar composites over your stream.
 
 Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
 Caster setup: `http://localhost:8777/?caster=1&cpbar=1`
+
+#### Point of view (`pov`)
+
+The bar reports practical win chances. `?pov=` chooses *whose* chances the bar and
+its readout speak for. The underlying number never changes — only how it's framed:
+
+| `pov` | What the bar shows | How to read it |
+| --- | --- | --- |
+| `white` *(default)* | White's win-equity, always | the fill is **White's** share — left/up = White ahead, exactly like a classic eval bar. Never flips mid-game. |
+| `stm` | White's win-equity (bar unchanged) **plus** a "*X to move · NN%*" readout pill | the bar stays White-honest so it never jumps when the turn changes; the pill reframes the *same* number for **whoever is on move**. |
+| `stm-bar` | the **whole bar** flips to the side-to-move's view (board-flip style) | the fill itself adopts the **mover's** POV — left/up = *the player to move* is ahead. The readout pill names that player. Best when you want the bar to "face" the player whose clock is running. |
+
+`stm` and `stm-bar` use the same side-to-move math; the only difference is whether the
+flip drives just the readout (`stm`) or the bar fill too (`stm-bar`).
+
+#### Bar model badge
+
+When the feed's `game` event carries a `model` field (e.g. `"Maia-2"`, task 0222), the
+overlay shows a small static **badge** naming the model that drives the bar — so a viewer
+can tell the bar is a *human win-probability* model, **not** Stockfish's centipawn eval.
+No `model` field → no badge. This is a feed property, not a query param (the ingestor
+stamps it; see `chess-equity broadcast --model …`).
 
 ### Streamer quickstart — a live Lichess broadcast round → OBS
 
@@ -122,7 +145,11 @@ overlay.
 
 ## What it shows
 
-- The **equity bar** (0–100% practical), both names + ratings.
+- The **equity bar** (0–100% practical), both names + ratings, framed by the chosen
+  [point of view](#point-of-view-pov) (`?pov=white`/`stm`/`stm-bar`).
+- A **model badge** naming the bar's model (e.g. *Maia-2*) when the feed stamps a
+  `model` field — so viewers know it's a human win-probability model, not Stockfish
+  (task 0222; hidden when the feed sends no `model`).
 - Both **clocks** (turn red under 10s — the time pressure that drives the wedge).
 - The last move's **Δequity grade** pill (task 0008) — flares green when a player
   finds better than their level expects, red on a blunder.

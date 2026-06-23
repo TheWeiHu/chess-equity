@@ -135,6 +135,7 @@ Append these to the OBS URL (all optional). Full table in
 | --- | --- | --- |
 | `src` | `./mock-game.json` | feed: `/sse`, a `ws[s]://` WebSocket, or a `.json` replay file |
 | `layout` | `horizontal` | `horizontal` (names flank a wide bar) or `vertical` (classic eval-bar) |
+| `pov` | `white` | whose POV the bar reads: `white` (classic, never flips), `stm` (adds a side-to-move readout pill, bar unchanged), or `stm-bar` (the whole bar flips to the player on move) — [details](../overlay/README.md#point-of-view-pov) |
 | `theme` | `dark` | `dark` or `light` label text |
 | `cp` | `1` | show the dashed **centipawn ghost tick** (`0` to hide) |
 | `cpbar` | `0` | render centipawn as a full greyed second bar instead of a tick |
@@ -149,6 +150,11 @@ Examples:
 http://localhost:8777/?src=/sse&layout=vertical&cp=0
 http://localhost:8777/?src=/sse&caster=1&cpbar=1
 ```
+
+> **Model badge.** The bar carries a small badge naming the model behind it (e.g.
+> *Maia-2*) so viewers know it's a human win-probability model, not Stockfish. It's not
+> a query param — the ingestor stamps it from `--model`, so `broadcast --model maia2`
+> shows a *Maia-2* badge. See [the badge note](../overlay/README.md#bar-model-badge).
 
 ---
 
