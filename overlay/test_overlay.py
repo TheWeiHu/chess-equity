@@ -173,6 +173,87 @@ def test_default_threshold_lights_the_cue_on_the_fixture():
     assert lit, "fixture should drive the time-pressure cue at the default threshold"
 
 
+class StaleTracker:
+    """Mirror of feed.js ``makeStaleTracker`` — the pure stale-state machine the
+    overlay uses to show a STALE/reconnecting state when the live feed drops.
+
+    No real timers: the caller passes ``now`` (ms). Each method returns a
+    transition string only on the edge ("stale"/"recovered"), else None, so the
+    overlay fires its UI side-effect exactly once per transition.
+    """
+
+    def __init__(self, stale_ms=10000):
+        self.stale_ms = stale_ms or 10000
+        self.last_event_at = None
+        self.stale = False
+
+    def event(self, now):
+        self.last_event_at = now
+        if self.stale:
+            self.stale = False
+            return "recovered"
+        return None
+
+    def fail(self):
+        if not self.stale:
+            self.stale = True
+            return "stale"
+        return None
+
+    def poll(self, now):
+        if self.stale or self.last_event_at is None:
+            return None
+        if now - self.last_event_at >= self.stale_ms:
+            self.stale = True
+            return "stale"
+        return None
+
+    def is_stale(self):
+        return self.stale
+
+
+def test_stale_tracker_enters_stale_on_silence():
+    """No event for >= staleMs -> the bar goes STALE (silence-driven)."""
+    t = StaleTracker(stale_ms=10000)
+    assert t.event(0) is None and t.is_stale() is False
+    # Polling before the threshold keeps it live...
+    assert t.poll(5000) is None
+    assert t.is_stale() is False
+    # ...and crossing the threshold flips it exactly once.
+    assert t.poll(10000) == "stale"
+    assert t.is_stale() is True
+    assert t.poll(20000) is None, "stale transition should fire only on the edge"
+
+
+def test_stale_tracker_enters_stale_on_transport_error():
+    """An EventSource/WebSocket error forces STALE immediately, before any timeout."""
+    t = StaleTracker(stale_ms=10000)
+    t.event(0)
+    assert t.fail() == "stale"
+    assert t.is_stale() is True
+    assert t.fail() is None, "already-stale fail must not re-fire"
+
+
+def test_stale_tracker_recovers_on_next_event():
+    """The next event after going stale clears the state exactly once (recover)."""
+    t = StaleTracker(stale_ms=10000)
+    t.event(0)
+    assert t.poll(10000) == "stale"
+    assert t.is_stale() is True
+    # Next event recovers...
+    assert t.event(12000) == "recovered"
+    assert t.is_stale() is False
+    # ...and a normal event while live reports no transition.
+    assert t.event(13000) is None
+
+
+def test_stale_tracker_no_op_before_first_event():
+    """Polling before any event ever arrives must not declare a frozen-from-birth feed."""
+    t = StaleTracker(stale_ms=10000)
+    assert t.poll(999999) is None
+    assert t.is_stale() is False
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

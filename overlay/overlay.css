@@ -226,4 +226,36 @@ html, body {
   to   { transform: translateX(-50%) scale(1);   opacity: 1; }
 }
 
+/* Stale-feed state (task 0178): the live feed dropped. Dim the live data so a
+   frozen bar can't be mistaken for a current one, and surface a small
+   "reconnecting" marker over the bar. Cleared automatically on the next event.
+   The marker itself stays full-opacity so it reads against the dimmed bar. */
+.feed-stale .bar-fill-white,
+.feed-stale .bar-fill-black,
+.feed-stale .equity-readout,
+.feed-stale .cp-ghost,
+.feed-stale .player {
+  opacity: 0.35;
+  transition: opacity 0.3s ease;
+}
+.stale-marker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: #2a1f02;
+  background: #facc15;                /* amber: attention, not alarm */
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  animation: stalepulse 1.4s ease-in-out infinite;
+  z-index: 2;
+}
+.stale-marker[hidden] { display: none; }
+@keyframes stalepulse { 50% { opacity: 0.55; } }
+
 .theme-light .player { color: #111; text-shadow: 0 1px 2px rgba(255,255,255,0.6); }
