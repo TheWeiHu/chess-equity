@@ -395,6 +395,33 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         print(f"wrote {rows} move rows to {args.ledger}", file=sys.stderr)
         return 0
 
+    # --captions-vtt: replay a finished local PGN into a timestamped WebVTT subtitle
+    # track (one cue per graded caster line, task 0211). Like --ledger, a finite
+    # snapshot export, not a live stream, so it requires --pgn and short-circuits.
+    if getattr(args, "captions_vtt", None) is not None:
+        if not args.pgn:
+            print("# broadcast --captions-vtt requires --pgn (no live feed)", file=sys.stderr)
+            return 2
+        from chess_equity.broadcast import build_captions_vtt
+
+        ingestor = BroadcastIngestor(
+            _build_broadcast_feed(args),
+            model,
+            white_elo=args.white_elo,
+            black_elo=args.black_elo,
+            clock_aware=args.clock_aware,
+            engine=cp_engine,
+            select=selector,
+        )
+        with open(args.pgn, encoding="utf-8") as fh:
+            events = ingestor.ingest_snapshot(fh.read())
+        vtt = build_captions_vtt(events)
+        with open(args.captions_vtt, "w", encoding="utf-8") as fh:
+            fh.write(vtt)
+        cues = vtt.count(" --> ")
+        print(f"wrote {cues} caption cue(s) to {args.captions_vtt}", file=sys.stderr)
+        return 0
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -1507,6 +1534,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="print one human caster sentence per graded move (TTS/chat-ready) instead "
         "of JSON Lines — composed from the move grade, practical swing and mover "
         "rating, with the drama headline appended on a real swing (task 0190)",
+    )
+    bc.add_argument(
+        "--captions-vtt",
+        metavar="OUT",
+        default=None,
+        help="replay a local --pgn and write the per-move caster captions (--captions) "
+        "as a timestamped WebVTT subtitle track to OUT — one cue per graded move, keyed "
+        "by the game's [%%clk] (cue starts at the elapsed game time the move was made; "
+        "clock-less PGNs fall back to even move-index spacing) so the caster line "
+        "becomes a real caption/TTS track for the recorded stream (task 0211). Requires "
+        "--pgn (no live feed).",
     )
     add_profile_args(bc)
     add_model_arg(bc)

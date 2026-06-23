@@ -263,6 +263,82 @@ def write_ledger(events: "Iterable[MoveEvent]", fh: "TextIO") -> int:
     return rows
 
 
+# --------------------------------------------------------------------------- #
+# WebVTT caption track (task 0211)
+# --------------------------------------------------------------------------- #
+#
+# ``broadcast --captions`` prints the per-move caster sentence to stdout (task 0190);
+# this turns that same sentence stream into a *timestamped* WebVTT subtitle track so
+# the caster line becomes a real caption/TTS track for the recorded stream. One cue per
+# graded move, keyed by the game's own clock: each cue starts at the elapsed game time
+# the move was played (derived from the [%clk] tags), so the subtitles line up with a
+# screen recording paced by the players' clocks. When a move carries no clock the cue
+# falls back to a fixed dwell, so a clock-less PGN still produces sensible move-index
+# spacing. Reuses the reel's WebVTT timestamp/escape helpers (task 0205) so both
+# exporters speak the same cue dialect.
+
+# Fixed per-move dwell (seconds) used when a move carries no [%clk] tag (so a clock-less
+# PGN degrades to plain move-index spacing) and for the trailing cue's hold time.
+CAPTION_CUE_SECONDS = 3.0
+
+
+def build_captions_vtt(
+    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+) -> str:
+    """Render a graded game's caster captions as a timestamped WebVTT track.
+
+    Each graded move (the ones :func:`live_caption` voices) becomes one cue whose text
+    is that caster sentence and whose start is the elapsed game time the move was made.
+    Elapsed time is accumulated from the per-side [%clk] deltas — the mover's think time
+    is ``previous_remaining - current_remaining`` (clamped at 0; clock increments are
+    folded into this net change). A move with no clock (or the first move of each side,
+    which has no prior reading) advances by ``cue_seconds`` instead, so a clock-less PGN
+    degrades to even move-index spacing. Cue starts are forced strictly increasing and
+    each cue ends where the next begins (the last holds for ``cue_seconds``), keeping the
+    output valid even when two clock readings collide.
+    """
+    from chess_equity.reel import _vtt_escape, _vtt_timestamp
+
+    prev_white: Optional[float] = None
+    prev_black: Optional[float] = None
+    elapsed = 0.0
+    starts: List[float] = []
+    texts: List[str] = []
+    last_start = -1.0
+    min_step = 0.001
+    for event in events:
+        mover_white = not event.white_to_move
+        if mover_white:
+            cur = event.white_clock
+            dt = max(0.0, prev_white - cur) if (cur is not None and prev_white is not None) else cue_seconds
+            if cur is not None:
+                prev_white = cur
+        else:
+            cur = event.black_clock
+            dt = max(0.0, prev_black - cur) if (cur is not None and prev_black is not None) else cue_seconds
+            if cur is not None:
+                prev_black = cur
+        elapsed += dt
+        text = live_caption(event)
+        if text is None:
+            continue
+        # Force strictly increasing starts so identical/empty clock deltas never yield
+        # a zero-length or out-of-order cue.
+        start = max(elapsed, last_start + min_step)
+        last_start = start
+        starts.append(start)
+        texts.append(text)
+
+    lines = ["WEBVTT", ""]
+    for i, (start, text) in enumerate(zip(starts, texts), start=1):
+        end = starts[i] if i < len(starts) else start + cue_seconds
+        lines.append(str(i))
+        lines.append(f"{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}")
+        lines.append(_vtt_escape(text))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 @dataclass(frozen=True)
 class GameEvent:
     """One-time game metadata in the overlay's ``"game"`` schema (task 0047).
