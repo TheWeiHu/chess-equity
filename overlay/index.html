@@ -69,6 +69,16 @@
         <!-- Stale-feed marker (task 0178): shown when the live feed drops; the bar
              dims behind it so a frozen bar can't be mistaken for a live one. -->
         <div class="stale-marker" data-stale title="live feed dropped — attempting to reconnect" hidden>⚠ reconnecting…</div>
+
+        <!-- Game-over card (task 0213): shown over the bar when the FOLLOWED board's
+             game ends, so a finished game reads as finished instead of a frozen bar.
+             Result token + winner headline + the equity the bar froze on. Non-followed
+             boards never card (they just route/auto-advance). -->
+        <div class="gameover-card" data-gameover role="status" hidden>
+          <span class="gameover-result" data-gameover-result></span>
+          <span class="gameover-headline" data-gameover-headline></span>
+          <span class="gameover-equity" data-gameover-equity></span>
+        </div>
       </div>
 
       <!-- Classic centipawn bar (?cpbar=1) — the engine's view, for contrast. -->

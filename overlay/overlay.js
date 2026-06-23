@@ -114,6 +114,26 @@
     return "human edge · " + who + " +" + pts + " vs engine";
   }
 
+  // Game-over card content (task 0213): when a followed board's game ends the bar
+  // would otherwise just freeze on the final position with no signal it's over. Map a
+  // terminal `result` ("1-0" / "0-1" / "1/2-1/2") + the board's roster `players` to a
+  // clean end-card payload: the result token, the winner's name, and a headline. Draw
+  // (or any unknown result) has no winner. Pure (no DOM) so it's unit-testable; the
+  // final equity is added by the renderer, which knows the bar's last value.
+  function gameOverCard(result, players) {
+    var pl = players || {};
+    var white = (pl.white && pl.white.name) || "White";
+    var black = (pl.black && pl.black.name) || "Black";
+    var winnerSide = result === "1-0" ? "white" : result === "0-1" ? "black" : null;
+    var winnerName = winnerSide === "white" ? white : winnerSide === "black" ? black : null;
+    var headline = winnerName
+      ? winnerName + " wins"
+      : result === "1/2-1/2"
+      ? "Draw"
+      : "Game over";
+    return { result: result, winnerSide: winnerSide, winnerName: winnerName, headline: headline };
+  }
+
   // Momentum cue (task 0208): the DIRECTION and SIZE of the last equity swing, so a
   // viewer can see at a glance who just gained — distinct from dramaSwing (which only
   // FLARES on big engine-blind swings in caster mode) and humanEdge (a LEVEL gap vs the
@@ -272,6 +292,15 @@
       selected: function () {
         return selected;
       },
+      // Roster players for a board index (or null) — used by the game-over card (0213)
+      // to name the winner. A single-game feed has no roster, so this returns null and
+      // the card falls back to the on-screen names.
+      playersFor: function (idx) {
+        for (var i = 0; i < boards.length; i++) {
+          if (boards[i].index === idx) return boards[i].players || null;
+        }
+        return null;
+      },
       autofollow: function () {
         return autofollow && !pinned;
       },
@@ -427,6 +456,7 @@
 
   function applyPosition(evt, cfg) {
     const eq = clamp01(evt.equity);
+    lastBarEquity = eq; // remembered for the game-over card (task 0213)
 
     // Bar widths.
     const whiteEl = q("[data-bar-white]");
@@ -612,6 +642,9 @@
   // board to follow, and subsequent events for that board flow to the bar.
   let boardRouter = null;
   let boardSelectWired = false;
+  // The last White-POV equity drawn on the bar (task 0213) — the value the bar would
+  // freeze on at game end, shown on the game-over card. Defaults to even.
+  let lastBarEquity = 0.5;
 
   function boardLabel(b) {
     const pl = b.players || {};
@@ -650,14 +683,55 @@
   function dispatch(evt, cfg) {
     if (!evt || !evt.type) return;
     if (boardRouter) {
+      // A `result` for the FOLLOWED board (task 0213): capture the focus BEFORE learn(),
+      // which auto-advances off the finished board, so we can tell the end-card belongs
+      // to the board we were watching. Non-followed boards just route (no card).
+      var followedBefore = boardRouter.selected();
+      if (evt.type === "result") {
+        var forFollowed =
+          typeof evt.board !== "number" || evt.board === followedBefore;
+        if (forFollowed) {
+          var players = boardRouter.playersFor(
+            typeof evt.board === "number" ? evt.board : followedBefore
+          );
+          renderGameOverCard(gameOverCard(evt.result, players));
+        }
+      }
       boardRouter.learn(evt);
       boardRouter.note(evt); // auto-director may steal focus to the most-dramatic board
       renderBoardSelector(boardRouter);
-      // Drop events for boards we aren't following (and "boards" routing metadata).
+      // Drop events for boards we aren't following (and "boards"/"result" metadata).
       if (!boardRouter.accepts(evt)) return;
+    } else if (evt.type === "result") {
+      // No router (degenerate single-board wiring): still card the end.
+      renderGameOverCard(gameOverCard(evt.result, null));
+      return;
     }
+    // Any live position clears a stale game-over card (focus moved to a live board).
+    if (evt.type === "position") clearGameOverCard();
     if (evt.type === "game") applyGame(evt, cfg);
     else if (evt.type === "position") applyPosition(evt, cfg);
+  }
+
+  // Game-over card (task 0213): overlay the bar with the final result + winner + the
+  // bar's last equity, so a finished game reads as finished instead of a frozen bar.
+  // `card` is the pure gameOverCard() payload; the equity comes from what's on the bar.
+  function renderGameOverCard(card) {
+    var el = q("[data-gameover]");
+    if (!el || !card) return;
+    setText("[data-gameover-headline]", card.headline);
+    setText("[data-gameover-result]", card.result || "");
+    var eqEl = q("[data-gameover-equity]");
+    if (eqEl) {
+      // The followed board's last shown White-equity (the value the bar froze on).
+      eqEl.textContent = "final equity " + pct(lastBarEquity, "white") + " White";
+    }
+    el.hidden = false;
+  }
+
+  function clearGameOverCard() {
+    var el = q("[data-gameover]");
+    if (el) el.hidden = true;
   }
 
   // Stale-feed UI (task 0178): when the live feed drops, the bar would otherwise
@@ -735,6 +809,7 @@
     momentum: momentum,
     makeMomentumTracker: makeMomentumTracker,
     makeBoardRouter: makeBoardRouter,
+    gameOverCard: gameOverCard,
   };
 
   if (typeof document !== "undefined") {

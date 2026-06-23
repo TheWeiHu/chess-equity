@@ -298,6 +298,40 @@ html, body {
 .stale-marker[hidden] { display: none; }
 @keyframes stalepulse { 50% { opacity: 0.55; } }
 
+/* Game-over card (task 0213): when the FOLLOWED board's game ends, a clean end card
+   centered over the bar so the final position reads as finished, not as a frozen live
+   bar. One pill: the result token, the winner headline, and the equity the bar froze
+   on. Cleared the moment a live position arrives (focus moved to another board). */
+.gameover-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  white-space: nowrap;
+  color: #f3f4f6;
+  background: rgba(10, 12, 18, 0.9);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+  z-index: 3;                          /* above the stale marker and badges */
+}
+.gameover-card[hidden] { display: none; }
+.gameover-result {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: #fbbf24;                      /* gold: the result token stands out */
+}
+.gameover-headline { font-size: 13px; }
+.gameover-equity {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
 /* Legend key (task 0201): an optional one-line key a streamer toggles on (?legend=1)
    so a first-time viewer can read the bar. Anchored to the bottom of the overlay,
    inside the reserved badge room (--badge-reserve) so it never clips at 1080p; its
