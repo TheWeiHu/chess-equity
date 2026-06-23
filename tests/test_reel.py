@@ -28,6 +28,7 @@ from chess_equity.reel import (
     render_html,
     render_json,
     render_markdown,
+    social_caption,
 )
 
 # Neutral base event (White just moved; quiet). Mirror test_drama's fixture.
@@ -107,6 +108,34 @@ def test_render_json_payload_shape():
     # Moments keep the ranked order in the serialised payload.
     assert [m["kind"] for m in payload["moments"]] == [d.kind for d in reel]
     assert reel_payload(reel)["count"] == len(reel)
+
+
+def test_each_moment_carries_a_social_caption():
+    # Acceptance: every reel.json moment carries a 'caption' string.
+    payload = json.loads(render_json(build_reel(_ONE_OF_EACH)))
+    for m in payload["moments"]:
+        assert isinstance(m["caption"], str) and m["caption"]
+
+
+def test_social_caption_single_game_names_side_move_grade_and_swing():
+    # A clutch: White finds the move, grade label + signed practical-equity swing.
+    d = score_event(ev(ply=2, san="Qxf7#", equity=65.0, delta_equity=15.0))
+    cap = social_caption(d)
+    assert cap == "White finds Qxf7#, clutch (+15 vs peers)"
+    # No board prefix and no player name without a round recap's sources map.
+    assert not cap.startswith("Board ")
+
+
+def test_social_caption_missed_win_uses_signed_negative_swing():
+    d = score_event(ev(ply=4, san="Rd1", equity=65.0, delta_equity=-20.0))
+    assert social_caption(d) == "White lets a win slip on Rd1, missed win (-20 vs peers)"
+
+
+def test_html_card_shows_the_social_caption():
+    reel = build_reel(_ONE_OF_EACH)
+    doc = render_html(reel)
+    assert 'class="share"' in doc
+    assert social_caption(reel[0]) in doc
 
 
 def test_render_markdown_lists_every_kind_and_top_section():
