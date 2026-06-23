@@ -114,6 +114,58 @@
     return h > 0 ? h + ":" + String(m).padStart(2, "0") + ":" + ss : m + ":" + ss;
   }
 
+  // Live board router (task 0185): a multi-game broadcast round feeds every board's
+  // events down one stream. The router learns the roster (from a "boards" roster event
+  // or per-game `board` indices) and decides which events reach the overlay so a caster
+  // can flip boards live. Pure + DOM-free so it's unit-testable: `learn(evt)` updates the
+  // roster, `select(idx)` chooses the followed board, `accepts(evt)` gates rendering.
+  //
+  // Default = single-board behavior: a feed whose events carry no `board` (a single game)
+  // always `accepts`, so nothing changes for the common case. The first board seen in a
+  // multi-game round is auto-selected so the bar shows something before the caster picks.
+  function makeBoardRouter() {
+    var boards = []; // [{index, players}], in board order
+    var selected = null; // followed board index; null = none chosen yet
+
+    function has(idx) {
+      for (var i = 0; i < boards.length; i++) if (boards[i].index === idx) return true;
+      return false;
+    }
+
+    return {
+      boards: function () {
+        return boards;
+      },
+      selected: function () {
+        return selected;
+      },
+      select: function (idx) {
+        selected = idx;
+      },
+      // Update the roster from a routing event. A "boards" event carries the full
+      // roster; a "game" event with a numeric `board` adds one board. Auto-selects the
+      // first board so a fresh overlay isn't blank before the caster chooses.
+      learn: function (evt) {
+        if (!evt) return;
+        if (evt.type === "boards" && Array.isArray(evt.boards)) {
+          boards = evt.boards.slice();
+        } else if (evt.type === "game" && typeof evt.board === "number") {
+          if (!has(evt.board)) boards.push({ index: evt.board, players: evt.players });
+        }
+        if (selected === null && boards.length) selected = boards[0].index;
+      },
+      // Should this event be rendered, given the current selection? "boards" events are
+      // routing metadata (never rendered). Events with no `board` (single-game feed)
+      // always pass. When a board is selected, only that board's events pass.
+      accepts: function (evt) {
+        if (!evt || evt.type === "boards") return false;
+        if (typeof evt.board !== "number") return true;
+        if (selected === null) return true;
+        return evt.board === selected;
+      },
+    };
+  }
+
   // ---- DOM wiring --------------------------------------------------------
 
   function params() {
@@ -301,8 +353,54 @@
     }, 4000);
   }
 
+  // Live board selector for a multi-game round (task 0185). Hidden for a single board
+  // (<= 1 known), revealed and populated otherwise; changing it tells the router which
+  // board to follow, and subsequent events for that board flow to the bar.
+  let boardRouter = null;
+  let boardSelectWired = false;
+
+  function boardLabel(b) {
+    const pl = b.players || {};
+    const w = (pl.white && pl.white.name) || "White";
+    const bl = (pl.black && pl.black.name) || "Black";
+    return "Board " + (b.index + 1) + ": " + w + " – " + bl;
+  }
+
+  function renderBoardSelector(router) {
+    const sel = q("[data-board-select]");
+    if (!sel) return;
+    const boards = router.boards();
+    if (boards.length <= 1) {
+      sel.hidden = true; // single board → no selector (default behavior preserved)
+      return;
+    }
+    if (sel.options.length !== boards.length) {
+      sel.innerHTML = "";
+      boards.forEach(function (b) {
+        const opt = document.createElement("option");
+        opt.value = String(b.index);
+        opt.textContent = boardLabel(b);
+        sel.appendChild(opt);
+      });
+    }
+    sel.hidden = false;
+    if (router.selected() != null) sel.value = String(router.selected());
+    if (!boardSelectWired) {
+      boardSelectWired = true;
+      sel.addEventListener("change", function () {
+        router.select(parseInt(sel.value, 10));
+      });
+    }
+  }
+
   function dispatch(evt, cfg) {
     if (!evt || !evt.type) return;
+    if (boardRouter) {
+      boardRouter.learn(evt);
+      renderBoardSelector(boardRouter);
+      // Drop events for boards we aren't following (and "boards" routing metadata).
+      if (!boardRouter.accepts(evt)) return;
+    }
     if (evt.type === "game") applyGame(evt, cfg);
     else if (evt.type === "position") applyPosition(evt, cfg);
   }
@@ -319,6 +417,7 @@
 
   function start() {
     const cfg = params();
+    boardRouter = makeBoardRouter();
     const root = q("#overlay");
     if (root) {
       root.classList.remove("layout-horizontal", "layout-vertical");
@@ -364,6 +463,7 @@
     dramaHeadline: dramaHeadline,
     humanEdge: humanEdge,
     edgeLabel: edgeLabel,
+    makeBoardRouter: makeBoardRouter,
   };
 
   if (typeof document !== "undefined") {

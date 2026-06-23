@@ -173,12 +173,17 @@ class GameEvent:
     black_name: Optional[str]
     white_elo: Optional[int]
     black_elo: Optional[int]
+    # 0-based board index within a multi-game round (task 0185). ``None`` for a
+    # single-game feed; set to the game's position in the round PGN otherwise, so the
+    # overlay can build a board selector and route each event to the chosen board.
+    board: Optional[int] = None
 
     def to_overlay(self) -> Dict[str, object]:
         """Render as the overlay's ``{type: "game", players: {...}}`` event (see
         overlay/README.md). ``name``/``rating`` may be ``null``; overlay.js falls back
-        to "White"/"Black" and a blank rating."""
-        return {
+        to "White"/"Black" and a blank rating. ``board`` is the 0-based index in a
+        multi-game round (omitted when single-game)."""
+        event: Dict[str, object] = {
             "type": "game",
             "game_id": self.game_id,
             "players": {
@@ -186,6 +191,9 @@ class GameEvent:
                 "black": {"name": self.black_name, "rating": self.black_elo},
             },
         }
+        if self.board is not None:
+            event["board"] = self.board
+        return event
 
 
 # --------------------------------------------------------------------------- #
@@ -216,11 +224,14 @@ def game_event(
     *,
     white_elo: Optional[int] = None,
     black_elo: Optional[int] = None,
+    board: Optional[int] = None,
 ) -> GameEvent:
     """Build the one-time :class:`GameEvent` for a game from its PGN headers.
 
     An explicit ``white_elo``/``black_elo`` (the ingestor's override) wins over the
     header so the announced ratings match the ones the trackers actually evaluate at.
+    ``board`` is the 0-based index of this game in a multi-game round (task 0185), or
+    ``None`` for a single-game feed.
     """
     return GameEvent(
         game_id=game_id,
@@ -228,6 +239,7 @@ def game_event(
         black_name=_player_name(headers, "Black"),
         white_elo=white_elo if white_elo is not None else _parse_elo(headers, "WhiteElo"),
         black_elo=black_elo if black_elo is not None else _parse_elo(headers, "BlackElo"),
+        board=board,
     )
 
 
@@ -732,7 +744,12 @@ class BroadcastIngestor:
     def ingest_snapshot(self, pgn_text: str) -> List[MoveEvent]:
         """Process one PGN snapshot (possibly many games) into new events."""
         events: List[MoveEvent] = []
-        for index, game_pgn in enumerate(split_games(pgn_text)):
+        games = list(split_games(pgn_text))
+        # A multi-board round (>1 game in the snapshot) tags each game with its 0-based
+        # board index so the overlay can offer a live board selector (task 0185); a
+        # single-game feed leaves board=None and the overlay shows no selector.
+        multi_board = len(games) > 1
+        for index, game_pgn in enumerate(games):
             headers = chess.pgn.read_headers(io.StringIO(game_pgn))
             if headers is None:
                 continue
@@ -745,7 +762,11 @@ class BroadcastIngestor:
                 if self.on_game is not None:
                     self.on_game(
                         game_event(
-                            headers, gid, white_elo=self.white_elo, black_elo=self.black_elo
+                            headers,
+                            gid,
+                            white_elo=self.white_elo,
+                            black_elo=self.black_elo,
+                            board=index if multi_board else None,
                         )
                     )
             new = self._tracker_for(gid).ingest(game_pgn)
@@ -912,14 +933,43 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
     poll yields the :data:`HEARTBEAT` sentinel instead of a ``position`` dict.
     """
     queued: List[Dict[str, object]] = []
-    ingestor.on_game = lambda game: queued.append(game.to_overlay())
+    # Board roster for the overlay's live board selector (task 0185). As each game of a
+    # multi-game round is announced we add it to the roster and re-emit a single
+    # ``boards`` event listing every known board (index + players), so the overlay can
+    # render/refresh its selector; ``board_of`` lets us stamp the board index onto each
+    # game's position events so the overlay can route them to the chosen board. A
+    # single-game feed never carries a board index, so no roster/selector appears.
+    roster: List[Dict[str, object]] = []
+    board_of: Dict[str, int] = {}
+
+    def on_game(game: "GameEvent") -> None:
+        ev = game.to_overlay()
+        if game.board is not None:
+            board_of[game.game_id] = game.board
+            roster.append(
+                {
+                    "index": game.board,
+                    "game_id": game.game_id,
+                    "players": ev["players"],
+                }
+            )
+            # Announce the full roster (in board order — games appear in index order in
+            # the round PGN) before this board's game event.
+            queued.append({"type": "boards", "boards": list(roster)})
+        queued.append(ev)
+
+    ingestor.on_game = on_game
     for move_event in ingestor.stream(**stream_kwargs):
         if move_event is None:  # idle-poll heartbeat tick from stream()
             yield HEARTBEAT
             continue
-        while queued:  # game announcements fire during the poll, before their moves
+        while queued:  # game/boards announcements fire during the poll, before their moves
             yield queued.pop(0)
-        yield move_event.to_overlay_event()
+        event = move_event.to_overlay_event()
+        board = board_of.get(move_event.game_id)
+        if board is not None:
+            event["board"] = board
+        yield event
     while queued:
         yield queued.pop(0)
 

@@ -148,6 +148,7 @@ values are **seconds remaining**.
 {
   "type": "game",
   "format": "bullet",                       // optional label
+  "board": 0,                               // optional — 0-based board index in a multi-game round (task 0185)
   "players": {
     "white": { "name": "Carlsen", "rating": 2839 },
     "black": { "name": "Nakamura", "rating": 2802 }
@@ -158,6 +159,7 @@ values are **seconds remaining**.
 {
   "type": "position",
   "ply": 44,
+  "board": 0,                               // optional — board index (multi-game round); omitted for a single game
   "move": { "san": "Rxd5??" },              // optional, for display
   "equity": 0.88,                           // REQUIRED — White-POV practical win chance 0..1
   "cp": 60,                                 // optional — classic centipawn eval (White POV)
@@ -167,10 +169,24 @@ values are **seconds remaining**.
   "drama": { "kind": "scramble", "magnitude": 0.55,    // optional — caster-mode drama (task 0020)
              "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" }
 }
+
+// board roster — only for a multi-game broadcast round (task 0185). Emitted (and
+// re-emitted as boards appear) so the overlay can render a live board selector. Pure
+// routing metadata: never rendered on the bar. A single-game feed never sends one.
+{
+  "type": "boards",
+  "boards": [
+    { "index": 0, "players": { "white": { "name": "Carlsen" }, "black": { "name": "Nakamura" } } },
+    { "index": 1, "players": { "white": { "name": "Nepo" }, "black": { "name": "Ding" } } }
+  ]
+}
 ```
 
 Only `type` and (for positions) `equity` are required; everything else degrades
-gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). The
+gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). In a
+multi-game round, events carry a `board` index and the feed sends a `boards` roster so
+the overlay shows a selector; the chosen board's events flow to the bar (default: when
+only one board exists, no selector appears and every event renders). The
 optional `drama` payload mirrors `chess_equity.drama.DramaEvent` — when present it
 supplies the caster-mode flare's headline; otherwise caster mode derives a flare
 from the equity swing itself, so it works on any feed.

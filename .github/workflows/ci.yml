@@ -34,3 +34,7 @@ jobs:
           node-version: "20"
       - name: Run web JS tests
         run: node web/test_live.js
+      # The overlay's live board router (overlay/overlay.js) is gated by a dependency-free
+      # node test: selecting a board routes only that board's events (task 0185).
+      - name: Run overlay JS tests
+        run: node overlay/test_router.test.js
