@@ -101,6 +101,61 @@ check("single-game feed (no board field) always routes — default behavior", ()
   assert.ok(r.accepts(pos), "single-game position events always route");
 });
 
+// ---- auto-director (task 0188): drama-driven autofollow ----------------------
+// Events carry a server drama payload (broadcast.to_overlay_event -> drama.magnitude,
+// 0..1). With autofollow on, the router steals focus to the most-dramatic board, held
+// by a focus lock so noise can't thrash it; a manual select pins and overrides.
+function pos(board, mag) {
+  return { type: "position", board: board, ply: 10, equity: 0.5, cp: 0, drama: { magnitude: mag } };
+}
+
+check("(a) a higher-drama board event steals focus under autofollow", () => {
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  r.learn(BOARDS_EVENT); // board 0 auto-selected, unlocked
+  r.note(pos(0, 0.1)); // a quiet event on the followed board
+  assert.strictEqual(r.selected(), 0, "still on board 0 before any bigger swing");
+  r.note(pos(1, 0.9)); // board 1 erupts
+  assert.strictEqual(r.selected(), 1, "the higher-drama board steals focus");
+  assert.ok(r.accepts(pos(1, 0.9)), "the dramatic board's own event now routes");
+});
+
+check("(b) the focus lock prevents an immediate re-switch", () => {
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  r.learn(BOARDS_EVENT);
+  r.note(pos(1, 0.9)); // steal to board 1, lock = 3
+  assert.strictEqual(r.selected(), 1);
+  r.note(pos(0, 0.99)); // board 0 is even hotter, but the lock holds...
+  assert.strictEqual(r.selected(), 1, "lock blocks the re-switch (tick 1)");
+  r.note(pos(0, 0.99));
+  assert.strictEqual(r.selected(), 1, "lock blocks the re-switch (tick 2)");
+  r.note(pos(0, 0.99));
+  assert.strictEqual(r.selected(), 1, "lock blocks the re-switch (tick 3)");
+  r.note(pos(0, 0.99)); // lock expired — now the bigger swing wins
+  assert.strictEqual(r.selected(), 0, "after the lock expires a real swing takes over");
+});
+
+check("(c) a manual select pins the board and disables autofollow", () => {
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  r.learn(BOARDS_EVENT);
+  r.select(0); // caster pins board 0
+  assert.strictEqual(r.pinned(), true);
+  assert.strictEqual(r.autofollow(), false, "autofollow is disabled while pinned");
+  r.note(pos(1, 1.0)); // a maximal swing elsewhere must NOT steal focus
+  assert.strictEqual(r.selected(), 0, "manual pin overrides the auto-director");
+  r.resume(); // reset re-enables autofollow
+  assert.strictEqual(r.pinned(), false);
+  r.note(pos(1, 1.0));
+  assert.strictEqual(r.selected(), 1, "after resume the director follows drama again");
+});
+
+check("autofollow is inert without the flag (default routing preserved)", () => {
+  const r = O.makeBoardRouter(); // no autofollow
+  r.learn(BOARDS_EVENT);
+  r.note(pos(1, 1.0));
+  assert.strictEqual(r.selected(), 0, "no autofollow → focus stays where learn put it");
+  assert.strictEqual(r.autofollow(), false);
+});
+
 if (failures) {
   console.error(failures + " failure(s)");
   process.exit(1);

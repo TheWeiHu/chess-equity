@@ -123,13 +123,31 @@
   // Default = single-board behavior: a feed whose events carry no `board` (a single game)
   // always `accepts`, so nothing changes for the common case. The first board seen in a
   // multi-game round is auto-selected so the bar shows something before the caster picks.
-  function makeBoardRouter() {
+  //
+  // Auto-director (task 0188): with `opts.autofollow`, `note(evt)` reads each event's
+  // server `drama.magnitude` and steals focus to whichever board has the biggest live
+  // swing — but only after a focus lock of `opts.lockPlies` plies has elapsed since the
+  // last switch, so transient noise can't thrash the bar (a real swing wins; a blip waits
+  // out the lock). A manual `select(idx)` PINS the board and disables autofollow until
+  // `resume()`, so a caster can always override the director.
+  function makeBoardRouter(opts) {
+    opts = opts || {};
+    var autofollow = !!opts.autofollow;
+    var lockPlies = opts.lockPlies == null ? 6 : opts.lockPlies; // focus-lock window
     var boards = []; // [{index, players}], in board order
     var selected = null; // followed board index; null = none chosen yet
+    var pinned = false; // a manual select pins the board, disabling autofollow
+    var lockRemaining = 0; // plies left before autofollow may switch again
+    var lastDrama = {}; // board index -> latest drama magnitude seen
 
     function has(idx) {
       for (var i = 0; i < boards.length; i++) if (boards[i].index === idx) return true;
       return false;
+    }
+
+    function dramaMag(evt) {
+      var d = evt && evt.drama;
+      return d && typeof d.magnitude === "number" && !isNaN(d.magnitude) ? d.magnitude : 0;
     }
 
     return {
@@ -139,8 +157,50 @@
       selected: function () {
         return selected;
       },
+      autofollow: function () {
+        return autofollow && !pinned;
+      },
+      pinned: function () {
+        return pinned;
+      },
+      // A manual pick (caster clicks the selector): pin the board and stop the director.
       select: function (idx) {
         selected = idx;
+        pinned = true;
+        lockRemaining = 0;
+      },
+      // Re-enable autofollow after a manual pin (the "reset" the caster reaches for).
+      resume: function () {
+        pinned = false;
+        lockRemaining = 0;
+      },
+      // Auto-director step (task 0188): given an incoming event, decide whether the most
+      // dramatic board should steal focus. No-op unless autofollow is on, the feed is
+      // multi-board (numeric `board`), and the board isn't pinned. Honors the focus lock.
+      note: function (evt) {
+        if (!autofollow || pinned) return;
+        if (!evt || typeof evt.board !== "number") return;
+        var mag = dramaMag(evt);
+        if (selected === null) {
+          // Nothing followed yet — adopt the first board we see, unlocked so a bigger
+          // swing elsewhere can immediately take over.
+          selected = evt.board;
+          lastDrama[evt.board] = mag;
+          return;
+        }
+        lastDrama[evt.board] = mag;
+        if (evt.board === selected) {
+          if (lockRemaining > 0) lockRemaining--; // a ply on the focused board still ticks
+          return; // already focused — nothing to steal
+        }
+        if (lockRemaining > 0) {
+          lockRemaining--; // locked: a real swing has to wait out the focus window
+          return;
+        }
+        if (mag > (lastDrama[selected] || 0)) {
+          selected = evt.board; // a higher-drama board steals focus...
+          lockRemaining = lockPlies; // ...and the lock guards it from an immediate flip
+        }
       },
       // Update the roster from a routing event. A "boards" event carries the full
       // roster; a "game" event with a numeric `board` adds one board. Auto-selects the
@@ -177,6 +237,8 @@
       cp: p.get("cp") !== "0",
       cpbar: p.get("cpbar") === "1",
       caster: p.get("caster") === "1",
+      autofollow: p.get("autofollow") === "1",
+      focuslock: parseInt(p.get("focuslock"), 10),
       speed: parseFloat(p.get("speed")) || 1,
       welo: p.get("welo"),
       belo: p.get("belo"),
@@ -397,6 +459,7 @@
     if (!evt || !evt.type) return;
     if (boardRouter) {
       boardRouter.learn(evt);
+      boardRouter.note(evt); // auto-director may steal focus to the most-dramatic board
       renderBoardSelector(boardRouter);
       // Drop events for boards we aren't following (and "boards" routing metadata).
       if (!boardRouter.accepts(evt)) return;
@@ -417,7 +480,10 @@
 
   function start() {
     const cfg = params();
-    boardRouter = makeBoardRouter();
+    boardRouter = makeBoardRouter({
+      autofollow: cfg.autofollow,
+      lockPlies: isNaN(cfg.focuslock) ? undefined : cfg.focuslock,
+    });
     const root = q("#overlay");
     if (root) {
       root.classList.remove("layout-horizontal", "layout-vertical");
