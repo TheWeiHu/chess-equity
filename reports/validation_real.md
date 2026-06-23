@@ -169,3 +169,26 @@ Paired bootstrap (1000 resamples) on the per-row log-loss delta *within each sli
 | phase | opening | 3408 | +0.0954 | [+0.0790, +0.1185] | equity |
 | rating | 2000-2399 | 415 | -0.1910 | [-0.3596, +0.0160] | inconclusive |
 | high_rating | 2000-2199 | 415 | -0.1910 | [-0.3672, +0.0327] | inconclusive |
+
+## By time-control bucket: does equity still beat centipawns? (baseline vs wdl-a)
+
+Δ = `wdl-a` − `baseline` on each bucket's rows; **Δ < 0 means equity wins** (lower loss). `beats` = both log-loss and Brier deltas are negative; `worse` = both positive; `mixed` = the two metrics disagree. A bucket with fewer than n=1000 rows reads `underpowered` and is excluded from any beats/loses claim — its win or loss is small-n noise, not the thesis. Sorted by Δ log-loss, biggest equity win first.
+Equity beats the baseline on 3/3 adequately-powered time-control bucket(s). 2 bucket(s) below n=1000 excluded as underpowered.
+
+| time control | n | Δ log-loss | Δ Brier | verdict |
+|---|--:|--:|--:|:--:|
+| blitz | 4266 | -0.4369 | -0.0633 | beats |
+| bullet | 4851 | -0.3769 | -0.0282 | beats |
+| rapid | 2731 | -0.1475 | -0.0117 | beats |
+| classical | 77 | +0.0735 | +0.0112 | underpowered (n=77) |
+| correspondence | 75 | +0.0821 | +0.1681 | underpowered (n=75) |
+
+_The time-control slice (task 0155) toward the streaming / time-pressure north star: even
+on this clock-blind 2013-01 dump (per-move clocks absent, so the `clock` slice is a single
+`no-clock` band), the rating-conditioned model still beats the rating-blind centipawn
+baseline within every adequately-powered time-control class — biggest in `blitz`. The two
+small buckets (`classical` n=77, `correspondence` n=75) read `wdl-a` worse but are below
+the n=1000 floor, so they are flagged, not counted as a thesis loss. Generated torch-free
+from the same cached `2013-01` dump (n=12000) via `validate --models baseline,wdl-a`; the
+best challenger is `wdl-a` (lowest overall log-loss), the same one the maia2-inclusive run
+above ranks against, so these numbers are identical to that run's tc_bucket gate._

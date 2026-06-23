@@ -643,6 +643,17 @@ def _run_validate(args: argparse.Namespace) -> int:
         if h2h_ci is not None and h2h_ci.slices:
             report = report + "\n" + format_head_to_head_cis(h2h_ci)
 
+    # By time-control bucket (task 0155): the torch-free step toward the streaming /
+    # time-pressure north star — does equity still beat the centipawn baseline within each
+    # bullet/blitz/rapid/classical class? A point gate (no bootstrap), so it's emitted
+    # whenever there's a baseline + a challenger; small buckets are flagged underpowered,
+    # not silently passed.
+    from chess_equity.validate.harness import format_tc_bucket_gate, tc_bucket_gate
+
+    tc_gate = tc_bucket_gate(rows, predictors, baseline_name=baseline_name)
+    if tc_gate is not None and tc_gate.buckets:
+        report = report + "\n" + format_tc_bucket_gate(tc_gate)
+
     # 'Good moves read as good' (task 0117): the positive half of the thesis. Per
     # consecutive ply-pair, compare each predictor's mover-POV equity swing to the
     # engine's cp swing — does the bar give engine-approved moves visible upside, not a

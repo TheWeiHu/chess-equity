@@ -1247,3 +1247,147 @@ def format_head_to_head_cis(h2h: HeadToHeadCI) -> str:
             f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {verdict} |"
         )
     return "\n".join(out)
+
+
+# --- per-time-control-bucket gate: does equity beat the baseline within each TC class? --
+#
+# The thesis' north star is the streaming / time-pressure wedge, but a clock-bearing dump
+# is held (task 0153). This is the torch-free step toward it the *current* real dump already
+# supports: slice the gate by the position's time-control class (bullet / blitz / rapid /
+# classical), present on every row as ``row.tc_bucket`` (data/schema.py) — derived from the
+# game's TimeControl header, so it is set even on a clock-blind dump where the per-move
+# ``clock`` slicer is a no-op (e.g. 2013-01). For each bucket it asks the gate's core
+# question — does the best rating-conditioned model beat the rating-blind centipawn baseline
+# here? — on BOTH headline metrics (log-loss and Brier). Buckets below the head-to-head
+# underpowered floor (:data:`H2H_UNDERPOWERED_N`, task 0146) are flagged, never silently
+# passed: a small bucket's per-band win or loss is sampling noise, not the thesis.
+
+
+@dataclass(frozen=True)
+class TcBucketDelta:
+    """One time-control bucket's head-to-head gate result (task 0155).
+
+    ``log_loss_delta`` / ``brier_delta`` are ``model − baseline`` on that bucket's rows, so
+    a *negative* delta means equity wins (lower loss). ``verdict`` is ``beats`` (both deltas
+    negative — an unambiguous bucket-level win), ``worse`` (both positive), ``mixed`` (the
+    two metrics disagree), or ``underpowered`` (fewer than the floor's rows — too few to
+    trust either way, so excluded from any beats/loses claim).
+    """
+
+    bucket: str
+    n: int
+    log_loss_delta: float
+    brier_delta: float
+    underpowered: bool
+    verdict: str
+
+
+@dataclass(frozen=True)
+class TcBucketGate:
+    """Per-``tc_bucket`` gate, baseline vs the best rating-conditioned challenger (0155)."""
+
+    baseline: str
+    model: str
+    underpowered_n: int
+    buckets: List[TcBucketDelta]  # sorted by log-loss delta ascending (biggest win first)
+
+
+def tc_bucket_gate(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline_name: str = "baseline",
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+) -> Optional[TcBucketGate]:
+    """Slice the thesis gate by time-control bucket (task 0155).
+
+    Picks ``baseline_name`` as the rating-blind reference and the non-baseline predictor
+    with the lowest *overall* log-loss as its challenger (the same "best rating-conditioned
+    model" :func:`head_to_head_deltas` ranks against), groups the rows by ``row.tc_bucket``,
+    and per bucket computes the challenger's log-loss and Brier deltas vs the baseline.
+    Buckets with fewer than ``underpowered_n`` rows are flagged ``underpowered`` (the task
+    0146 floor) so a small bucket's win or loss is not read as the thesis. Returns the
+    buckets sorted by log-loss delta (biggest equity win first), or ``None`` when there is
+    no baseline or no challenger. Pure computation; no torch needed when the challenger is a
+    row predictor (e.g. ``wdl-a``). Pass ``underpowered_n=0`` to disable the floor.
+    """
+    if baseline_name not in predictors:
+        return None
+    challengers = [n for n in predictors if n != baseline_name]
+    if not challengers:
+        return None
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    preds_by_name = {n: [predictors[n](r) for r in rows] for n in predictors}
+    base = preds_by_name[baseline_name]
+    best = min(challengers, key=lambda n: log_loss(preds_by_name[n], labels))
+    model = preds_by_name[best]
+
+    grouped: Dict[str, List[int]] = {}
+    for i, row in enumerate(rows):
+        grouped.setdefault(row.tc_bucket, []).append(i)
+
+    deltas: List[TcBucketDelta] = []
+    for bucket, idxs in grouped.items():
+        n = len(idxs)
+        bl = [labels[i] for i in idxs]
+        ll_delta = log_loss([model[i] for i in idxs], bl) - log_loss(
+            [base[i] for i in idxs], bl
+        )
+        br_delta = brier_score([model[i] for i in idxs], bl) - brier_score(
+            [base[i] for i in idxs], bl
+        )
+        underpowered = underpowered_n > 0 and n < underpowered_n
+        if underpowered:
+            verdict = "underpowered"
+        elif ll_delta < 0 and br_delta < 0:
+            verdict = "beats"
+        elif ll_delta > 0 and br_delta > 0:
+            verdict = "worse"
+        else:
+            verdict = "mixed"
+        deltas.append(
+            TcBucketDelta(bucket, n, ll_delta, br_delta, underpowered, verdict)
+        )
+    deltas.sort(key=lambda d: d.log_loss_delta)
+    return TcBucketGate(baseline_name, best, underpowered_n, deltas)
+
+
+def format_tc_bucket_gate(gate: TcBucketGate) -> str:
+    """Render the per-time-control-bucket gate as a Markdown section (task 0155)."""
+    out: List[str] = []
+    out.append(
+        f"## By time-control bucket: does equity still beat centipawns? "
+        f"({gate.baseline} vs {gate.model})"
+    )
+    out.append("")
+    out.append(
+        f"Δ = `{gate.model}` − `{gate.baseline}` on each bucket's rows; **Δ < 0 means equity "
+        "wins** (lower loss). `beats` = both log-loss and Brier deltas are negative; `worse` "
+        "= both positive; `mixed` = the two metrics disagree. A bucket with fewer than "
+        f"n={gate.underpowered_n} rows reads `underpowered` and is excluded from any "
+        "beats/loses claim — its win or loss is small-n noise, not the thesis. Sorted by "
+        "Δ log-loss, biggest equity win first."
+    )
+    powered = [d for d in gate.buckets if not d.underpowered]
+    weak = [d for d in gate.buckets if d.underpowered]
+    wins = sum(1 for d in powered if d.verdict == "beats")
+    summary = (
+        f"Equity beats the baseline on {wins}/{len(powered)} adequately-powered "
+        "time-control bucket(s)."
+    )
+    if weak:
+        summary += (
+            f" {len(weak)} bucket(s) below n={gate.underpowered_n} excluded as underpowered."
+        )
+    out.append(summary)
+    out.append("")
+    out.append("| time control | n | Δ log-loss | Δ Brier | verdict |")
+    out.append("|---|--:|--:|--:|:--:|")
+    for d in gate.buckets:
+        verdict = f"underpowered (n={d.n})" if d.underpowered else d.verdict
+        out.append(
+            f"| {d.bucket} | {d.n} | {d.log_loss_delta:+.4f} | {d.brier_delta:+.4f} "
+            f"| {verdict} |"
+        )
+    return "\n".join(out)
