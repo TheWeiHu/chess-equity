@@ -218,6 +218,7 @@ LEDGER_COLUMNS: List[str] = [
     "drama_score",
     "white_clock",
     "black_clock",
+    "model",
 ]
 
 
@@ -228,7 +229,9 @@ def ledger_row(event: "MoveEvent") -> Dict[str, object]:
     the mover is White exactly when it's now Black to move — same convention as
     :func:`live_caption`). Equities/deltas are rounded to whole percentage points to
     match the overlay bar; clocks pass through as remaining seconds (blank without
-    ``[%clk]``). Drama columns are blank unless the classifier fires.
+    ``[%clk]``). Drama columns are blank unless the classifier fires. ``model`` is the
+    equity model's identity (``event.source``, e.g. ``LichessBaselineModel``/``Maia2Model``)
+    so an archived ledger can be attributed to the model that produced its equities.
     """
     # Lazy import: drama imports MoveEvent from this module, so a top-level import cycles.
     from chess_equity.drama import score_event
@@ -248,6 +251,7 @@ def ledger_row(event: "MoveEvent") -> Dict[str, object]:
         "drama_score": round(drama.magnitude, 3) if drama is not None else "",
         "white_clock": event.white_clock,
         "black_clock": event.black_clock,
+        "model": event.source,
     }
 
 
