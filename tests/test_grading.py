@@ -376,6 +376,85 @@ def test_round_leaderboard_player_carries_rating():
         assert isinstance(s.rating, int) and s.rating > 0
 
 
+# --------------------------------------------------------------------------- #
+# Min-moves qualification floor — a cameo can't top the board (task 0227)
+# --------------------------------------------------------------------------- #
+
+
+def _mg(label, mover_white, grade_peer=0.0, ply=1):
+    """A minimal MoveGrade fixture for pure-function leaderboard tests (not evidence).
+
+    Only the fields the leaderboard math reads (label, mover_white, mover_elo, grade_peer,
+    phase) carry meaning here; the rest are filler so the frozen dataclass is constructible.
+    """
+    from chess_equity.grading import MoveGrade
+
+    return MoveGrade(
+        ply=ply, san="e4", uci="e2e4", mover_white=mover_white, mover_elo=1500,
+        phase="opening", equity_after=50.0, expected_equity=50.0 - grade_peer,
+        equity_best=50.0, grade_peer=grade_peer, grade_best=0.0, label=label,
+        best_uci="e2e4", cp_loss=0.0,
+    )
+
+
+def _cameo_round():
+    """One board: a 1-move 100%-accuracy cameo (White) vs a full, lower-accuracy player."""
+    cameo = [_mg("good", mover_white=True, grade_peer=5.0)]             # 100% acc, 1 move
+    regular = [_mg("good", mover_white=False, grade_peer=2.0) for _ in range(6)]
+    regular += [_mg("mistake", mover_white=False, grade_peer=-3.0) for _ in range(2)]  # 75%
+    return [("cameo", "regular", cameo + regular)]
+
+
+def test_round_leaderboard_min_moves_keeps_cameo_off_the_top():
+    from chess_equity.grading import round_leaderboard
+
+    scores = round_leaderboard(_cameo_round(), min_moves=5)
+    by_name = {s.name: s for s in scores}
+    # The cameo is the most accurate row, yet it must NOT rank first — it's unqualified.
+    assert by_name["cameo"].accuracy > by_name["regular"].accuracy
+    assert by_name["cameo"].n_moves == 1 and not by_name["cameo"].qualified
+    assert by_name["regular"].qualified
+    assert scores[0].name == "regular"   # a qualified player tops the board
+    assert scores[-1].name == "cameo"    # the cameo is ranked below, never interleaved above
+
+
+def test_round_leaderboard_min_moves_zero_is_a_no_op():
+    from chess_equity.grading import round_leaderboard
+
+    # The library default (0) imposes no floor: everyone qualifies and the cameo's higher
+    # accuracy tops the board, exactly the pre-0227 behaviour.
+    scores = round_leaderboard(_cameo_round())  # min_moves defaults to 0
+    assert all(s.qualified for s in scores)
+    assert scores[0].name == "cameo"
+
+
+def test_min_moves_qualified_flag_in_export_and_render():
+    from chess_equity.grading import (
+        LEADERBOARD_COLUMNS,
+        leaderboard_export_rows,
+        render_leaderboard,
+        round_leaderboard,
+    )
+
+    scores = round_leaderboard(_cameo_round(), min_moves=5)
+    # JSON/CSV export carries the `qualified` bool (appended to the stable column list).
+    assert "qualified" in LEADERBOARD_COLUMNS
+    rows = {r["player"]: r for r in leaderboard_export_rows(scores)}
+    assert rows["regular"]["qualified"] is True
+    assert rows["cameo"]["qualified"] is False
+
+    # Text render lists qualified players numbered, then an `unqualified` section.
+    lines = render_leaderboard(scores, min_moves=5)
+    body = lines[2:]  # drop header + separator
+    heading_idx = next(i for i, l in enumerate(body) if l.startswith("unqualified"))
+    assert "(< 5 moves)" in body[heading_idx]
+    # The cameo sits inside the unqualified section, not above it.
+    assert any("cameo" in l for l in body[heading_idx + 1:])
+    assert all("cameo" not in l for l in body[:heading_idx])
+    # Qualified rows are numbered 1..k; the cameo never gets rank "1".
+    assert body[0].split()[0] == "1" and "regular" in body[0]
+
+
 def test_leaderboard_export_rows_schema_and_rank():
     import csv
 

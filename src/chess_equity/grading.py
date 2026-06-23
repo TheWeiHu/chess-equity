@@ -33,7 +33,7 @@ flagship trap demo needs Maia (0005) on real data — but the synthetic test
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
 import chess
@@ -466,6 +466,11 @@ class PlayerScore:
     # Per-phase accuracy/Δpeer split (task 0220), keyed by every PHASES entry. Each value:
     # {"n_moves", "accuracy", "avg_delta"}; the per-phase n_moves sum to n_moves.
     phases: Dict[str, Dict[str, object]]
+    # Did the player clear the round's minimum-moves floor (task 0227)? An unqualified
+    # cameo (too few graded moves) is ranked below every qualified player so a 1-2 move
+    # 100% can't top the board. Default True — only `round_leaderboard` with a positive
+    # `min_moves` ever sets it False.
+    qualified: bool = True
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -479,6 +484,7 @@ class PlayerScore:
             "rating": self.rating,
             "worst": None if self.worst is None else self.worst.to_dict(),
             "phases": {phase: dict(stat) for phase, stat in self.phases.items()},
+            "qualified": self.qualified,
         }
 
 
@@ -527,18 +533,24 @@ LEADERBOARD_SORTS = ("accuracy", "lead", "blunders")
 
 
 def _leaderboard_rank_key(s: PlayerScore, sort: str = "accuracy") -> tuple:
+    # Unqualified players (cameos under the min-moves floor, task 0227) always rank below
+    # every qualified player — `not qualified` is the leading sort term so a 1-2 move 100%
+    # can't top the board, regardless of the chosen `sort` mode.
+    #
+    # Within a qualification tier the `sort` mode (task 0234) picks the PRIMARY metric:
     # accuracy desc / lead = mean Δpeer desc / blunders = fewest first; the unused metrics
     # follow as deterministic tie-breaks, always ending in name.
     if sort == "lead":
-        return (-s.mean_peer, -s.accuracy, s.blunders, s.name)
+        return (not s.qualified, -s.mean_peer, -s.accuracy, s.blunders, s.name)
     if sort == "blunders":
-        return (s.blunders, -s.accuracy, -s.mean_peer, s.name)
-    return (-s.accuracy, -s.mean_peer, s.blunders, s.name)
+        return (not s.qualified, s.blunders, -s.accuracy, -s.mean_peer, s.name)
+    return (not s.qualified, -s.accuracy, -s.mean_peer, s.blunders, s.name)
 
 
 def round_leaderboard(
     games: List[tuple],
     sort: str = "accuracy",
+    min_moves: int = 0,
 ) -> List[PlayerScore]:
     """Rank every player across a round by pooled move quality.
 
@@ -552,13 +564,22 @@ def round_leaderboard(
     (default) ranks by accuracy %; ``lead`` by mean Δpeer desc (rewarding beating peers
     over avoiding mistakes); ``blunders`` fewest-first. The remaining metrics, then name,
     always follow as deterministic tie-breaks.
+
+    ``min_moves`` is the qualification floor (task 0227): a player with fewer than
+    ``min_moves`` graded moves is marked ``qualified=False`` and ranked *below* every
+    qualified player (regardless of ``sort``), so a brief cameo can't top the leaderboard
+    on a tiny sample. The library default ``0`` keeps every player qualified (back-compat);
+    ``grade --round`` passes a positive default (5).
     """
     by_player: Dict[str, List[MoveGrade]] = {}
     for white_name, black_name, grades in games:
         for g in grades:
             name = white_name if g.mover_white else black_name
             by_player.setdefault(name, []).append(g)
-    scores = [_player_score(name, gs) for name, gs in by_player.items()]
+    scores = [
+        replace(_player_score(name, gs), qualified=len(gs) >= min_moves)
+        for name, gs in by_player.items()
+    ]
     scores.sort(key=lambda s: _leaderboard_rank_key(s, sort))
     return scores
 
@@ -572,12 +593,27 @@ def _worst_cell(worst: Optional[MoveGrade]) -> str:
     return f"{worst.san} {worst.grade_peer:+.1f}"
 
 
-def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
+def _leaderboard_row(rank: str, s: PlayerScore) -> str:
+    return (
+        f"{rank:>2}  {s.name:<14}{s.accuracy:>6.1f}{s.n_moves:>7}"
+        f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}  {_worst_cell(s.worst):<16}"
+    )
+
+
+def render_leaderboard(
+    scores: List[PlayerScore], min_moves: Optional[int] = None
+) -> List[str]:
     """A ranked accuracy table (one row per player), as text lines.
 
-    The trailing ``worst`` column shows each player's biggest single drop as
-    ``SAN Δpeer`` (or ``-`` for an empty player); it's display-only and does not change
-    the CSV/JSON export schema.
+    Qualified players are numbered 1..k. Any player below the round's min-moves floor
+    (``qualified=False``, task 0227) is listed afterwards in an ``unqualified`` section
+    with a dashed rank, never interleaved above a qualified player. ``min_moves``, if
+    given, is shown in that section's heading; with the default ``None`` (or when no
+    player is unqualified) the table is a single block, as before 0227.
+
+    The trailing ``worst`` column shows each player's biggest single drop as ``SAN Δpeer``
+    (or ``-`` for an empty player); it's display-only and does not change the CSV/JSON
+    export schema.
     """
     rows: List[str] = []
     header = (
@@ -586,18 +622,26 @@ def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
     )
     rows.append(header)
     rows.append("-" * len(header))
-    for i, s in enumerate(scores, start=1):
-        rows.append(
-            f"{i:>2}  {s.name:<14}{s.accuracy:>6.1f}{s.n_moves:>7}"
-            f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}  {_worst_cell(s.worst):<16}"
-        )
+    qualified = [s for s in scores if s.qualified]
+    unqualified = [s for s in scores if not s.qualified]
+    for i, s in enumerate(qualified, start=1):
+        rows.append(_leaderboard_row(str(i), s))
+    if unqualified:
+        floor = f" (< {min_moves} moves)" if min_moves else ""
+        rows.append(f"unqualified{floor}:")
+        for s in unqualified:
+            rows.append(_leaderboard_row("-", s))
     return rows
 
 
 # Machine-readable leaderboard export (task 0214) — feeds broadcast lower-third
 # graphics. A stable, flat schema (one row per player) distinct from PlayerScore.to_dict():
 # `player`/`avg_delta` are the broadcast-facing names, plus `rating` and a 1-based `rank`.
-LEADERBOARD_COLUMNS = ["rank", "player", "rating", "n_moves", "accuracy", "avg_delta"]
+# `qualified` (task 0227) is appended LAST so the pre-0227 prefix stays stable for
+# existing broadcast consumers: a player below the round's min-moves floor reports False.
+LEADERBOARD_COLUMNS = [
+    "rank", "player", "rating", "n_moves", "accuracy", "avg_delta", "qualified"
+]
 
 # Flat CSV columns for the per-phase breakdown (task 0220): two per phase, appended after
 # the base columns so the existing schema is a stable prefix. `{phase}_acc` is that phase's
@@ -623,6 +667,7 @@ def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]
             "n_moves": s.n_moves,
             "accuracy": round(s.accuracy, 1),
             "avg_delta": round(s.mean_peer, 2),
+            "qualified": s.qualified,
             "phases": {phase: dict(stat) for phase, stat in s.phases.items()},
         }
         for i, s in enumerate(scores, start=1)

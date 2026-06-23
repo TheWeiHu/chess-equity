@@ -35,6 +35,12 @@ def add_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
              "name remain as deterministic tie-breaks",
     )
     gr.add_argument(
+        "--min-moves", type=int, default=5, metavar="N",
+        help="with --round, a player with fewer than N graded moves is marked unqualified "
+             "and ranked below every qualified player (so a brief cameo can't top the "
+             "board); the --json/--csv export carries a `qualified` bool (default 5; 0 = off)",
+    )
+    gr.add_argument(
         "--summary-json", metavar="OUT",
         help="also write the per-side scoreline (grade-label counts, mean Δpeer, "
              "worst move per color) as machine-readable JSON to OUT — or, with --round, "
