@@ -272,6 +272,106 @@ def scoreline(grades: List[MoveGrade]) -> GameScoreline:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Round leaderboard — accuracy ranking across a multi-game broadcast (task 0207)
+# --------------------------------------------------------------------------- #
+
+# Labels that count as an "accurate" move (ok-or-better). The accuracy % is the share
+# of a player's moves in this set, pooled across every board they played this round.
+ACCURATE_LABELS = {"brilliant", "good", "ok"}
+
+
+@dataclass(frozen=True)
+class PlayerScore:
+    """One player's pooled move quality across every game they played this round."""
+
+    name: str
+    n_moves: int
+    label_counts: Dict[str, int]  # keyed by every GRADE_LABELS entry (0 if unused)
+    accuracy: float  # % of moves graded ok-or-better (ACCURATE_LABELS), 0..100
+    blunders: int  # count of "blunder" moves (== label_counts["blunder"])
+    mistakes: int  # count of "mistake" moves (== label_counts["mistake"])
+    mean_peer: float  # mean grade_peer (signed Δequity; positive = beat rating peers)
+    worst: Optional[MoveGrade]  # the move with the minimum grade_peer (biggest drop)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "name": self.name,
+            "n_moves": self.n_moves,
+            "label_counts": dict(self.label_counts),
+            "accuracy": self.accuracy,
+            "blunders": self.blunders,
+            "mistakes": self.mistakes,
+            "mean_peer": self.mean_peer,
+            "worst": None if self.worst is None else self.worst.to_dict(),
+        }
+
+
+def _player_score(name: str, grades: List[MoveGrade]) -> PlayerScore:
+    counts = {label: 0 for label in GRADE_LABELS}
+    for g in grades:
+        counts[g.label] = counts.get(g.label, 0) + 1
+    n = len(grades)
+    accurate = sum(counts.get(label, 0) for label in ACCURATE_LABELS)
+    accuracy = 100.0 * accurate / n if n else 0.0
+    mean_peer = sum(g.grade_peer for g in grades) / n if n else 0.0
+    worst = min(grades, key=lambda g: g.grade_peer) if grades else None
+    return PlayerScore(
+        name=name,
+        n_moves=n,
+        label_counts=counts,
+        accuracy=accuracy,
+        blunders=counts.get("blunder", 0),
+        mistakes=counts.get("mistake", 0),
+        mean_peer=mean_peer,
+        worst=worst,
+    )
+
+
+def _leaderboard_rank_key(s: PlayerScore) -> tuple:
+    # accuracy desc, then mean Δpeer desc, then fewer blunders, then name — deterministic.
+    return (-s.accuracy, -s.mean_peer, s.blunders, s.name)
+
+
+def round_leaderboard(
+    games: List[tuple],
+) -> List[PlayerScore]:
+    """Rank every player across a round by pooled move quality.
+
+    ``games`` is a list of ``(white_name, black_name, grades)`` tuples — one per board,
+    where ``grades`` is that game's :class:`MoveGrade` list. A player's moves are pooled
+    across *every* board they appear on (White on one, Black on another all count), keyed
+    by player name, then scored with the same per-move grade math the single-game
+    :func:`scoreline` uses. Pure reduction — no model calls. Ranked by accuracy %, then
+    mean Δpeer, then fewer blunders, then name (fully deterministic).
+    """
+    by_player: Dict[str, List[MoveGrade]] = {}
+    for white_name, black_name, grades in games:
+        for g in grades:
+            name = white_name if g.mover_white else black_name
+            by_player.setdefault(name, []).append(g)
+    scores = [_player_score(name, gs) for name, gs in by_player.items()]
+    scores.sort(key=_leaderboard_rank_key)
+    return scores
+
+
+def render_leaderboard(scores: List[PlayerScore]) -> List[str]:
+    """A ranked accuracy table (one row per player), as text lines."""
+    rows: List[str] = []
+    header = (
+        f"{'#':>2}  {'player':<14}{'acc%':>6}{'moves':>7}"
+        f"{'blun':>6}{'mist':>6}{'meanΔ':>8}"
+    )
+    rows.append(header)
+    rows.append("-" * len(header))
+    for i, s in enumerate(scores, start=1):
+        rows.append(
+            f"{i:>2}  {s.name:<14}{s.accuracy:>6.1f}{s.n_moves:>7}"
+            f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}"
+        )
+    return rows
+
+
 def render_scoreline(line: GameScoreline) -> List[str]:
     """A White-vs-Black grade-label table + mean Δpeer + worst move, as text lines."""
     w, b = line.white, line.black

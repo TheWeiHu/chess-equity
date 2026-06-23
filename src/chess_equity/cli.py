@@ -21,6 +21,7 @@ model would drop in with no other changes here.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from typing import List, Optional, TextIO
@@ -74,6 +75,34 @@ def _grade_game(model: EquityModel, path: str, white_elo: int, black_elo: int):
     if game is None:
         raise ValueError(f"no game found in {path}")
     return EquityGrader(model).grade_game(game, white_elo, black_elo)
+
+
+def _grade_round(model: EquityModel, path: str, white_elo: int, black_elo: int):
+    """Grade every game of a multi-game PGN; returns ``[(white, black, grades), ...]``.
+
+    Per-game ratings come from each game's ``WhiteElo``/``BlackElo`` headers (the round's
+    players differ board to board), falling back to the CLI defaults when a header is
+    missing/``?``. Players are named from the ``White``/``Black`` headers so the leaderboard
+    can pool a player's moves across every board.
+    """
+    from chess_equity.broadcast import _parse_elo, split_games
+
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    games = []
+    grader = EquityGrader(model)
+    for game_pgn in split_games(text):
+        game = chess.pgn.read_game(io.StringIO(game_pgn))
+        if game is None:
+            continue
+        we = _parse_elo(game.headers, "WhiteElo") or white_elo
+        be = _parse_elo(game.headers, "BlackElo") or black_elo
+        white = game.headers.get("White", "?")
+        black = game.headers.get("Black", "?")
+        games.append((white, black, grader.grade_game(game, we, be)))
+    if not games:
+        raise ValueError(f"no games found in {path}")
+    return games
 
 
 def _grade_lines(grades) -> List[str]:
@@ -215,7 +244,19 @@ def _run_eval(args: argparse.Namespace) -> int:
 def _run_grade(args: argparse.Namespace) -> int:
     model = build_model(args.model, depth=args.depth)
     try:
-        if args.annotate_pgn:
+        if args.round:
+            from chess_equity.grading import render_leaderboard, round_leaderboard
+
+            # Pool every board's move grades by player and rank the round (task 0207).
+            games = _grade_round(model, args.pgn, args.white_elo, args.black_elo)
+            scores = round_leaderboard(games)
+            for row in render_leaderboard(scores):
+                print(row)
+            if args.summary_json:
+                with open(args.summary_json, "w", encoding="utf-8") as fh:
+                    json.dump({"players": [s.to_dict() for s in scores]}, fh, indent=2)
+                print(f"wrote leaderboard JSON to {args.summary_json}")
+        elif args.annotate_pgn:
             from chess_equity.annotate import annotate_pgn_file
 
             n = annotate_pgn_file(
@@ -1366,9 +1407,16 @@ def main(argv: Optional[List[str]] = None) -> int:
              "({[%%equity 0..1]} White-POV + grade label/NAG, preserving [%%eval]/[%%clk])",
     )
     gr.add_argument(
+        "--round", action="store_true",
+        help="pool a multi-game broadcast PGN and print an accuracy leaderboard ranking "
+             "every player (accuracy %%, blunder/mistake counts, mean Δequity) across all "
+             "boards; with --summary-json emits per-player rows",
+    )
+    gr.add_argument(
         "--summary-json", metavar="OUT",
         help="also write the per-side scoreline (grade-label counts, mean Δpeer, "
-             "worst move per color) as machine-readable JSON to OUT",
+             "worst move per color) as machine-readable JSON to OUT — or, with --round, "
+             "the per-player leaderboard rows",
     )
     add_model_arg(gr)
 
