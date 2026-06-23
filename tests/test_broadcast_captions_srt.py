@@ -31,6 +31,7 @@ from chess_equity.cli import main
 from test_broadcast_captions_vtt import (  # reuse the sibling test's fixtures
     SAMPLE_PGN,
     _first_game_sans,
+    _replay_all_games,
     _replay_events,
 )
 
@@ -77,6 +78,41 @@ def test_build_captions_srt_one_numbered_cue_per_graded_move():
     # opening fallbacks, then White's 180→178 lands the third cue at 8s, not a flat 9s.
     assert all(starts[i] < starts[i + 1] for i in range(len(starts) - 1)), starts
     assert starts[0] == 3.0 and starts[1] == 6.0 and starts[2] == 8.0, starts
+
+
+def test_build_captions_srt_resets_timeline_per_game():
+    """Multi-game --pgn: clocks reset each game, so the SRT timeline must restart at each
+    board boundary — board 2's first cue lands near t=0, not after board 1's total
+    (task 0232, the SRT half of the shared ``_caption_cues`` reset added in 0230). The VTT
+    test pins the same fact directly; the cue-for-cue parity test only spans one game, so
+    this asserts the SRT track inherits the reset on its own. Numbering stays globally
+    sequential and single-game output is unchanged (covered by the per-cue-timing test)."""
+    events = _replay_all_games()
+    # The sample is a multi-game round, so events span >1 distinct game.
+    game_ids = list(dict.fromkeys(e.game_id for e in events))
+    assert len(game_ids) >= 2, game_ids
+
+    srt = build_captions_srt(events)
+    cue_lines = [ln for ln in srt.splitlines() if _CUE_RE.match(ln)]
+    starts = [_ts_to_seconds(_CUE_RE.match(c).group(1)) for c in cue_lines]
+
+    # Map each graded cue back to its game so we can find each board's first cue.
+    captioned = [e for e in events if live_caption(e) is not None]
+    assert len(captioned) == len(starts)
+    first_start_by_game = {}
+    for e, start in zip(captioned, starts):
+        first_start_by_game.setdefault(e.game_id, start)
+
+    # Board 1's first cue is at the 3s opening fallback; every later board's first cue is
+    # likewise near t=0 — NOT pushed past the prior board's accumulated elapsed time.
+    board1_last = max(s for e, s in zip(captioned, starts) if e.game_id == game_ids[0])
+    for gid in game_ids[1:]:
+        assert first_start_by_game[gid] <= board1_last, (gid, first_start_by_game[gid], board1_last)
+        assert first_start_by_game[gid] < 5.0, (gid, first_start_by_game[gid])
+
+    # Numbering is still globally sequential 1..N across all boards (one track).
+    nums = [int(ln) for ln in srt.splitlines() if ln.isdigit()]
+    assert nums == list(range(1, len(cue_lines) + 1)), nums
 
 
 def test_srt_matches_vtt_cue_for_cue():
