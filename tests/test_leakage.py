@@ -74,6 +74,18 @@ def test_model_fit_months_reads_committed_artifact():
     assert model_fit_months(["baseline"]) == {}
 
 
+def test_model_fit_months_honors_custom_artifact(tmp_path):
+    # Task 0164: a refit wdl-a artifact (different month) must drive the guard, so a
+    # cross-dump held-out run reads as held-out, not in-distribution.
+    refit = fit(load_wdl_a_rows_stub(), iters=1, source_month="2013-01")
+    path = tmp_path / "wdl_a_2013-01.json"
+    refit.save(str(path))
+    assert model_fit_months(["wdl-a"], wdl_a_path=str(path)) == {"wdl-a": "2013-01"}
+    # Eval on 2016-05 is now clean (the refit month differs), where the committed
+    # artifact would have leaked.
+    assert detect_leakage("2016-05", model_fit_months(["wdl-a"], wdl_a_path=str(path))) == []
+
+
 def test_fit_stamps_source_month():
     rows = load_wdl_a_rows_stub()
     model = fit(rows, iters=1, source_month="2020-02")
