@@ -637,6 +637,18 @@ def _run_validate(args: argparse.Namespace) -> int:
         if h2h_ci is not None and h2h_ci.slices:
             report = report + "\n" + format_head_to_head_cis(h2h_ci)
 
+    # 'Good moves read as good' (task 0117): the positive half of the thesis. Per
+    # consecutive ply-pair, compare each predictor's mover-POV equity swing to the
+    # engine's cp swing — does the bar give engine-approved moves visible upside, not a
+    # saturated ~0? Cheap (no bootstrap); skipped when the dataset has no adjacent
+    # ply-pairs to pair into moves.
+    from chess_equity.validate.goodmoves import format_good_moves, measure_good_moves
+
+    good_moves = measure_good_moves(rows, predictors)
+    good_section = format_good_moves(good_moves, baseline=baseline_name)
+    if good_section:
+        report = report + "\n" + good_section
+
     if args.out:
         from pathlib import Path
 
