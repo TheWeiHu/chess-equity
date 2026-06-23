@@ -1318,6 +1318,53 @@ def test_worst_slice_verdict_excludes_underpowered_band():
     assert "Equity wins on 2/3 slices" in naive
 
 
+def test_worst_slice_verdict_ci_caveat():
+    """The worst-slice line carries a clears-zero / straddles-zero CI caveat (task 0161)."""
+    from chess_equity.validate.harness import (
+        HeadToHead,
+        HeadToHeadCI,
+        SliceDelta,
+        SliceDeltaCI,
+        worst_slice_verdict,
+    )
+
+    h2h = HeadToHead(
+        baseline="baseline",
+        model="wdl-a",
+        overall_delta=0.34,
+        slices=[
+            SliceDelta("rating", "1600-1999", 7000, 0.93, 0.54, +0.39),
+            SliceDelta("rating", "2000-2399", 415, 0.78, 0.97, -0.19),
+        ],
+    )
+
+    def _cis(lo, hi, verdict):
+        return HeadToHeadCI(
+            baseline="baseline", model="wdl-a", metric="log_loss", min_n=30,
+            underpowered_n=1000, confidence=0.95, n_resamples=1000,
+            slices=[SliceDeltaCI("rating", "2000-2399", 415, -0.19, lo, hi, verdict)],
+        )
+
+    # Straddles zero (the real-data shape): the apparent loss is small-n noise, not proof.
+    straddle = worst_slice_verdict(
+        h2h, underpowered_n=0, cis=_cis(-0.3672, +0.0327, "inconclusive")
+    )
+    assert "the baseline wins here" in straddle
+    assert "[-0.3672, +0.0327]" in straddle
+    assert "straddles zero" in straddle and "small-n noise" in straddle
+
+    # CI wholly below zero (in baseline−model terms): a real, significant regression.
+    real = worst_slice_verdict(
+        h2h, underpowered_n=0, cis=_cis(-0.40, -0.05, "baseline")
+    )
+    assert "clears zero" in real and "not small-n noise" in real
+
+    # No cis -> the bare point read, unchanged (back-compat).
+    bare = worst_slice_verdict(h2h, underpowered_n=0)
+    assert "the baseline wins here." in bare
+    assert "95% CI" not in bare
+
+
 def test_format_head_to_head_cis_marks_underpowered_bands():
     """The per-slice CI table tags below-floor bands `underpowered (n=…)` (task 0146)."""
     from chess_equity.validate.harness import format_head_to_head_cis, head_to_head_slice_cis

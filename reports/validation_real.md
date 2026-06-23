@@ -119,7 +119,7 @@ For each predicted-probability bin: mean predicted vs **observed** White expecte
 
 Δ log-loss = `baseline` − `wdl-a` on the same rows; **Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first.
 Overall Δ: +0.3403
-**Worst slice:** `high_rating` `2000-2199` (n=415) Δ=-0.1910 — the baseline wins here. Equity wins on 7/9 slices.
+**Worst slice:** `high_rating` `2000-2199` (n=415) Δ=-0.1910 — the baseline wins here — but the 95% CI on that Δ is [-0.3672, +0.0327], which straddles zero, so at n=415 this is small-n noise, not a proven regression at this level. Equity wins on 7/9 slices.
 
 | slice | value | n | baseline log-loss | model log-loss | Δ |
 |---|---|--:|--:|--:|--:|

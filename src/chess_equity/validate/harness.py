@@ -831,6 +831,7 @@ def format_report(
     *,
     title: str = "Validation report",
     comparisons: Optional[Sequence[BaselineComparison]] = None,
+    head_to_head_cis: Optional["HeadToHeadCI"] = None,
 ) -> str:
     """Render reports as a Markdown document (lower log-loss / Brier / ECE is better).
 
@@ -839,6 +840,10 @@ def format_report(
     When ``comparisons`` (paired-bootstrap delta CIs) are supplied, the gate verdict is
     significance-aware (task 0069): PASS requires the headline-metric CI to clear zero, and
     each verdict line shows that CI inline. Omit them for the point-only gate.
+
+    ``head_to_head_cis`` (per-slice CIs from :func:`head_to_head_slice_cis`) feeds the
+    worst-slice line a clears-zero / straddles-zero caveat (task 0161); omit it for the
+    point-only worst-slice read.
     """
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
@@ -868,7 +873,7 @@ def format_report(
     h2h = head_to_head_deltas(reports)
     if h2h is not None:
         out.append("")
-        out.append(format_head_to_head(h2h))
+        out.append(format_head_to_head(h2h, cis=head_to_head_cis))
     out.append("")
     return "\n".join(out)
 
@@ -968,8 +973,55 @@ def head_to_head_deltas(
 H2H_UNDERPOWERED_N = 1000
 
 
+def _worst_slice_ci_caveat(
+    worst: SliceDelta, cis: Optional["HeadToHeadCI"]
+) -> str:
+    """A clause stating whether the worst slice's Δ CI clears or straddles zero (task 0161).
+
+    The worst-slice line above reads a *point* Δ that may favour the baseline, but a point
+    delta on a small band can't tell "equity is broken at this level" from "too few games to
+    say". This looks up that slice's paired-bootstrap CI (the per-slice CIs from task 0068,
+    same head-to-head convention: Δ = baseline − model, Δ > 0 = equity wins) and returns a
+    one-clause caveat: the CI **clears zero** below (``hi < 0``) → a real, significant
+    regression; the CI **straddles zero** → small-n noise, not a proven regression. Returns
+    ``""`` when no matching CI is available (no ``cis``, no match, or the band was too small
+    for a CI), so the caller falls back to the bare point read.
+    """
+    if cis is None:
+        return ""
+    match = next(
+        (
+            d
+            for d in cis.slices
+            if d.slicer == worst.slicer and d.value == worst.value and d.lo is not None
+        ),
+        None,
+    )
+    if match is None or match.lo is None or match.hi is None:
+        return ""
+    conf = round(cis.confidence * 100)
+    ci = f"[{match.lo:+.4f}, {match.hi:+.4f}]"
+    if match.hi < 0:  # whole CI below zero in baseline−model terms: baseline really wins
+        return (
+            f" — but note the {conf}% CI on that Δ is {ci}, which clears zero, so the "
+            f"baseline win here is real and not small-n noise"
+        )
+    if match.lo > 0:  # whole CI above zero: equity actually wins significantly here
+        return (
+            f" — though the {conf}% CI on that Δ is {ci}, which clears zero the other way: "
+            f"equity in fact wins this band significantly"
+        )
+    return (
+        f" — but the {conf}% CI on that Δ is {ci}, which straddles zero, so at n={match.n} "
+        f"this is small-n noise, not a proven regression at this level"
+    )
+
+
 def worst_slice_verdict(
-    h2h: HeadToHead, *, underpowered_n: int = H2H_UNDERPOWERED_N
+    h2h: HeadToHead,
+    *,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+    cis: Optional["HeadToHeadCI"] = None,
 ) -> str:
     """A one-line read on the head-to-head's *worst* slice (task 0121).
 
@@ -984,6 +1036,11 @@ def worst_slice_verdict(
     and from the worst-slice pick (task 0146): a single small band's loss is small-n noise,
     not a real regression, so it must not read as "the baseline wins here". The count of
     excluded bands is reported. Pass ``underpowered_n=0`` to disable the floor.
+
+    When ``cis`` (the per-slice paired-bootstrap CIs from :func:`head_to_head_slice_cis`,
+    task 0068) is supplied, the named worst slice gets a CI caveat appended (task 0161):
+    whether the Δ CI clears zero (a real regression) or straddles it (small-n, inconclusive)
+    — so a reader can tell "equity is broken at master level" from "too few games to say".
     """
     if not h2h.slices:
         return ""
@@ -998,9 +1055,10 @@ def worst_slice_verdict(
             if worst.delta < 0
             else "equity still wins every slice"
         )
+        caveat = _worst_slice_ci_caveat(worst, cis) if worst.delta < 0 else ""
         head = (
             f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
-            f"Δ={worst.delta:+.4f} — {where}. "
+            f"Δ={worst.delta:+.4f} — {where}{caveat}. "
         )
     else:
         head = "**Worst slice:** no adequately-powered band to judge. "
@@ -1012,13 +1070,20 @@ def worst_slice_verdict(
 
 
 def format_head_to_head(
-    h2h: HeadToHead, *, underpowered_n: int = H2H_UNDERPOWERED_N
+    h2h: HeadToHead,
+    *,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+    cis: Optional["HeadToHeadCI"] = None,
 ) -> str:
     """Render the head-to-head deltas as a compact Markdown table (equity-wins first).
 
     Bands below ``underpowered_n`` rows are tagged ``(underpowered)`` in the Δ table and
     excluded from the worst-slice beats/loses verdict (task 0146) — their per-band Δ is
     small-n noise, not a thesis win or loss. Pass ``underpowered_n=0`` to disable.
+
+    When ``cis`` (the per-slice CIs from :func:`head_to_head_slice_cis`) is supplied, the
+    worst-slice line gets a CI caveat — clears zero (real regression) vs straddles it
+    (small-n, inconclusive) — so the headline read on the losing slice is honest (task 0161).
     """
     out: List[str] = []
     out.append(f"## Head-to-head: where equity wins ({h2h.baseline} vs {h2h.model})")
@@ -1028,7 +1093,7 @@ def format_head_to_head(
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
     out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
-    verdict = worst_slice_verdict(h2h, underpowered_n=underpowered_n)
+    verdict = worst_slice_verdict(h2h, underpowered_n=underpowered_n, cis=cis)
     if verdict:
         out.append(verdict)
     out.append("")
