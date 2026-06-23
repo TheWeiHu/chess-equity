@@ -21,10 +21,12 @@
     return Math.round(v * 100) + "%";
   }
 
-  // Who is to move in the position an event describes? Honor an explicit
-  // white_to_move/stm field if a feed adds one; otherwise derive from ply parity.
-  // White moves on ODD plies, so the position AFTER an even ply is White-to-move.
-  // Defaults to White (matching the white-POV default) when nothing says otherwise.
+  // Who is to move in the position an event describes? Prefer the authoritative
+  // white_to_move flag the broadcast bridge now emits on every position event
+  // (the post-move FEN's turn); honor an stm string next. Only when neither is
+  // present (a bare replay feed) do we derive from ply parity: White moves on ODD
+  // plies, so the position AFTER an even ply is White-to-move. Defaults to White
+  // (matching the white-POV default) when nothing says otherwise.
   function whiteToMove(evt) {
     if (!evt) return true;
     if (typeof evt.white_to_move === "boolean") return evt.white_to_move;

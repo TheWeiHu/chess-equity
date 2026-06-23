@@ -114,6 +114,22 @@ def test_position_event_carries_cp_key():
         assert "cp" in evt
 
 
+def test_position_event_carries_authoritative_white_to_move():
+    """Overlay reads evt.white_to_move for the ?pov=stm readout (task 0212).
+
+    The flag is the post-move FEN's side-to-move, threaded straight from the
+    internal MoveEvent — the overlay no longer has to guess from ply parity. It must
+    be present, boolean, agree with the MoveEvent, and match ply parity (White moves
+    on odd plies, so the position after an even ply is White-to-move).
+    """
+    move_events, events = drive_events()
+    for src, evt in zip(move_events, events):
+        assert "white_to_move" in evt, "white_to_move is REQUIRED on a position event"
+        assert isinstance(evt["white_to_move"], bool)
+        assert evt["white_to_move"] == src.white_to_move
+        assert evt["white_to_move"] == (evt["ply"] % 2 == 0)
+
+
 def test_cp_flows_through_and_is_white_pov():
     """A resolvable engine yields a numeric, White-POV cp on the overlay event (task 0052).
 
