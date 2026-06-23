@@ -210,3 +210,102 @@ def test_scoreline_round_trips_to_json_dict():
     assert set(d) == {"white", "black"}
     assert d["white"]["worst"]["san"]  # nested MoveGrade dict is JSON-friendly
     assert isinstance(d["white"]["mean_peer"], float)
+
+
+# --------------------------------------------------------------------------- #
+# Round leaderboard — accuracy ranking across a multi-game PGN (task 0207)
+# --------------------------------------------------------------------------- #
+
+
+def _round_games():
+    """Grade the committed 2-game round fixture; returns ``[(white, black, grades)]``.
+
+    The fixture has ``alice`` on BOTH boards (White on board 1, Black on board 2) so the
+    pooling-across-boards path is exercised. Real per-move math, baseline model — offline.
+    """
+    from pathlib import Path
+
+    from chess_equity.broadcast import _parse_elo, split_games
+
+    pgn = Path(__file__).resolve().parents[1] / "data" / "sample" / "round_games.pgn"
+    text = pgn.read_text(encoding="utf-8")
+    grader = EquityGrader(LichessBaselineModel())
+    games = []
+    for game_pgn in split_games(text):
+        game = chess.pgn.read_game(io.StringIO(game_pgn))
+        we = _parse_elo(game.headers, "WhiteElo") or 1500
+        be = _parse_elo(game.headers, "BlackElo") or 1500
+        games.append(
+            (game.headers["White"], game.headers["Black"], grader.grade_game(game, we, be))
+        )
+    return games
+
+
+def test_round_leaderboard_pools_a_player_across_boards():
+    from chess_equity.grading import round_leaderboard
+
+    games = _round_games()
+    scores = round_leaderboard(games)
+    by_name = {s.name: s for s in scores}
+    # alice, bob, carol — every distinct player gets exactly one row.
+    assert set(by_name) == {"alice", "bob", "carol"}
+    # alice played 4 moves on board 1 (White) + 4 on board 2 (Black) = 8, pooled.
+    alice = by_name["alice"]
+    assert alice.n_moves == 8
+    # Pooled move count == her moves across BOTH games (White on one, Black on the other).
+    expected = sum(
+        sum(1 for g in grades if (g.mover_white == (w == "alice")))
+        for (w, b, grades) in games
+        if "alice" in (w, b)
+    )
+    assert alice.n_moves == expected
+
+
+def test_round_leaderboard_row_invariants():
+    from chess_equity.grading import ACCURATE_LABELS, GRADE_LABELS, round_leaderboard
+
+    for s in round_leaderboard(_round_games()):
+        # label_counts cover every grade label and sum to the player's move count.
+        assert set(s.label_counts) == set(GRADE_LABELS)
+        assert sum(s.label_counts.values()) == s.n_moves
+        # accuracy == share of ok-or-better moves; blunder/mistake counts mirror labels.
+        accurate = sum(s.label_counts[label] for label in ACCURATE_LABELS)
+        assert s.accuracy == pytest.approx(100.0 * accurate / s.n_moves)
+        assert s.blunders == s.label_counts["blunder"]
+        assert s.mistakes == s.label_counts["mistake"]
+        assert 0.0 <= s.accuracy <= 100.0
+
+
+def test_round_leaderboard_is_ranked_deterministically():
+    from chess_equity.grading import _leaderboard_rank_key, round_leaderboard
+
+    scores = round_leaderboard(_round_games())
+    # The list is sorted by the documented key (accuracy desc, mean_peer desc, …).
+    keys = [_leaderboard_rank_key(s) for s in scores]
+    assert keys == sorted(keys)
+
+
+def test_round_leaderboard_round_trips_to_json_rows():
+    from chess_equity.grading import round_leaderboard
+
+    scores = round_leaderboard(_round_games())
+    rows = [s.to_dict() for s in scores]
+    for r in rows:
+        assert set(r) >= {
+            "name", "n_moves", "accuracy", "blunders", "mistakes", "mean_peer", "worst"
+        }
+        assert isinstance(r["accuracy"], float)
+        # worst is a nested MoveGrade dict (or None for an empty player — not here).
+        assert r["worst"] is None or r["worst"]["san"]
+
+
+def test_round_leaderboard_render_has_a_row_per_player():
+    from chess_equity.grading import render_leaderboard, round_leaderboard
+
+    scores = round_leaderboard(_round_games())
+    lines = render_leaderboard(scores)
+    # header + separator + one row per player.
+    assert len(lines) == len(scores) + 2
+    assert "player" in lines[0] and "acc%" in lines[0]
+    for s in scores:
+        assert any(s.name in line for line in lines[2:])
