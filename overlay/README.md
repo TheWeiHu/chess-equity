@@ -50,6 +50,8 @@ background is transparent, so only the bar composites over your stream.
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
 | `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |
+| `autofollow` | `0` | **auto-director** — in a multi-game round, auto-switch focus to the board with the biggest live `drama`; a manual pick pins and overrides (task 0188) |
+| `focuslock` | `6` | autofollow focus-lock window (plies) — a switched board is held this long so noise can't thrash the bar |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
 | `welo`   | _(feed)_ | override the White rating shown (Maia-2's top band is a coarse `>2000` — pin the real number) |
 | `belo`   | _(feed)_ | override the Black rating shown |
@@ -186,7 +188,11 @@ Only `type` and (for positions) `equity` are required; everything else degrades
 gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). In a
 multi-game round, events carry a `board` index and the feed sends a `boards` roster so
 the overlay shows a selector; the chosen board's events flow to the bar (default: when
-only one board exists, no selector appears and every event renders). The
+only one board exists, no selector appears and every event renders). With `?autofollow=1`
+the overlay becomes an **auto-director**: it follows whichever board's latest `drama`
+magnitude is highest, holding focus for `?focuslock=` plies after each switch so a real
+swing — not noise — wins; the caster can still click the selector to pin a board (which
+disables autofollow until reset). The
 optional `drama` payload mirrors `chess_equity.drama.DramaEvent` — when present it
 supplies the caster-mode flare's headline; otherwise caster mode derives a flare
 from the equity swing itself, so it works on any feed.
