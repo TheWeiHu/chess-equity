@@ -118,6 +118,7 @@ For each predicted-probability bin: mean predicted vs **observed** White expecte
 
 Δ log-loss = `baseline` − `wdl-a` on the same rows; **Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first.
 Overall Δ: +0.0385
+Bands with fewer than n=1000 rows are tagged `(underpowered)` and excluded from the worst-slice beats/loses claim — a single band that small can flip its own win or loss on a handful of games, so its per-band Δ is small-n noise, not the thesis.
 **Worst slice:** no adequately-powered band to judge. Equity wins on 0/0 adequately-powered slices. 11 band(s) below n=1000 excluded as underpowered.
 
 | slice | value | n | baseline log-loss | model log-loss | Δ |
@@ -172,3 +173,79 @@ Paired bootstrap (2000 resamples) on the per-row log-loss delta *within each sli
 | high_rating | 2000-2199 | 6 | -0.0114 | n<30 | underpowered (n=6) |
 | failure_mode | none | 2 | -0.1628 | n<30 | underpowered (n=2) |
 | clock | low(<60s) | 1 | -0.1719 | n<30 | underpowered (n=1) |
+## By time-control bucket: does equity still beat centipawns? (baseline vs wdl-a)
+
+Δ = `wdl-a` − `baseline` on each bucket's rows; **Δ < 0 means equity wins** (lower loss). `beats` = both log-loss and Brier deltas are negative; `worse` = both positive; `mixed` = the two metrics disagree. A bucket with fewer than n=1000 rows reads `underpowered` and is excluded from any beats/loses claim — its win or loss is small-n noise, not the thesis. Sorted by Δ log-loss, biggest equity win first.
+Equity beats the baseline on 0/0 adequately-powered time-control bucket(s). 3 bucket(s) below n=1000 excluded as underpowered.
+
+| time control | n | Δ log-loss | Δ Brier | verdict |
+|---|--:|--:|--:|:--:|
+| blitz | 6 | -0.0855 | -0.0515 | underpowered (n=6) |
+| bullet | 3 | -0.0442 | -0.0409 | underpowered (n=3) |
+| rapid | 6 | +0.0114 | +0.0056 | underpowered (n=6) |
+## Good moves read as good (move-level Δequity, task 0117)
+
+Per consecutive ply-pair, the engine's cp swing (mover POV, clamped ±1000) is the ground-truth move quality. **Good** = mover lost ≤10cp (engine-approved); **blunder** = dropped ≥100cp. `Δgood`/`Δblunder` are the mean mover-POV equity swing (pp) the bar showed on each. The thesis: good moves should read as a *positive* gain, not a saturated ~0.
+
+`sign-acc` (direction on |cp|≥25cp moves) is a sanity floor — any monotone-in-cp bar scores ~1.0. `corr` is **baseline-biased** (the cp swing is the baseline's own input), shown for transparency, not as the win condition.
+
+| predictor | moves | good | blunder | sign-acc | Δgood (pp) | Δblunder (pp) | corr |
+|---|--:|--:|--:|:--:|--:|--:|--:|
+| baseline | 12 | 10 | 2 | 1.000 | +0.64 | -47.24 | +1.000 |
+| baseline+clock | 12 | 10 | 2 | 1.000 | +1.50 | -40.96 | +0.975 |
+| wdl-a | 12 | 10 | 2 | 1.000 | +0.74 | -24.04 | +0.991 |
+
+**Direction:** every bar reads engine-approved moves above blunders (Δgood > Δblunder) — good moves read as good, not as bad. ✅
+
+**Rating signal:** every rating-conditioned bar reads blunders as less catastrophic than the rating-blind baseline (Δblunder -47.24pp) — a refutation a rating-peer won't find is discounted. (With cp-delta as ground truth the cp-based baseline is strong by construction; the good-move *upside* needs Maia's rating-relative policy — task 0008/0005.)
+
+See [`reports/goodmoves_real.md`](reports/goodmoves_real.md) for the fuller move-level write-up — the reproduce recipe, the rating-signal (blunder-leniency) read, and what this slice proves and does *not* prove (the rating-conditioned good-move upside needs Maia's policy — task 0008/0005).
+
+## Cutoff-robustness sweep (good × blunder grid, task 0157)
+
+The good/blunder cutoffs above (≤10cp / ≥100cp) are arbitrary defaults, so the headline `Δgood > Δblunder` direction is re-measured across a grid of good cutoffs × blunder cutoffs. `holds` is `Δgood > Δblunder` in that cell. `sign-acc` depends only on the decisive-cp threshold (not the good/blunder cutoffs), so it is constant across the grid and shown once per predictor.
+
+**`baseline`** — sign-acc 1.000 (|cp|≥25cp, grid-invariant)
+
+| good ≤ | blunder ≥ | good | blunder | Δgood (pp) | Δblunder (pp) | holds |
+|--:|--:|--:|--:|--:|--:|:--:|
+| 5cp | 75cp | 9 | 2 | +0.82 | -47.24 | ✅ |
+| 5cp | 100cp | 9 | 2 | +0.82 | -47.24 | ✅ |
+| 5cp | 150cp | 9 | 2 | +0.82 | -47.24 | ✅ |
+| 10cp | 75cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+| 10cp | 100cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+| 10cp | 150cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+| 20cp | 75cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+| 20cp | 100cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+| 20cp | 150cp | 10 | 2 | +0.64 | -47.24 | ✅ |
+
+**`baseline+clock`** — sign-acc 1.000 (|cp|≥25cp, grid-invariant)
+
+| good ≤ | blunder ≥ | good | blunder | Δgood (pp) | Δblunder (pp) | holds |
+|--:|--:|--:|--:|--:|--:|:--:|
+| 5cp | 75cp | 9 | 2 | +1.75 | -40.96 | ✅ |
+| 5cp | 100cp | 9 | 2 | +1.75 | -40.96 | ✅ |
+| 5cp | 150cp | 9 | 2 | +1.75 | -40.96 | ✅ |
+| 10cp | 75cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+| 10cp | 100cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+| 10cp | 150cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+| 20cp | 75cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+| 20cp | 100cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+| 20cp | 150cp | 10 | 2 | +1.50 | -40.96 | ✅ |
+
+**`wdl-a`** — sign-acc 1.000 (|cp|≥25cp, grid-invariant)
+
+| good ≤ | blunder ≥ | good | blunder | Δgood (pp) | Δblunder (pp) | holds |
+|--:|--:|--:|--:|--:|--:|:--:|
+| 5cp | 75cp | 9 | 2 | +0.91 | -24.04 | ✅ |
+| 5cp | 100cp | 9 | 2 | +0.91 | -24.04 | ✅ |
+| 5cp | 150cp | 9 | 2 | +0.91 | -24.04 | ✅ |
+| 10cp | 75cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+| 10cp | 100cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+| 10cp | 150cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+| 20cp | 75cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+| 20cp | 100cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+| 20cp | 150cp | 10 | 2 | +0.74 | -24.04 | ✅ |
+
+**Cutoff-robust:** `Δgood > Δblunder` holds in all 9 cells of the good × blunder grid for `baseline`, `baseline+clock`, `wdl-a` — the direction is not an artifact of the default cutoffs. ✅
+
