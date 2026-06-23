@@ -641,6 +641,7 @@ def _run_validate(args: argparse.Namespace) -> int:
     if data_month:
         title += f" (data month: {data_month})"
 
+    train: List = []
     if args.holdout is not None:
         from chess_equity.validate.split import game_level_split
 
@@ -656,6 +657,31 @@ def _run_validate(args: argparse.Namespace) -> int:
             f"{len({r.game_id for r in rows})} games; "
             f"train: {len(train)} rows, seed {args.seed})"
         )
+
+    # Post-hoc Platt recalibration of maia2 (task 0166): with --recalibrate-maia2, fit a
+    # two-parameter logistic on the logit of maia2's prediction over the --holdout TRAIN
+    # split (game-disjoint from the eval rows) and apply it at eval, to repair maia2's
+    # high-rating ECE blowup without re-ordering predictions. Off by default, so the
+    # committed run is byte-identical. Requires --holdout so the calibration set is genuinely
+    # held-out from the eval rows (fitting on the eval rows would leak).
+    if getattr(args, "recalibrate_maia2", False):
+        if args.holdout is None:
+            print(
+                "error: --recalibrate-maia2 needs --holdout so the recalibrator is fit on "
+                "a held-out train split, not the eval rows",
+                file=sys.stderr,
+            )
+            return 1
+        if "maia2" not in predictors:
+            print(
+                "error: --recalibrate-maia2 needs maia2 in --models (nothing to recalibrate)",
+                file=sys.stderr,
+            )
+            return 1
+        from chess_equity.validate.recalibration import make_recalibrated_predictor
+
+        predictors["maia2"] = make_recalibrated_predictor(train, predictors["maia2"])
+        title += " [maia2 Platt-recalibrated]"
 
     # Board models (maia2) read row.fen and may need torch — surface those failures as
     # a clean message rather than a traceback. ValueError = dataset built without
@@ -1408,6 +1434,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "high-rating cells (where wdl-a over-predicts and the 2000-2399 ECE blows up) "
         "fall back to the baseline while well-populated cells are unchanged. K=0 (the "
         "default) is a no-op, so committed numbers don't move unless you opt in",
+    )
+    val.add_argument(
+        "--recalibrate-maia2",
+        action="store_true",
+        help="post-hoc Platt recalibration of maia2 (task 0166): fit a two-parameter "
+        "logistic on the logit of maia2's prediction over the --holdout TRAIN split and "
+        "apply it at eval, to repair maia2's high-rating (2000+) ECE blowup without "
+        "re-ordering predictions. Needs --holdout (fit must be held-out from eval) and "
+        "maia2 in --models. Off by default, so committed numbers don't move unless you opt in",
     )
     val.add_argument(
         "--eval-month",
