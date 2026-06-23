@@ -190,6 +190,103 @@ def test_doctor_nonzero_when_broadcast_check_fails():
     assert "[FAIL] broadcast" in out.getvalue()
 
 
+# --------------------------------------------------------------------------- #
+# overlay bundle go-live preflight (task 0192)
+# --------------------------------------------------------------------------- #
+
+import json
+
+from chess_equity.doctor import overlay_dir, probe_overlay, validate_overlay_event
+
+
+def test_validate_overlay_event_accepts_a_well_formed_position():
+    validate_overlay_event(
+        {"type": "position", "ply": 44, "equity": 0.88, "cp": 60,
+         "clock": {"white": 13.2, "black": 1.6},
+         "drama": {"kind": "scramble", "magnitude": 0.55, "headline": "x"}}
+    )
+
+
+def test_validate_overlay_event_rejects_equity_out_of_range():
+    with pytest.raises(ValueError, match=r"equity.*\[0,1\]"):
+        validate_overlay_event({"type": "position", "ply": 1, "equity": 1.4})
+
+
+def test_validate_overlay_event_rejects_missing_equity():
+    with pytest.raises(ValueError, match="missing required 'equity'"):
+        validate_overlay_event({"type": "position", "ply": 1})
+
+
+def test_validate_overlay_event_rejects_unknown_type():
+    with pytest.raises(ValueError, match="unknown/missing 'type'"):
+        validate_overlay_event({"type": "wat", "equity": 0.5})
+
+
+def test_validate_overlay_event_rejects_malformed_drama():
+    with pytest.raises(ValueError, match="drama.magnitude"):
+        validate_overlay_event(
+            {"type": "position", "equity": 0.5, "drama": {"kind": "scramble", "headline": "x"}}
+        )
+
+
+def test_validate_overlay_event_tolerates_replay_extras():
+    # a replay file's delayMs (and the file's _comment) are unknown extras → ignored
+    validate_overlay_event({"type": "position", "equity": 0.5, "delayMs": 800})
+
+
+def test_probe_overlay_passes_on_the_real_bundle():
+    if overlay_dir() is None:
+        pytest.skip("overlay/ bundle not present (installed wheel)")
+    detail = probe_overlay()
+    assert "bundle OK" in detail
+    assert "to_overlay_event valid" in detail
+
+
+def _write_bundle(directory, events):
+    """Drop a minimal-but-valid overlay bundle into ``directory`` with the given events."""
+    (directory / "index.html").write_text("<html><body></body></html>", encoding="utf-8")
+    (directory / "config.html").write_text("<html><body></body></html>", encoding="utf-8")
+    (directory / "overlay.js").write_text("// overlay\n", encoding="utf-8")
+    (directory / "mock-game.json").write_text(json.dumps({"events": events}), encoding="utf-8")
+
+
+def test_probe_overlay_fails_on_a_deliberately_malformed_event(tmp_path):
+    # acceptance: a malformed bundled overlay event must fail the preflight.
+    _write_bundle(tmp_path, [{"type": "position", "ply": 1, "equity": 9.9}])
+    with pytest.raises(ValueError, match=r"equity.*\[0,1\]"):
+        probe_overlay(tmp_path)
+
+
+def test_probe_overlay_fails_on_missing_asset(tmp_path):
+    _write_bundle(tmp_path, [{"type": "position", "equity": 0.5}])
+    (tmp_path / "overlay.js").unlink()
+    with pytest.raises(ValueError, match="overlay.js"):
+        probe_overlay(tmp_path)
+
+
+def test_doctor_appends_overlay_check_and_passes_on_real_bundle():
+    if overlay_dir() is None:
+        pytest.skip("overlay/ bundle not present (installed wheel)")
+    out = io.StringIO()
+    rc = doctor(out=out, probes={"stockfish": lambda: "ok"}, overlay_probe=probe_overlay)
+    assert rc == 0
+    text = out.getvalue()
+    assert "[PASS] stockfish" in text
+    assert "[PASS] overlay" in text
+
+
+def test_doctor_nonzero_when_overlay_check_fails(tmp_path):
+    _write_bundle(tmp_path, [{"type": "position", "equity": 5.0}])
+    out = io.StringIO()
+    rc = doctor(
+        out=out,
+        probes={"stockfish": lambda: "ok"},
+        overlay_probe=lambda: probe_overlay(tmp_path),
+    )
+    assert rc == 1
+    assert "[FAIL] overlay" in out.getvalue()
+
+
 def test_feed_from_spec_dispatches_on_the_source_shape(tmp_path):
     from chess_equity.broadcast import LichessRoundFeed, UrlPgnFeed
 
