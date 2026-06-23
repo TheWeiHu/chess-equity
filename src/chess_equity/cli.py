@@ -392,6 +392,42 @@ def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
     return 0
 
 
+def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
+    """Export a ranked auto-highlight reel as JSON + markdown (task 0168).
+
+    Replays a committed PGN through the broadcast pipeline, ranks the drama, and
+    writes ``reel.json`` + ``reel.md`` to ``--out-dir`` (or prints markdown to stdout).
+    """
+    import os
+
+    from chess_equity import reel as reel_mod
+
+    with open(args.pgn, encoding="utf-8") as fh:
+        pgn_text = fh.read()
+    ingestor = BroadcastIngestor(
+        feed=LocalPgnFeed(pgn_text),  # the feed is unused; events come from the snapshot
+        model=model,
+        white_elo=args.white_elo,
+        black_elo=args.black_elo,
+    )
+    events = ingestor.ingest_snapshot(pgn_text)
+    reel = reel_mod.build_reel(events, top=args.top)
+
+    if args.out_dir is None:
+        print(reel_mod.render_markdown(reel, title=args.title))
+        return 0
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    json_path = os.path.join(args.out_dir, "reel.json")
+    md_path = os.path.join(args.out_dir, "reel.md")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        fh.write(reel_mod.render_json(reel, title=args.title) + "\n")
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write(reel_mod.render_markdown(reel, title=args.title))
+    print(f"wrote {len(reel)} moment(s): {json_path}, {md_path}", file=sys.stderr)
+    return 0
+
+
 def _run_data_stamp(args: argparse.Namespace) -> int:
     """Backfill the source-month sidecar on an already-built dataset (task 0127)."""
     from pathlib import Path
@@ -1188,6 +1224,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     add_model_arg(hl)
 
+    rl = sub.add_parser(
+        "reel",
+        help="export a ranked highlight reel (JSON + markdown) from a replayed game (task 0168)",
+    )
+    rl.add_argument(
+        "--pgn",
+        default="data/sample/sample_games.pgn",
+        help="PGN file to replay (default: committed sample fixture)",
+    )
+    rl.add_argument("--white-elo", type=int, default=None, help="override White rating")
+    rl.add_argument("--black-elo", type=int, default=None, help="override Black rating")
+    rl.add_argument("--top", type=int, default=None, help="cap the reel to the top N moments")
+    rl.add_argument(
+        "--out-dir",
+        default=None,
+        help="write reel.json + reel.md here (otherwise print markdown to stdout)",
+    )
+    rl.add_argument("--title", default="Highlight reel", help="reel title")
+    rl.add_argument(
+        "--depth", type=int, default=2,
+        help="Stockfish baseline search depth (also the maia-search ply budget)",
+    )
+    add_model_arg(rl)
+
     data = sub.add_parser("data", help="build / manage the training+validation dataset")
     data_sub = data.add_subparsers(dest="data_command", required=True)
     build = data_sub.add_parser("build", help="parse a Lichess PGN dump into a dataset")
@@ -1429,6 +1489,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "highlights":
         try:
             return _run_highlights(args, build_model(args.model, depth=args.depth))
+        except (ValueError, OSError, RuntimeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "reel":
+        try:
+            return _run_reel(args, build_model(args.model, depth=args.depth))
         except (ValueError, OSError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
