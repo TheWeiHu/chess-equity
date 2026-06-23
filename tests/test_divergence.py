@@ -14,7 +14,9 @@ from chess_equity.data.schema import PositionRow
 from chess_equity.validate.divergence import (
     FLIP_DEADBAND,
     format_divergence,
+    format_max_divergence,
     measure_divergence,
+    select_max_divergence,
 )
 from chess_equity.validate.harness import baseline_cp, wdl_a
 
@@ -83,6 +85,57 @@ def test_slices_partition_rows_by_tc_and_rating():
     by_tc = {c.label: c.n for c in d.by_tc}
     assert by_tc == {"bullet": 1, "blitz": 2}
     assert sum(c.n for c in d.by_tc) == d.overall.n == 3
+
+
+# --- max-divergence caster callout (task 0215) --------------------------------
+
+def test_select_max_divergence_picks_the_largest_absolute_gap():
+    # The middle row has the biggest |equity − stockfish| even though its sign differs.
+    rows = [_row(cp=0.0, ply=4), _row(cp=200.0, ply=7), _row(cp=-50.0, ply=12)]
+    # equity reads: small +, big − for the ply-7 row, small + again; stockfish flat at 0.5.
+    equities = {4: 0.55, 7: 0.10, 12: 0.58}
+    md = select_max_divergence(
+        rows, equity=lambda r: equities[r.ply], stockfish=lambda r: 0.5
+    )
+    assert md is not None
+    assert md.ply == 7  # |0.10 − 0.50| = 0.40 is the largest gap
+    assert abs(md.gap - (0.10 - 0.5) * 100.0) < 1e-9  # signed gap, pp (negative)
+    assert md.cp_eval == 200.0
+    assert md.equity == 0.10 and md.stockfish == 0.5
+
+
+def test_select_max_divergence_empty_and_tie_stability():
+    assert select_max_divergence([], equity=lambda r: 0.6, stockfish=lambda r: 0.5) is None
+    # Equal gaps -> the first row seen wins (stable).
+    rows = [_row(cp=0.0, ply=3), _row(cp=0.0, ply=9)]
+    md = select_max_divergence(rows, equity=lambda r: 0.7, stockfish=lambda r: 0.5)
+    assert md is not None and md.ply == 3
+
+
+def test_max_divergence_derived_fields_and_callout_line():
+    # ply 7 -> White just moved, side_to_move black, move number (7+1)//2 = 4.
+    rows = [_row(cp=12.0, ply=7)]
+    md = select_max_divergence(rows, equity=lambda r: 0.38, stockfish=lambda r: 0.52)
+    assert md is not None
+    assert md.move_number == 4
+    assert md.favored_side == "black"  # equity 0.38 < 0.5
+    assert abs(md.favored_pct - 62.0) < 1e-9  # (1 − 0.38) * 100
+    line = format_max_divergence(md)
+    # The one line surfaces ply, cp, equity-as-win%, the favoured side, and the gap.
+    assert "ply 7" in line
+    assert "move 4" in line
+    assert "cp +12" in line
+    assert "62% for Black" in line
+    assert "gap -14.0pp" in line
+
+
+def test_report_includes_the_caster_callout_section():
+    rows = [_row(cp=0.0, ply=5), _row(cp=300.0, ply=8)]
+    report = measure_divergence(rows, equity=lambda r: 0.2, stockfish=lambda r: 0.5)
+    assert report.max_divergence is not None
+    text = format_divergence(report, header="# h")
+    assert "## Caster callout" in text
+    assert "Biggest human-edge moment" in text
 
 
 # --- real-shape smoke check on the committed sample ---------------------------

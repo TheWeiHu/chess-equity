@@ -98,6 +98,76 @@ def _summarize(label: str, gaps: Sequence[Tuple[float, float]]) -> DivergenceCel
 
 
 @dataclass(frozen=True)
+class MaxDivergence:
+    """The single position where the two bars disagree most — the caster callout (0215).
+
+    The position with the largest absolute ``|equity − stockfish|`` gap: the "biggest
+    human-edge moment" a broadcaster would call out. Both bars are White-POV in [0, 1];
+    ``gap`` is the *signed* ``(equity − stockfish)`` in percentage points (＋ = the equity
+    bar reads more White-favorable). ``san`` is the move just played if the rows carry it
+    (dump rows don't — see :func:`select_max_divergence`), else ``None``.
+    """
+
+    ply: int
+    side_to_move: str
+    cp_eval: float
+    stockfish: float  # Stockfish-bar White-POV value in [0, 1]
+    equity: float  # equity-bar White-POV value in [0, 1]
+    gap: float  # signed (equity − stockfish), pp
+    san: Optional[str] = None
+
+    @property
+    def move_number(self) -> int:
+        """The full-move number of the move just played (ply 1,2 → move 1; 3,4 → move 2)."""
+        return (self.ply + 1) // 2
+
+    @property
+    def favored_side(self) -> str:
+        """Which side the *equity* bar favours ('white'/'black'; 'white' on an exact 50%)."""
+        return "white" if self.equity >= 0.5 else "black"
+
+    @property
+    def favored_pct(self) -> float:
+        """The equity bar's win% *for the side it favours* (0..100)."""
+        eq = self.equity if self.equity >= 0.5 else 1.0 - self.equity
+        return eq * 100.0
+
+
+def select_max_divergence(
+    rows: Sequence[PositionRow],
+    equity: Predictor,
+    stockfish: Predictor,
+) -> Optional[MaxDivergence]:
+    """Pick the position with the largest absolute equity-vs-Stockfish gap (task 0215).
+
+    Pure post-processing of the per-row data: scans ``rows`` once and returns the one with
+    the maximum ``|equity − stockfish|`` as a :class:`MaxDivergence`, or ``None`` for an
+    empty input. Ties keep the first row seen (stable). ``san`` is read off the row via
+    ``getattr`` so it appears when a richer row source carries it; the binned-dump rows the
+    CLI feeds don't store the move, so it stays ``None`` and the callout shows the move
+    number derived from ``ply`` instead.
+    """
+    best: Optional[MaxDivergence] = None
+    best_abs = -1.0
+    for row in rows:
+        sf = stockfish(row)
+        eq = equity(row)
+        abs_gap = abs(eq - sf)
+        if abs_gap > best_abs:
+            best_abs = abs_gap
+            best = MaxDivergence(
+                ply=row.ply,
+                side_to_move=row.side_to_move,
+                cp_eval=row.cp_eval,
+                stockfish=sf,
+                equity=eq,
+                gap=(eq - sf) * 100.0,
+                san=getattr(row, "san", None),
+            )
+    return best
+
+
+@dataclass(frozen=True)
 class DivergenceReport:
     """The full divergence measurement: overall plus slices by tc, rating, and the cross."""
 
@@ -107,6 +177,7 @@ class DivergenceReport:
     by_tc: List[DivergenceCell]
     by_rating: List[DivergenceCell]
     by_tc_rating: List[DivergenceCell]
+    max_divergence: Optional[MaxDivergence] = None
 
 
 def measure_divergence(
@@ -149,11 +220,30 @@ def measure_divergence(
             _summarize(f"{tc} × {rb}", by_cross[(tc, rb)])
             for tc, rb in sorted(by_cross)
         ],
+        max_divergence=select_max_divergence(rows, equity, stockfish),
     )
 
 
 def _fmt_rate(x: Optional[float]) -> str:
     return "—" if x is None else f"{100 * x:4.1f}%"
+
+
+def format_max_divergence(md: MaxDivergence) -> str:
+    """Render the max-divergence position as one caster-ready callout line (task 0215).
+
+    Reads like a broadcaster's line: what the engine bar shows, what the practical equity
+    bar shows and for whom, and the move it happened on — with ply, san (when present), cp,
+    equity, and the gap all surfaced so it doubles as the machine-readable record.
+    """
+    side = md.favored_side.capitalize()
+    move = f"move {md.move_number}"
+    if md.san:
+        move += f", {md.san}"
+    return (
+        f"🎙 **Biggest human-edge moment:** engine says {md.stockfish * 100:.0f}% "
+        f"(cp {md.cp_eval:+.0f}) but practical equity is {md.favored_pct:.0f}% for "
+        f"{side} ({move}, ply {md.ply}, gap {md.gap:+.1f}pp)."
+    )
 
 
 def _rows_table(cells: Sequence[DivergenceCell], first_col: str) -> List[str]:
@@ -204,6 +294,8 @@ def format_divergence(report: DivergenceReport, *, header: str = "") -> str:
         "",
     ]
     out += _rows_table([report.overall], "")
+    if report.max_divergence is not None:
+        out += ["", "## Caster callout", "", format_max_divergence(report.max_divergence)]
     out += ["", "## By time control", ""]
     out += _rows_table(report.by_tc, "time control")
     out += ["", "## By rating band", ""]
