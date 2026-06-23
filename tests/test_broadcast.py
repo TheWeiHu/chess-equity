@@ -250,6 +250,99 @@ def test_ingestor_survives_feed_error_and_reconnects():
     assert [e.san for e in events] == ["e4", "e5", "Nf3", "Nc6"]
 
 
+class _ConnectThenErrorFeed(BroadcastFeed):
+    """Connects once (so trackers exist), then raises FeedError on every later poll.
+
+    Models a live feed that drops mid-stream and stays down — the worst case for the
+    reconnect backoff, since the ingestor must keep retrying (it connected) instead of
+    giving up, ramping the wait each time.
+    """
+
+    def __init__(self):
+        self._n = 0
+
+    def poll(self):
+        self._n += 1
+        if self._n == 1:
+            return GAME_PGN
+        raise FeedError("feed down")
+
+
+def test_reconnect_backoff_is_exponential_and_bounded():
+    # A feed that drops after connecting should be retried with a geometric, capped
+    # backoff, and announce each reconnect attempt — no network, sleep is recorded.
+    delays: list[float] = []
+    reconnects: list[tuple[int, float]] = []
+    ingestor = BroadcastIngestor(_ConnectThenErrorFeed(), _model())
+    stats = ingestor.run(
+        lambda _: None,
+        interval=2.0,
+        max_polls=7,
+        sleep=delays.append,
+        reconnect_backoff=1.0,
+        backoff_factor=2.0,
+        backoff_max=8.0,
+        on_reconnect=lambda attempt, delay: reconnects.append((attempt, delay)),
+    )
+    # poll 1 connects (no sleep before it); the first inter-poll sleep is the normal
+    # interval, then each subsequent sleep is the prior error's backoff.
+    assert delays[0] == 2.0  # healthy cadence before the drop
+    assert delays[1:] == [1.0, 2.0, 4.0, 8.0, 8.0]  # geometric, capped at backoff_max
+    # on_reconnect fires once per FeedError with the growing (capped) delay.
+    assert reconnects == [(1, 1.0), (2, 2.0), (3, 4.0), (4, 8.0), (5, 8.0), (6, 8.0)]
+    assert stats.errors == 6
+    assert stats.max_backoff_s == 8.0
+    # It never crashes and never gives up once connected (kept polling to max_polls).
+    assert stats.polls == 7
+
+
+class _ErrorsThenRecoversFeed(BroadcastFeed):
+    """Errors twice, recovers and serves a move, then errors again — a flicker.
+
+    Lets us assert the backoff *resets* on a successful poll instead of ramping forever.
+    """
+
+    def __init__(self):
+        self._inner = LocalPgnFeed(GAME_PGN)
+        self._n = 0
+
+    def poll(self):
+        self._n += 1
+        if self._n in (2, 3, 5):
+            raise FeedError("flicker")
+        return self._inner.poll()
+
+
+def test_reconnect_backoff_resets_after_a_successful_poll():
+    reconnects: list[tuple[int, float]] = []
+    ingestor = BroadcastIngestor(_ErrorsThenRecoversFeed(), _model())
+    stats = ingestor.run(
+        lambda _: None,
+        interval=0.0,
+        max_polls=10,
+        sleep=lambda _: None,
+        reconnect_backoff=1.0,
+        backoff_factor=2.0,
+        on_reconnect=lambda attempt, delay: reconnects.append((attempt, delay)),
+    )
+    # Two consecutive errors ramp to 1,2; the recovery (poll 4) resets the attempt
+    # counter, so the later lone error starts again at attempt 1 (delay 1.0).
+    assert reconnects == [(1, 1.0), (2, 2.0), (1, 1.0)]
+    # Two separate recovery episodes (after the 2-error burst, after the lone error).
+    assert stats.reconnects == 2
+
+
+def test_reconnect_resumes_from_last_seen_move_losing_nothing():
+    # A drop mid-stream must not lose moves: the tracker keeps its emitted prefix, so
+    # after reconnecting the feed catches up and all four moves still arrive in order.
+    ingestor = BroadcastIngestor(_ErrorsThenRecoversFeed(), _model())
+    events: list[MoveEvent] = []
+    ingestor.run(
+        events.append, interval=0.0, max_polls=10, sleep=lambda _: None
+    )
+    assert [e.san for e in events] == ["e4", "e5", "Nf3", "Nc6"]
+
+
 def test_ingestor_routes_multiple_games():
     game2 = GAME_PGN.replace("Carlsen", "Ding").replace(
         'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'

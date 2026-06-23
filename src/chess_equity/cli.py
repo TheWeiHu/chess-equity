@@ -287,6 +287,16 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
 
     cp_engine = resolve_objective_engine(depth=args.depth, warn=False)
 
+    # Surface a visible 'reconnecting' state when a live feed drops: the ingestor keeps
+    # retrying with bounded exponential backoff (resuming from the last seen move), and
+    # this prints the attempt + wait to stderr so the streamer knows the overlay is
+    # holding rather than dead (task 0175).
+    def log_reconnect(attempt: int, delay: float) -> None:
+        print(
+            f"# broadcast feed error; reconnecting in {delay:.0f}s (attempt {attempt})",
+            file=sys.stderr,
+        )
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -311,6 +321,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 max_polls=args.max_polls,
                 max_idle_polls=None if is_live else 1,
                 heartbeat=is_live,
+                on_reconnect=log_reconnect,
             )
 
         serve_sse(
@@ -343,17 +354,22 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
 
     ingestor.on_game = emit_game
 
-    # A local replay terminates (max_idle_polls=1); a live feed runs until interrupted
-    # (--max-polls caps it). interval=0 for replays keeps tests/CI instant.
+    # A live feed runs until interrupted, so keep retrying a dropped feed forever
+    # (max_idle_polls=None, --max-polls caps it); a finite --pgn replay still terminates
+    # on idle (max_idle_polls=1). interval=0 for replays keeps tests/CI instant.
+    is_live = bool(args.round or args.url)
     stats = ingestor.run(
         emit,
         interval=args.interval,
         max_polls=args.max_polls,
-        max_idle_polls=1,
+        max_idle_polls=None if is_live else 1,
+        on_reconnect=log_reconnect,
     )
     print(
         f"# {stats.events} events over {stats.polls} polls "
-        f"({stats.errors} feed errors), max equity compute {stats.max_compute_ms:.1f} ms",
+        f"({stats.errors} feed errors, {stats.reconnects} reconnect(s), "
+        f"max backoff {stats.max_backoff_s:.0f}s), "
+        f"max equity compute {stats.max_compute_ms:.1f} ms",
         file=sys.stderr,
     )
     return 0
