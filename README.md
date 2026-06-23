@@ -72,6 +72,35 @@ programmatically. `--min-n` (default 2000) refuses to call a tiny-n win "proof."
 Full method, the gate's exact meaning, and a no-download sample run are in
 [Data & validation](#data--validation) below.
 
+### How much does the equity bar disagree with Stockfish?
+
+The gate above asks which bar *predicts* better. A separate question is how far the
+rating/clock-aware **equity bar** (`wdl-a`) visibly *departs* from the rating-blind
+**Stockfish bar** (`baseline`, Lichess Win% of `cp_eval`) on the **same** positions —
+product-visible *disagreement*, with no outcomes read. On the same real Lichess dump
+(`2013-01`, n=12,000) the two bars are routinely far apart:
+
+| metric | value |
+|---|--:|
+| mean \|gap\| | **15.4pp** |
+| p90 \|gap\| | **31.2pp** |
+| signed gap (equity − Stockfish) | +2.5pp |
+| rank-disagree (both bars clear ±5pp of 50%) | **8.7%** (n=7,329) |
+
+The disagreement is largest in fast time controls, where rating most changes the practical
+odds, and smallest in classical:
+
+| time control | n | mean \|gap\| (pp) | p90 \|gap\| (pp) | rank-disagree |
+|---|--:|--:|--:|--:|
+| bullet | 4,851 | 16.3 | 33.9 | 9.2% |
+| rapid | 2,731 | 15.2 | 32.4 | 12.8% |
+| blitz | 4,266 | 14.6 | 28.9 | 5.6% |
+| classical | 77 | 8.9 | 15.1 | 1.7% |
+
+This is *disagreement*, not accuracy — it shows the equity bar is a genuinely different
+signal, not that it's right (for that, see the gate above). Full method and the
+by-rating-band breakdown are in **[reports/divergence_real.md](reports/divergence_real.md)**.
+
 ## Install
 
 ```bash
