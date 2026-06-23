@@ -329,6 +329,31 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
 
     selector = parse_board_selector(getattr(args, "board", None))
 
+    # --ledger: replay a finished local PGN into a flat per-move CSV for post-show stats
+    # (task 0204). A finite snapshot export, not a live stream, so it requires --pgn and
+    # short-circuits before the live serve/print paths.
+    if getattr(args, "ledger", None) is not None:
+        if not args.pgn:
+            print("# broadcast --ledger requires --pgn (no live feed)", file=sys.stderr)
+            return 2
+        from chess_equity.broadcast import write_ledger
+
+        ingestor = BroadcastIngestor(
+            _build_broadcast_feed(args),
+            model,
+            white_elo=args.white_elo,
+            black_elo=args.black_elo,
+            clock_aware=args.clock_aware,
+            engine=cp_engine,
+            select=selector,
+        )
+        with open(args.pgn, encoding="utf-8") as fh:
+            events = ingestor.ingest_snapshot(fh.read())
+        with open(args.ledger, "w", encoding="utf-8", newline="") as fh:
+            rows = write_ledger(events, fh)
+        print(f"wrote {rows} move rows to {args.ledger}", file=sys.stderr)
+        return 0
+
     if args.serve_sse is not None:
         from chess_equity.broadcast import overlay_events, serve_sse
 
@@ -1418,6 +1443,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="stream overlay events as Server-Sent-Events on this port instead of "
         "printing JSON Lines — point an OBS browser source at "
         "http://localhost:PORT/?src=/sse (task 0094)",
+    )
+    bc.add_argument(
+        "--ledger",
+        metavar="OUT",
+        default=None,
+        help="replay a local --pgn and write a flat per-move equity ledger CSV to OUT "
+        "(ply, side, san, equity, delta_equity, grade, drama label/score, clocks) for "
+        "spreadsheets / post-show graphics — the tabular counterpart to grade "
+        "--annotate-pgn (task 0204). Requires --pgn (no live feed).",
     )
     bc.add_argument(
         "--captions",
