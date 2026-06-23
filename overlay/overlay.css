@@ -15,12 +15,18 @@ html, body {
   --accent: #4ade80;                 /* equity-positive flare */
   --bad: #f87171;
   --pad: 10px;
+  /* Room above & below the bar for the grade/drama/human-edge badges, which sit
+     at negative offsets outside the bar box. Without it they clip off the top
+     (and bottom) of the OBS canvas — their text is cut off at 1080p. */
+  --badge-reserve: 36px;
   box-sizing: border-box;
   display: grid;
   gap: 8px;
   width: 100%;
-  padding: var(--pad);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  padding: var(--badge-reserve) var(--pad);
+  /* Heavier halo so white labels stay legible over a light/busy stream
+     background (e.g. a light chessboard), not just a dark one. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.7);
 }
 
 /* Horizontal: names flank a wide bar. */
@@ -36,7 +42,7 @@ html, body {
   height: 100vh;
 }
 .layout-vertical .bar { flex-direction: column-reverse; width: 36px; height: 100%; }
-.layout-vertical .bar-fill-white { width: 100%; }
+.layout-vertical .bar-fill-white { width: 100%; border-radius: 0 0 6px 6px; }  /* white sits at the bottom */
 .layout-vertical .bar-fill-black { width: 100%; }
 
 .player {
@@ -81,7 +87,10 @@ html, body {
   display: flex;
   height: 34px;
   border-radius: 6px;
-  overflow: hidden;
+  /* NOT overflow:hidden — the grade/drama/human-edge badges are children of the
+     bar positioned outside its box, and overflow:hidden clipped them away
+     entirely (they never rendered at any resolution). The fills round their own
+     outer corners instead, so the pill shape is preserved without clipping. */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   background: var(--black);
 }
@@ -89,6 +98,7 @@ html, body {
   background: var(--white);
   transition: width 0.5s ease, height 0.5s ease;
   width: 50%;
+  border-radius: 6px 0 0 6px;   /* match the bar's rounded left edge */
 }
 .bar-fill-black {
   background: var(--black);
