@@ -143,6 +143,24 @@ html, body {
   pointer-events: none;
 }
 
+/* Model badge (task 0222): a small static pill above the bar naming the model that
+   drives the fill (e.g. "Maia-2"), so a viewer can tell this is a rating-conditioned
+   human win-probability bar, not a Stockfish eval. Hidden when no model is announced. */
+.model-badge {
+  align-self: flex-start;
+  margin-bottom: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e8e8e8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.model-badge[hidden] { display: none; }
+
 /* Caster-mode drama flare (task 0022): a banner over the bar on a big practical
    swing, emphasised when it's a swing the engine bar misses. */
 .drama-flare {

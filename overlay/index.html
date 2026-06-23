@@ -45,6 +45,10 @@
     </div>
 
     <div class="bar-stack">
+      <!-- Model badge (task 0222): names the model driving the fill so a viewer can tell
+           this is a rating-conditioned HUMAN win-probability bar, not a Stockfish eval.
+           Set from the one-time `game` event; stays hidden when no model is announced. -->
+      <div class="model-badge" data-model title="the human win-probability model driving this bar" hidden></div>
       <div class="bar" role="img" aria-label="equity bar">
         <div class="bar-fill-white" data-bar-white></div>
         <div class="bar-fill-black" data-bar-black></div>

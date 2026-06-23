@@ -345,6 +345,35 @@ def build_captions_vtt(
     return "\n".join(lines).rstrip() + "\n"
 
 
+# Human-readable labels for the equity model driving the bar (task 0222), keyed by the
+# model's canonical ``SOURCE``. The badge exists so a viewer can tell the bar is a
+# rating-conditioned HUMAN win-probability model, not a classic Stockfish eval. Unknown
+# sources fall back to the raw ``SOURCE`` (or class name); a ``None`` model -> no badge.
+_MODEL_LABELS: Dict[str, str] = {
+    "maia2": "Maia-2",
+    "wdl-a": "WDL-A",
+    "wdl-net": "WDL-Net",
+    "lichess-baseline": "baseline",
+    "maia-rollout": "Maia rollout",
+    "maia-search": "Maia search",
+}
+
+
+def model_label(model: Optional[object]) -> Optional[str]:
+    """Human-readable label for the equity model driving the overlay bar (task 0222).
+
+    Unwraps a :class:`~chess_equity.cache.CachingEquityModel` to its base, reads the
+    model's ``SOURCE`` key, and maps it to a display label (e.g. ``"maia2"`` ->
+    ``"Maia-2"``). Unknown sources fall back to the raw ``SOURCE`` (or the class name);
+    a ``None`` model returns ``None`` so the overlay shows no badge.
+    """
+    if model is None:
+        return None
+    base = getattr(model, "base", model)  # unwrap CachingEquityModel
+    source = getattr(base, "SOURCE", type(base).__name__)
+    return _MODEL_LABELS.get(source, source)
+
+
 @dataclass(frozen=True)
 class GameEvent:
     """One-time game metadata in the overlay's ``"game"`` schema (task 0047).
@@ -364,12 +393,17 @@ class GameEvent:
     # single-game feed; set to the game's position in the round PGN otherwise, so the
     # overlay can build a board selector and route each event to the chosen board.
     board: Optional[int] = None
+    # Human-readable label for the equity model driving the bar (task 0222), e.g.
+    # "Maia-2" / "WDL-A" / "baseline". ``None`` when unknown — the overlay then shows
+    # no model badge, so a viewer never sees a misleading label.
+    model: Optional[str] = None
 
     def to_overlay(self) -> Dict[str, object]:
         """Render as the overlay's ``{type: "game", players: {...}}`` event (see
         overlay/README.md). ``name``/``rating`` may be ``null``; overlay.js falls back
         to "White"/"Black" and a blank rating. ``board`` is the 0-based index in a
-        multi-game round (omitted when single-game)."""
+        multi-game round (omitted when single-game). ``model`` is the human-readable
+        bar-model badge (task 0222), omitted when unknown so no badge renders."""
         event: Dict[str, object] = {
             "type": "game",
             "game_id": self.game_id,
@@ -380,6 +414,8 @@ class GameEvent:
         }
         if self.board is not None:
             event["board"] = self.board
+        if self.model is not None:
+            event["model"] = self.model
         return event
 
 
@@ -412,13 +448,15 @@ def game_event(
     white_elo: Optional[int] = None,
     black_elo: Optional[int] = None,
     board: Optional[int] = None,
+    model: Optional[object] = None,
 ) -> GameEvent:
     """Build the one-time :class:`GameEvent` for a game from its PGN headers.
 
     An explicit ``white_elo``/``black_elo`` (the ingestor's override) wins over the
     header so the announced ratings match the ones the trackers actually evaluate at.
     ``board`` is the 0-based index of this game in a multi-game round (task 0185), or
-    ``None`` for a single-game feed.
+    ``None`` for a single-game feed. ``model`` is the equity model driving the bar; its
+    human-readable label is announced for the overlay's model badge (task 0222).
     """
     return GameEvent(
         game_id=game_id,
@@ -427,6 +465,7 @@ def game_event(
         white_elo=white_elo if white_elo is not None else _parse_elo(headers, "WhiteElo"),
         black_elo=black_elo if black_elo is not None else _parse_elo(headers, "BlackElo"),
         board=board,
+        model=model_label(model),
     )
 
 
@@ -1001,6 +1040,7 @@ class BroadcastIngestor:
                             white_elo=self.white_elo,
                             black_elo=self.black_elo,
                             board=index if multi_board else None,
+                            model=self.model,
                         )
                     )
             new = self._tracker_for(gid).ingest(game_pgn)

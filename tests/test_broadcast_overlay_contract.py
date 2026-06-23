@@ -17,11 +17,14 @@ Scope: the ``position`` event (everything :class:`MoveEvent` can supply today). 
 pinned there; this test guards the per-move half. No network/torch — a bundled PGN
 is replayed through :class:`GameTracker`.
 """
+import io
 import os
 import re
 
+import chess.pgn
+
 from chess_equity.adapters import EquityModel, white_to_move
-from chess_equity.broadcast import GameTracker
+from chess_equity.broadcast import GameTracker, game_event, model_label
 from chess_equity.models import LichessBaselineModel
 from chess_equity.types import WDL, Equity
 
@@ -195,3 +198,57 @@ def test_values_map_from_moveevent():
             assert evt["grade"]["label"] == src.last_move_grade
             expected = None if src.delta_equity is None else src.delta_equity / 100.0
             assert evt["grade"]["delta"] == expected
+
+
+# --------------------------------------------------------------------------- #
+# Model badge contract (task 0222): the `game` event names the bar's model so a
+# viewer can tell the fill is a human win-probability model, not Stockfish.
+# --------------------------------------------------------------------------- #
+
+
+def _headers():
+    return chess.pgn.read_headers(io.StringIO(GAME_PGN))
+
+
+def overlay_game_reads():
+    """Fields overlay.js reads off a `game` event, scraped from applyGame.
+
+    Same drift guard as :func:`overlay_position_reads` but for the one-time game
+    event: a new ``evt.<field>`` read in applyGame the producer doesn't emit fails.
+    """
+    with open(OVERLAY_JS, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    body = src[src.index("function applyGame") :]
+    body = body[: body.index("\n  function ", 1)]
+    return set(re.findall(r"evt\.([A-Za-z_]+)", body))
+
+
+def test_model_label_maps_known_sources():
+    """model_label maps a model's SOURCE to its human-readable badge label."""
+    assert model_label(LichessBaselineModel()) == "baseline"
+
+
+def test_model_label_none_for_no_model():
+    """A None model yields no label, so the overlay shows no badge."""
+    assert model_label(None) is None
+
+
+def test_game_event_emits_model_badge():
+    """game_event(model=...) surfaces a human-readable model on the overlay event."""
+    ev = game_event(_headers(), "g", model=LichessBaselineModel())
+    assert ev.model == "baseline"
+    assert ev.to_overlay()["model"] == "baseline"
+
+
+def test_game_event_without_model_omits_badge():
+    """Default/None model: the overlay event carries no model key (fallback: no badge)."""
+    ev = game_event(_headers(), "g")
+    assert ev.model is None
+    assert "model" not in ev.to_overlay()
+
+
+def test_overlay_reads_model_off_game_event():
+    """Drift guard: if overlay.js reads evt.model on a game event, the bridge emits it."""
+    emitted = set(game_event(_headers(), "g", model=LichessBaselineModel()).to_overlay())
+    if "model" in overlay_game_reads():
+        assert "model" in emitted, "overlay.js reads evt.model but the bridge never emits it"
