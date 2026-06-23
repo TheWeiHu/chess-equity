@@ -109,8 +109,10 @@ function pos(board, mag) {
   return { type: "position", board: board, ply: 10, equity: 0.5, cp: 0, drama: { magnitude: mag } };
 }
 
+// (a)/(b) pin the original hair-trigger director (challengePlies:1, dramaMargin:0) so the
+// post-cut focus-lock semantics stay covered independently of the 0203 anti-flap default.
 check("(a) a higher-drama board event steals focus under autofollow", () => {
-  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3, challengePlies: 1, dramaMargin: 0 });
   r.learn(BOARDS_EVENT); // board 0 auto-selected, unlocked
   r.note(pos(0, 0.1)); // a quiet event on the followed board
   assert.strictEqual(r.selected(), 0, "still on board 0 before any bigger swing");
@@ -120,7 +122,7 @@ check("(a) a higher-drama board event steals focus under autofollow", () => {
 });
 
 check("(b) the focus lock prevents an immediate re-switch", () => {
-  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3, challengePlies: 1, dramaMargin: 0 });
   r.learn(BOARDS_EVENT);
   r.note(pos(1, 0.9)); // steal to board 1, lock = 3
   assert.strictEqual(r.selected(), 1);
@@ -135,7 +137,7 @@ check("(b) the focus lock prevents an immediate re-switch", () => {
 });
 
 check("(c) a manual select pins the board and disables autofollow", () => {
-  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3 });
+  const r = O.makeBoardRouter({ autofollow: true, lockPlies: 3, challengePlies: 1, dramaMargin: 0 });
   r.learn(BOARDS_EVENT);
   r.select(0); // caster pins board 0
   assert.strictEqual(r.pinned(), true);
@@ -154,6 +156,73 @@ check("autofollow is inert without the flag (default routing preserved)", () => 
   r.note(pos(1, 1.0));
   assert.strictEqual(r.selected(), 0, "no autofollow → focus stays where learn put it");
   assert.strictEqual(r.autofollow(), false);
+});
+
+// ---- Anti-flap stickiness (task 0203): drama margin + K consecutive ticks ----------
+// The default director is sticky: a rival must out-drama the leader by `dramaMargin` for
+// `challengePlies` CONSECUTIVE ticks before it cuts, so a busy round can't flip-flop.
+
+check("(0203) a single hotter tick does NOT cut under the sticky default", () => {
+  const r = O.makeBoardRouter({ autofollow: true }); // defaults: margin 0.1, K 2
+  r.learn(BOARDS_EVENT); // board 0 followed
+  r.note(pos(1, 0.9)); // board 1 erupts once...
+  assert.strictEqual(r.selected(), 0, "one margin-clearing tick is not enough to cut");
+  r.note(pos(1, 0.9)); // ...and sustains the lead a 2nd consecutive tick
+  assert.strictEqual(r.selected(), 1, "a sustained K=2 lead finally steals focus");
+});
+
+check("(0203) a rival that cools off below the margin loses its streak", () => {
+  const r = O.makeBoardRouter({ autofollow: true, challengePlies: 3, dramaMargin: 0.1 });
+  r.learn(BOARDS_EVENT);
+  r.note(pos(1, 0.9)); // challenge tick 1
+  r.note(pos(1, 0.9)); // challenge tick 2
+  assert.strictEqual(r.selected(), 0, "two ticks in, K=3 not yet reached");
+  r.note(pos(1, 0.0)); // board 1 goes quiet — streak resets
+  r.note(pos(1, 0.9)); // streak restarts at 1, not 3
+  assert.strictEqual(r.selected(), 0, "a cooled-off rival must rebuild the full streak");
+});
+
+check("(0203) two rivals leapfrogging by a hair never thrash the bar", () => {
+  const r = O.makeBoardRouter({ autofollow: true }); // margin 0.1, K 2
+  r.learn({ type: "game", board: 0, players: { white: { name: "A" }, black: { name: "B" } } });
+  r.learn({ type: "game", board: 1, players: { white: { name: "C" }, black: { name: "D" } } });
+  r.learn({ type: "game", board: 2, players: { white: { name: "E" }, black: { name: "F" } } });
+  // board 0 followed; boards 1 and 2 alternate as the hottest, never one of them twice running
+  r.note(pos(1, 0.9));
+  r.note(pos(2, 0.95));
+  r.note(pos(1, 0.92));
+  r.note(pos(2, 0.96));
+  assert.strictEqual(r.selected(), 0, "no single rival sustained K consecutive ticks → no cut");
+});
+
+check("(0203) a leader going quiet lets a real rival accumulate across interleaved ticks", () => {
+  const r = O.makeBoardRouter({ autofollow: true }); // margin 0.1, K 2
+  r.learn(BOARDS_EVENT); // board 0 followed
+  r.note(pos(0, 0.05)); // leader is in a dead-quiet position
+  r.note(pos(1, 0.9)); // rival challenge tick 1
+  r.note(pos(0, 0.05)); // an interleaved quiet leader tick must NOT reset the challenger
+  r.note(pos(1, 0.9)); // rival challenge tick 2 → cut
+  assert.strictEqual(r.selected(), 1, "a sustained rival wins even with the leader still emitting");
+});
+
+check("(0203) margin gate: a rival that only ties the leader never cuts", () => {
+  const r = O.makeBoardRouter({ autofollow: true, dramaMargin: 0.2, challengePlies: 1 });
+  r.learn(BOARDS_EVENT);
+  r.note(pos(0, 0.5)); // leader at 0.5
+  r.note(pos(1, 0.6)); // rival leads by only 0.1 < margin 0.2
+  assert.strictEqual(r.selected(), 0, "a sub-margin lead never cuts, even at K=1");
+  r.note(pos(1, 0.75)); // now leads by 0.25 >= margin
+  assert.strictEqual(r.selected(), 1, "clearing the margin cuts");
+});
+
+check("(0203) unpinning resets a half-built challenge (pin/unpin semantics)", () => {
+  const r = O.makeBoardRouter({ autofollow: true, challengePlies: 2, dramaMargin: 0.1 });
+  r.learn(BOARDS_EVENT);
+  r.note(pos(1, 0.9)); // challenge tick 1 for board 1 while autofollowing
+  r.select(0); // caster pins board 0 — must abandon the pending challenge
+  r.resume(); // unpin
+  r.note(pos(1, 0.9)); // this is a FRESH challenge tick 1, not tick 2
+  assert.strictEqual(r.selected(), 0, "the pre-pin streak did not carry across the pin/unpin");
 });
 
 // ---- Auto-advance off a finished board (task 0189) -----------------------------

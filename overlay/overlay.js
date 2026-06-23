@@ -130,14 +130,28 @@
   // last switch, so transient noise can't thrash the bar (a real swing wins; a blip waits
   // out the lock). A manual `select(idx)` PINS the board and disables autofollow until
   // `resume()`, so a caster can always override the director.
+  //
+  // Anti-flap stickiness (task 0203): the focus lock above is a min-dwell AFTER a cut, but
+  // pre-cut the director used to steal on a bare `mag > leader` — so on a busy round two
+  // boards leapfrog by a hair every tick and the bar flip-flops, which is unwatchable on
+  // air. Now a challenger must out-drama the leader by `opts.dramaMargin` for
+  // `opts.challengePlies` CONSECUTIVE challenge ticks before it can cut. A rival that falls
+  // back under the margin loses its streak; the leader going quiet lets a real rival
+  // accumulate its streak across interleaved quiet-board ticks. Defaults are sticky (margin
+  // 0.1, K 2) so anti-flap is on by default; set `challengePlies:1, dramaMargin:0` for the
+  // old hair-trigger behavior.
   function makeBoardRouter(opts) {
     opts = opts || {};
     var autofollow = !!opts.autofollow;
-    var lockPlies = opts.lockPlies == null ? 6 : opts.lockPlies; // focus-lock window
+    var lockPlies = opts.lockPlies == null ? 6 : opts.lockPlies; // post-cut min-dwell window
+    var dramaMargin = opts.dramaMargin == null ? 0.1 : opts.dramaMargin; // lead a rival must show
+    var challengePlies = opts.challengePlies == null ? 2 : opts.challengePlies; // sustained ticks (K)
     var boards = []; // [{index, players}], in board order
     var selected = null; // followed board index; null = none chosen yet
     var pinned = false; // a manual select pins the board, disabling autofollow + auto-advance
     var lockRemaining = 0; // plies left before autofollow may switch again
+    var challenger = null; // board currently building a sustained-lead challenge (or null)
+    var challengeStreak = 0; // consecutive challenge ticks the challenger has held the margin
     var lastDrama = {}; // board index -> latest drama magnitude seen
     var finished = {}; // board index -> true once its game has a terminal result (0189)
 
@@ -188,11 +202,15 @@
         selected = idx;
         pinned = true;
         lockRemaining = 0;
+        challenger = null; // a fresh pick abandons any half-built challenge (0203)
+        challengeStreak = 0;
       },
       // Re-enable autofollow after a manual pin (the "reset" the caster reaches for).
       resume: function () {
         pinned = false;
         lockRemaining = 0;
+        challenger = null; // unpinning starts the director clean — no stale streak (0203)
+        challengeStreak = 0;
       },
       // Auto-director step (task 0188): given an incoming event, decide whether the most
       // dramatic board should steal focus. No-op unless autofollow is on, the feed is
@@ -217,9 +235,26 @@
           lockRemaining--; // locked: a real swing has to wait out the focus window
           return;
         }
-        if (mag > (lastDrama[selected] || 0)) {
-          selected = evt.board; // a higher-drama board steals focus...
-          lockRemaining = lockPlies; // ...and the lock guards it from an immediate flip
+        // Anti-flap (0203): a rival cuts only after it leads the leader by `dramaMargin`
+        // for `challengePlies` consecutive challenge ticks. Interleaved quiet boards (which
+        // never clear the margin) don't reset the standing challenger; only the challenger
+        // itself falling back under the margin does.
+        if (mag - (lastDrama[selected] || 0) >= dramaMargin) {
+          if (challenger === evt.board) {
+            challengeStreak++;
+          } else {
+            challenger = evt.board; // a new rival takes over the challenge slot
+            challengeStreak = 1;
+          }
+          if (challengeStreak >= challengePlies) {
+            selected = evt.board; // a sustained, margin-clearing swing steals focus...
+            lockRemaining = lockPlies; // ...and the lock guards it from an immediate flip
+            challenger = null;
+            challengeStreak = 0;
+          }
+        } else if (challenger === evt.board) {
+          challenger = null; // the standing challenger cooled off — drop its streak
+          challengeStreak = 0;
         }
       },
       // Update the roster from a routing event. A "boards" event carries the full
@@ -266,6 +301,8 @@
       legend: p.get("legend") === "1",
       autofollow: p.get("autofollow") === "1",
       focuslock: parseInt(p.get("focuslock"), 10),
+      dramamargin: parseFloat(p.get("dramamargin")),
+      challenge: parseInt(p.get("challenge"), 10),
       speed: parseFloat(p.get("speed")) || 1,
       welo: p.get("welo"),
       belo: p.get("belo"),
@@ -510,6 +547,8 @@
     boardRouter = makeBoardRouter({
       autofollow: cfg.autofollow,
       lockPlies: isNaN(cfg.focuslock) ? undefined : cfg.focuslock,
+      dramaMargin: isNaN(cfg.dramamargin) ? undefined : cfg.dramamargin,
+      challengePlies: isNaN(cfg.challenge) ? undefined : cfg.challenge,
     });
     const root = q("#overlay");
     if (root) {
