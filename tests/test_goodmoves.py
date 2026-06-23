@@ -18,9 +18,11 @@ from chess_equity.validate.goodmoves import (
     cp_gain_mover,
     equity_gain_mover,
     format_good_moves,
+    format_good_moves_sweep,
     iter_move_pairs,
     measure_good_moves,
     reads_good_above_blunder,
+    sweep_good_moves,
 )
 from chess_equity.validate.harness import baseline_cp, wdl_a
 
@@ -148,3 +150,70 @@ def test_format_renders_table_and_verdict():
     assert "| wdl-a |" in text
     assert "Direction:" in text
     assert "Rating signal:" in text
+
+
+# --- cutoff-robustness sweep (task 0157) --------------------------------------
+
+def test_sweep_covers_full_grid_and_sign_acc_is_grid_invariant():
+    # A monotone-in-cp predictor reads good above blunder at every cutoff, so the sweep
+    # should hold in all 9 cells. Build a few games so the buckets are non-empty across
+    # the whole 5/10/20 × 75/100/150 grid.
+    rows = []
+    for gi, gid in enumerate(("a", "b", "c")):
+        base = 100.0 * gi
+        rows += [
+            _row(cp=base + 0.0, ply=1, game_id=gid),
+            _row(cp=base + 8.0, ply=2, game_id=gid),    # Black moved, White +8 -> -8 (good ≤10)
+            _row(cp=base + 22.0, ply=3, game_id=gid),   # White moved, +14 good (>10, ≤20)
+            _row(cp=base + 200.0, ply=4, game_id=gid),  # Black moved, +178 -> -178 blunder
+        ]
+    good_cuts = (5.0, 10.0, 20.0)
+    blunder_cuts = (75.0, 100.0, 150.0)
+    [sweep] = sweep_good_moves(
+        rows, {"baseline": baseline_cp},
+        good_cutoffs=good_cuts, blunder_cutoffs=blunder_cuts,
+    )
+    assert sweep.name == "baseline"
+    assert len(sweep.cells) == len(good_cuts) * len(blunder_cuts)  # full grid, every cell
+    assert {(c.good_max_loss, c.blunder_drop) for c in sweep.cells} == {
+        (g, b) for g in good_cuts for b in blunder_cuts
+    }
+    # sign-acc is reported once and matches the default measurement (grid-invariant).
+    [base_rep] = measure_good_moves(rows, {"baseline": baseline_cp})
+    assert sweep.sign_accuracy == base_rep.sign_accuracy
+    # monotone-in-cp -> direction holds everywhere.
+    assert sweep.all_hold
+    assert all(c.direction_holds for c in sweep.cells)
+
+
+def test_sweep_flags_cell_where_direction_breaks():
+    # A deliberately backwards bar: reads cp *down*, so good moves read below blunders.
+    def reversed_bar(row):
+        return baseline_cp(row) * -1.0 + 1.0  # still in [0,1]-ish, monotone *decreasing*
+
+    rows = [
+        _row(cp=0.0, ply=1, game_id="g"),
+        _row(cp=8.0, ply=2, game_id="g"),
+        _row(cp=20.0, ply=3, game_id="g"),
+        _row(cp=320.0, ply=4, game_id="g"),
+    ]
+    [sweep] = sweep_good_moves(rows, {"rev": reversed_bar})
+    assert not sweep.all_hold
+    assert any(not c.direction_holds for c in sweep.cells)
+
+
+def test_sweep_no_pairs_returns_empty():
+    rows = [_row(cp=0.0, ply=1, game_id="solo")]
+    assert sweep_good_moves(rows, {"baseline": baseline_cp}) == []
+    assert format_good_moves_sweep([]) == ""
+
+
+def test_format_sweep_renders_table_and_verdict():
+    rows = load_rows("data/sample/dataset.csv")
+    sweeps = sweep_good_moves(rows, {"baseline": baseline_cp, "wdl-a": wdl_a})
+    text = format_good_moves_sweep(sweeps)
+    assert "Cutoff-robustness sweep" in text
+    assert "holds" in text
+    assert "**`wdl-a`**" in text
+    # verdict states robustness either way (cutoff-robust ✅ or cutoff-sensitive ⚠).
+    assert "Cutoff-robust" in text or "Cutoff-sensitive" in text

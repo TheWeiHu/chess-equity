@@ -58,6 +58,14 @@ BLUNDER_DROP = 100.0
 # large — so near-neutral noise (where Δ sign is meaningless) doesn't dilute it.
 DECISIVE_CP = 25.0
 
+# The robustness sweep (task 0157): the good/blunder cutoffs above are arbitrary
+# defaults, so the Δgood > Δblunder direction must be shown not to hinge on them. We
+# re-measure across this grid of good × blunder cutoffs and check the direction holds in
+# every cell. (sign-acc depends only on DECISIVE_CP — *not* the good/blunder cutoffs —
+# so it is invariant across this grid and reported once, not per cell.)
+SWEEP_GOOD_CUTOFFS = (5.0, 10.0, 20.0)
+SWEEP_BLUNDER_CUTOFFS = (75.0, 100.0, 150.0)
+
 
 def _clamp(cp: float) -> float:
     return max(-CP_CLAMP, min(CP_CLAMP, cp))
@@ -328,4 +336,169 @@ def _good_moves_verdict(
                 f"**Rating signal:** baseline Δblunder {base_bl:+.2f}pp; harsher-than-"
                 f"baseline bars: {harsher}."
             )
+    return lines
+
+
+# --- cutoff-robustness sweep (task 0157) --------------------------------------
+
+
+@dataclass(frozen=True)
+class SweepCell:
+    """One predictor's good-moves direction at a single (good, blunder) cutoff pair."""
+
+    good_max_loss: float
+    blunder_drop: float
+    n_good: int
+    n_blunder: int
+    mean_delta_good: Optional[float]
+    mean_delta_blunder: Optional[float]
+    direction_holds: bool  # Δgood > Δblunder in this cell
+
+
+@dataclass(frozen=True)
+class GoodMovesSweep:
+    """One predictor swept over a grid of good × blunder cutoffs (task 0157)."""
+
+    name: str
+    decisive_cp: float
+    sign_accuracy: Optional[float]  # grid-invariant: depends only on decisive_cp
+    cells: List[SweepCell]
+    all_hold: bool  # the direction holds in every cell
+
+
+def sweep_good_moves(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    good_cutoffs: Sequence[float] = SWEEP_GOOD_CUTOFFS,
+    blunder_cutoffs: Sequence[float] = SWEEP_BLUNDER_CUTOFFS,
+    decisive_cp: float = DECISIVE_CP,
+) -> List[GoodMovesSweep]:
+    """Re-measure each predictor across a grid of good × blunder cutoffs (task 0157).
+
+    The good/blunder cutoffs in :func:`measure_good_moves` are arbitrary defaults; this
+    proves the headline ``Δgood > Δblunder`` direction is not an artifact of them. For
+    each predictor we re-run :func:`measure_good_moves` at every ``(good_max_loss,
+    blunder_drop)`` pair in the grid and record whether the direction holds in that cell.
+    ``sign_accuracy`` is computed once per predictor (it depends only on ``decisive_cp``,
+    so it is constant across the grid). Returns one :class:`GoodMovesSweep` per predictor
+    in registry order, or an empty list when there are no move-pairs to score.
+    """
+    if not iter_move_pairs(rows):
+        return []
+
+    # sign-acc is grid-invariant, so measure it once per predictor at any cutoff pair.
+    base_reports = {
+        r.name: r
+        for r in measure_good_moves(rows, predictors, decisive_cp=decisive_cp)
+    }
+
+    cells_by_name: Dict[str, List[SweepCell]] = {name: [] for name in predictors}
+    for g in good_cutoffs:
+        for b in blunder_cutoffs:
+            for r in measure_good_moves(
+                rows,
+                predictors,
+                good_max_loss=g,
+                blunder_drop=b,
+                decisive_cp=decisive_cp,
+            ):
+                cells_by_name[r.name].append(
+                    SweepCell(
+                        good_max_loss=g,
+                        blunder_drop=b,
+                        n_good=r.n_good,
+                        n_blunder=r.n_blunder,
+                        mean_delta_good=r.mean_delta_good,
+                        mean_delta_blunder=r.mean_delta_blunder,
+                        direction_holds=reads_good_above_blunder(r),
+                    )
+                )
+
+    sweeps: List[GoodMovesSweep] = []
+    for name in predictors:
+        cells = cells_by_name[name]
+        sweeps.append(
+            GoodMovesSweep(
+                name=name,
+                decisive_cp=decisive_cp,
+                sign_accuracy=base_reports[name].sign_accuracy
+                if name in base_reports
+                else None,
+                cells=cells,
+                all_hold=all(c.direction_holds for c in cells),
+            )
+        )
+    return sweeps
+
+
+def format_good_moves_sweep(sweeps: Sequence[GoodMovesSweep]) -> str:
+    """Render the cutoff-robustness sweep as a Markdown section (task 0157).
+
+    A compact table per predictor — one row per (good, blunder) cutoff cell with the
+    mean Δgood/Δblunder and whether the direction holds — followed by a verdict line
+    stating the direction is cutoff-robust, or naming the cells where it breaks. Returns
+    ``""`` when there is nothing to show.
+    """
+    if not sweeps:
+        return ""
+
+    out: List[str] = [
+        "## Cutoff-robustness sweep (good × blunder grid, task 0157)",
+        "",
+        "The good/blunder cutoffs above (≤10cp / ≥100cp) are arbitrary defaults, so the "
+        "headline `Δgood > Δblunder` direction is re-measured across a grid of good "
+        "cutoffs × blunder cutoffs. `holds` is `Δgood > Δblunder` in that cell. `sign-acc` "
+        "depends only on the decisive-cp threshold (not the good/blunder cutoffs), so it "
+        "is constant across the grid and shown once per predictor.",
+        "",
+    ]
+    for s in sweeps:
+        out.append(
+            f"**`{s.name}`** — sign-acc {_fmt(s.sign_accuracy, '.3f')} "
+            f"(|cp|≥{s.decisive_cp:.0f}cp, grid-invariant)"
+        )
+        out.append("")
+        out.append("| good ≤ | blunder ≥ | good | blunder | Δgood (pp) | Δblunder (pp) | holds |")
+        out.append("|--:|--:|--:|--:|--:|--:|:--:|")
+        for c in s.cells:
+            out.append(
+                f"| {c.good_max_loss:.0f}cp | {c.blunder_drop:.0f}cp | {c.n_good} | "
+                f"{c.n_blunder} | {_fmt(c.mean_delta_good)} | {_fmt(c.mean_delta_blunder)} "
+                f"| {'✅' if c.direction_holds else '⚠'} |"
+            )
+        out.append("")
+
+    out.extend(_sweep_verdict(sweeps))
+    out.append("")
+    return "\n".join(out)
+
+
+def _sweep_verdict(sweeps: Sequence[GoodMovesSweep]) -> List[str]:
+    """State whether the direction is cutoff-robust, or name where it breaks."""
+    robust = [s for s in sweeps if s.all_hold]
+    broken = [s for s in sweeps if not s.all_hold]
+    lines: List[str] = []
+    if not broken:
+        n_cells = len(sweeps[0].cells) if sweeps else 0
+        names = ", ".join(f"`{s.name}`" for s in sweeps)
+        lines.append(
+            f"**Cutoff-robust:** `Δgood > Δblunder` holds in all {n_cells} cells of the "
+            f"good × blunder grid for {names} — the direction is not an artifact of the "
+            "default cutoffs. ✅"
+        )
+    else:
+        for s in broken:
+            bad = ", ".join(
+                f"(good≤{c.good_max_loss:.0f}, blunder≥{c.blunder_drop:.0f})"
+                for c in s.cells
+                if not c.direction_holds
+            )
+            lines.append(
+                f"**Cutoff-sensitive:** `{s.name}` reads move quality backwards "
+                f"(Δgood ≤ Δblunder) in: {bad}. ⚠"
+            )
+        if robust:
+            ok = ", ".join(f"`{s.name}`" for s in robust)
+            lines.append(f"Direction is cutoff-robust for: {ok}.")
     return lines
