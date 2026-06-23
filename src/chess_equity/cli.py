@@ -459,11 +459,23 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     events = ingestor.ingest_snapshot(pgn_text)
     reel = reel_mod.build_reel(events, top=args.top)
 
+    # --round (task 0198): a cross-game ROUND recap. The pooling is already done — a
+    # multi-game PGN tags every event with its game_id and the drama detector is
+    # stateless, so `reel` above already ranks moments across all boards. --round adds
+    # the source labels (board # + pairing per moment) and a round-framed title so the
+    # caster sees which board each pooled swing came from.
+    title = args.title
+    sources = None
+    if getattr(args, "round_recap", False):
+        sources = reel_mod.game_sources(pgn_text)
+        if title == "Highlight reel":  # default unchanged by the user → frame as a round
+            title = "Round recap"
+
     # --html PATH writes ONE self-contained HTML clip player (opens offline). It can
     # stand alone (print to stdout when PATH is "-") or sit alongside --out-dir's
     # json+md. Either flag may be used on its own.
     if args.html is not None and args.out_dir is None:
-        html_doc = reel_mod.render_html(reel, title=args.title)
+        html_doc = reel_mod.render_html(reel, title=title, sources=sources)
         if args.html == "-":
             print(html_doc, end="")
         else:
@@ -473,7 +485,7 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         return 0
 
     if args.out_dir is None:
-        print(reel_mod.render_markdown(reel, title=args.title))
+        print(reel_mod.render_markdown(reel, title=title, sources=sources))
         return 0
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -481,13 +493,13 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     md_path = os.path.join(args.out_dir, "reel.md")
     written = [json_path, md_path]
     with open(json_path, "w", encoding="utf-8") as fh:
-        fh.write(reel_mod.render_json(reel, title=args.title) + "\n")
+        fh.write(reel_mod.render_json(reel, title=title, sources=sources) + "\n")
     with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(reel_mod.render_markdown(reel, title=args.title))
+        fh.write(reel_mod.render_markdown(reel, title=title, sources=sources))
     if args.html is not None:
         html_path = args.html if args.html != "-" else os.path.join(args.out_dir, "reel.html")
         with open(html_path, "w", encoding="utf-8") as fh:
-            fh.write(reel_mod.render_html(reel, title=args.title))
+            fh.write(reel_mod.render_html(reel, title=title, sources=sources))
         written.append(html_path)
     print(f"wrote {len(reel)} moment(s): {', '.join(written)}", file=sys.stderr)
     return 0
@@ -1409,6 +1421,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     rl.add_argument("--white-elo", type=int, default=None, help="override White rating")
     rl.add_argument("--black-elo", type=int, default=None, help="override Black rating")
     rl.add_argument("--top", type=int, default=None, help="cap the reel to the top N moments")
+    rl.add_argument(
+        "--round",
+        dest="round_recap",
+        action="store_true",
+        help=(
+            "cross-game ROUND recap: pool the drama across every game in a multi-game "
+            "PGN and label each moment with its source board # + pairing (task 0198)"
+        ),
+    )
     rl.add_argument(
         "--out-dir",
         default=None,
