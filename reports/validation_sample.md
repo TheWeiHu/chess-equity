@@ -70,6 +70,17 @@ Does each rating-conditioned predictor beat the rating-blind `baseline` on held-
 | baseline+clock | <100  | 15 | 0.5867 | 0.1072 | 0.1570 |
 | wdl-a | <100  | 15 | 0.5409 | 0.0795 | 0.2361 |
 
+## By failure_mode
+
+| predictor | failure_mode | n | log-loss | Brier | ECE |
+|---|---|--:|--:|--:|--:|
+| baseline | dead-draw-hard  | 13 | 0.6685 | 0.1223 | 0.2519 |
+| baseline | none  | 2 | 0.0000 | 0.0000 | 0.0000 |
+| baseline+clock | dead-draw-hard  | 13 | 0.6699 | 0.1231 | 0.1744 |
+| baseline+clock | none  | 2 | 0.0461 | 0.0038 | 0.0441 |
+| wdl-a | dead-draw-hard  | 13 | 0.5991 | 0.0883 | 0.2493 |
+| wdl-a | none  | 2 | 0.1628 | 0.0226 | 0.1502 |
+
 ## Reliability curve (is the equity bar an honest probability?)
 
 For each predicted-probability bin: mean predicted vs **observed** White expected-score, the bin's row count, and the gap (obs − pred). A calibrated predictor has `gap ≈ 0` in every bin; the count-weighted mean `|gap|` is the ECE.
@@ -107,19 +118,21 @@ For each predicted-probability bin: mean predicted vs **observed** White expecte
 
 Δ log-loss = `baseline` − `wdl-a` on the same rows; **Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first.
 Overall Δ: +0.0385
-**Worst slice:** `clock` `low(<60s)` (n=1) Δ=-0.1719 — the baseline wins here. Equity wins on 5/9 slices.
+**Worst slice:** no adequately-powered band to judge. Equity wins on 0/0 adequately-powered slices. 11 band(s) below n=1000 excluded as underpowered.
 
 | slice | value | n | baseline log-loss | model log-loss | Δ |
 |---|---|--:|--:|--:|--:|
-| rating | 1200-1599 | 9 | 0.5034 | 0.4316 | +0.0718 |
-| high_rating | <2000 | 9 | 0.5034 | 0.4316 | +0.0718 |
-| clock | comfortable(60s+) | 13 | 0.6152 | 0.5568 | +0.0583 |
-| phase | opening | 15 | 0.5794 | 0.5409 | +0.0385 |
-| rating_gap | <100 | 15 | 0.5794 | 0.5409 | +0.0385 |
-| clock | no-clock | 1 | 0.6935 | 0.7027 | -0.0092 |
-| rating | 2000-2399 | 6 | 0.6934 | 0.7048 | -0.0114 |
-| high_rating | 2000-2199 | 6 | 0.6934 | 0.7048 | -0.0114 |
-| clock | low(<60s) | 1 | 0.0000 | 0.1719 | -0.1719 |
+| rating | 1200-1599 | 9 | 0.5034 | 0.4316 | +0.0718 (underpowered) |
+| high_rating | <2000 | 9 | 0.5034 | 0.4316 | +0.0718 (underpowered) |
+| failure_mode | dead-draw-hard | 13 | 0.6685 | 0.5991 | +0.0695 (underpowered) |
+| clock | comfortable(60s+) | 13 | 0.6152 | 0.5568 | +0.0583 (underpowered) |
+| phase | opening | 15 | 0.5794 | 0.5409 | +0.0385 (underpowered) |
+| rating_gap | <100 | 15 | 0.5794 | 0.5409 | +0.0385 (underpowered) |
+| clock | no-clock | 1 | 0.6935 | 0.7027 | -0.0092 (underpowered) |
+| rating | 2000-2399 | 6 | 0.6934 | 0.7048 | -0.0114 (underpowered) |
+| high_rating | 2000-2199 | 6 | 0.6934 | 0.7048 | -0.0114 (underpowered) |
+| failure_mode | none | 2 | 0.0000 | 0.1628 | -0.1628 (underpowered) |
+| clock | low(<60s) | 1 | 0.0000 | 0.1719 | -0.1719 (underpowered) |
 
 ## Significance vs baseline
 
@@ -144,16 +157,18 @@ Bin-resampling bootstrap (2000 resamples) on ECE (**lower = better calibrated**)
 
 ## Head-to-head significance: per-slice CIs (baseline vs wdl-a)
 
-Paired bootstrap (2000 resamples) on the per-row log-loss delta *within each slice*. Δ = `baseline` − `wdl-a` (**Δ > 0 = equity wins**); `equity` means the whole 95% CI clears zero, so the band-level win is real and not small-n noise. Slices below n=30 read `small-n` (too few rows for a trustworthy CI). Sorted by Δ, biggest win first.
+Paired bootstrap (2000 resamples) on the per-row log-loss delta *within each slice*. Δ = `baseline` − `wdl-a` (**Δ > 0 = equity wins**); `equity` means the whole 95% CI clears zero, so the band-level win is real and not small-n noise. Slices below n=30 read `small-n` (too few rows for a trustworthy CI). A band with fewer than n=1000 rows reads `underpowered` and is excluded from any per-band beats/loses claim — its own win or loss is small-n noise, not the thesis (e.g. a 2000-2399 band at n=415 can flip on a handful of games). Sorted by Δ, biggest win first.
 
 | slice | value | n | Δ log-loss | 95% CI | verdict |
 |---|---|--:|--:|:--:|:--:|
-| rating | 1200-1599 | 9 | +0.0718 | n<30 | inconclusive |
-| high_rating | <2000 | 9 | +0.0718 | n<30 | inconclusive |
-| clock | comfortable(60s+) | 13 | +0.0583 | n<30 | inconclusive |
-| phase | opening | 15 | +0.0385 | n<30 | inconclusive |
-| rating_gap | <100 | 15 | +0.0385 | n<30 | inconclusive |
-| clock | no-clock | 1 | -0.0092 | n<30 | inconclusive |
-| rating | 2000-2399 | 6 | -0.0114 | n<30 | inconclusive |
-| high_rating | 2000-2199 | 6 | -0.0114 | n<30 | inconclusive |
-| clock | low(<60s) | 1 | -0.1719 | n<30 | inconclusive |
+| rating | 1200-1599 | 9 | +0.0718 | n<30 | underpowered (n=9) |
+| high_rating | <2000 | 9 | +0.0718 | n<30 | underpowered (n=9) |
+| failure_mode | dead-draw-hard | 13 | +0.0695 | n<30 | underpowered (n=13) |
+| clock | comfortable(60s+) | 13 | +0.0583 | n<30 | underpowered (n=13) |
+| phase | opening | 15 | +0.0385 | n<30 | underpowered (n=15) |
+| rating_gap | <100 | 15 | +0.0385 | n<30 | underpowered (n=15) |
+| clock | no-clock | 1 | -0.0092 | n<30 | underpowered (n=1) |
+| rating | 2000-2399 | 6 | -0.0114 | n<30 | underpowered (n=6) |
+| high_rating | 2000-2199 | 6 | -0.0114 | n<30 | underpowered (n=6) |
+| failure_mode | none | 2 | -0.1628 | n<30 | underpowered (n=2) |
+| clock | low(<60s) | 1 | -0.1719 | n<30 | underpowered (n=1) |

@@ -947,7 +947,19 @@ def head_to_head_deltas(
     )
 
 
-def worst_slice_verdict(h2h: HeadToHead) -> str:
+# Per-band sample floor for a head-to-head beats/loses claim (task 0146). A single
+# rating / clock / phase band with fewer than this many rows is too small to trust its
+# own win or loss against the baseline: the point delta (and even a bootstrap CI that
+# happens to clear zero) is dominated by sampling noise. On real data the 2000-2399 band
+# at n=415 reads as a wdl-a *loss* purely from small-n — a spurious thesis regression.
+# Bands below this floor are marked ``underpowered (n=…)`` and excluded from any per-band
+# beats/loses claim (the win count and the worst-slice verdict). Set 0 to disable.
+H2H_UNDERPOWERED_N = 1000
+
+
+def worst_slice_verdict(
+    h2h: HeadToHead, *, underpowered_n: int = H2H_UNDERPOWERED_N
+) -> str:
     """A one-line read on the head-to-head's *worst* slice (task 0121).
 
     The head-to-head table is sorted equity-wins-first, so the single worst slice — the
@@ -956,24 +968,47 @@ def worst_slice_verdict(h2h: HeadToHead) -> str:
     the rating-conditioned model actually LOSES to the baseline? This states the win/total
     slice count and names that worst slice (``baseline log-loss − model log-loss``; Δ < 0
     means the baseline is better there). Returns ``""`` when there are no comparable slices.
+
+    Bands with fewer than ``underpowered_n`` rows are *excluded* from the win/total count
+    and from the worst-slice pick (task 0146): a single small band's loss is small-n noise,
+    not a real regression, so it must not read as "the baseline wins here". The count of
+    excluded bands is reported. Pass ``underpowered_n=0`` to disable the floor.
     """
     if not h2h.slices:
         return ""
-    wins = sum(1 for d in h2h.slices if d.delta > 0)
-    total = len(h2h.slices)
-    worst = h2h.slices[-1]  # smallest Δ — most baseline-favouring
-    where = (
-        "the baseline wins here" if worst.delta < 0 else "equity still wins every slice"
-    )
-    return (
-        f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
-        f"Δ={worst.delta:+.4f} — {where}. "
-        f"Equity wins on {wins}/{total} slices."
-    )
+    powered = [d for d in h2h.slices if d.n >= underpowered_n]
+    weak = [d for d in h2h.slices if d.n < underpowered_n]
+    wins = sum(1 for d in powered if d.delta > 0)
+    total = len(powered)
+    if powered:
+        worst = powered[-1]  # smallest Δ among adequately-powered slices (sorted desc)
+        where = (
+            "the baseline wins here"
+            if worst.delta < 0
+            else "equity still wins every slice"
+        )
+        head = (
+            f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
+            f"Δ={worst.delta:+.4f} — {where}. "
+        )
+    else:
+        head = "**Worst slice:** no adequately-powered band to judge. "
+    label = "slices" if not weak else "adequately-powered slices"
+    line = f"{head}Equity wins on {wins}/{total} {label}."
+    if weak:
+        line += f" {len(weak)} band(s) below n={underpowered_n} excluded as underpowered."
+    return line
 
 
-def format_head_to_head(h2h: HeadToHead) -> str:
-    """Render the head-to-head deltas as a compact Markdown table (equity-wins first)."""
+def format_head_to_head(
+    h2h: HeadToHead, *, underpowered_n: int = H2H_UNDERPOWERED_N
+) -> str:
+    """Render the head-to-head deltas as a compact Markdown table (equity-wins first).
+
+    Bands below ``underpowered_n`` rows are tagged ``(underpowered)`` in the Δ table and
+    excluded from the worst-slice beats/loses verdict (task 0146) — their per-band Δ is
+    small-n noise, not a thesis win or loss. Pass ``underpowered_n=0`` to disable.
+    """
     out: List[str] = []
     out.append(f"## Head-to-head: where equity wins ({h2h.baseline} vs {h2h.model})")
     out.append("")
@@ -982,16 +1017,17 @@ def format_head_to_head(h2h: HeadToHead) -> str:
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
     out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
-    verdict = worst_slice_verdict(h2h)
+    verdict = worst_slice_verdict(h2h, underpowered_n=underpowered_n)
     if verdict:
         out.append(verdict)
     out.append("")
     out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
     out.append("|---|---|--:|--:|--:|--:|")
     for d in h2h.slices:
+        weak = " (underpowered)" if underpowered_n > 0 and d.n < underpowered_n else ""
         out.append(
             f"| {d.slicer} | {d.value} | {d.n} | "
-            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
+            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f}{weak} |"
         )
     return "\n".join(out)
 
@@ -1019,12 +1055,13 @@ class SliceDeltaCI:
 
     ``delta`` keeps the head-to-head sign convention — ``baseline`` metric minus ``model``
     metric on that slice's rows, so **Δ > 0 means equity wins**. ``lo``/``hi`` are the
-    confidence bounds on that delta; they are ``None`` for a below-floor slice (fewer than
-    the floor's rows), where no CI is computed and the verdict is forced to
-    ``inconclusive`` so a tiny slice can never read as significant. ``verdict`` is one of
+    confidence bounds on that delta; they are ``None`` for a below-``min_n`` slice (fewer
+    than the small-n floor's rows), where no CI is computed. ``verdict`` is one of
     ``equity`` (whole CI above zero — a significant equity win), ``baseline`` (whole CI
-    below zero — baseline significantly better), or ``inconclusive`` (CI straddles zero,
-    or the slice was below the small-n floor — then ``lo``/``hi`` is ``None``).
+    below zero — baseline significantly better), ``inconclusive`` (CI straddles zero),
+    or ``underpowered`` (the band has fewer than the underpowered floor's rows, task 0146 —
+    a CI may still be shown but the band is excluded from any per-band beats/loses claim;
+    a below-``min_n`` band is also underpowered and additionally has ``lo``/``hi`` ``None``).
     """
 
     slicer: str
@@ -1044,6 +1081,7 @@ class HeadToHeadCI:
     model: str
     metric: str
     min_n: int
+    underpowered_n: int  # bands below this read `underpowered`, never a per-band win/loss
     confidence: float
     n_resamples: int
     slices: List[SliceDeltaCI]  # every comparable (slicer, value), sorted by delta desc
@@ -1057,6 +1095,7 @@ def head_to_head_slice_cis(
     metric: str = "log_loss",
     slicers: Dict[str, Callable[[PositionRow], str]] = SLICERS,
     min_n: int = H2H_SLICE_MIN_N,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
     n_resamples: int = 2000,
     confidence: float = 0.95,
     seed: int = 0,
@@ -1108,10 +1147,17 @@ def head_to_head_slice_cis(
             # baseline − model, in the head-to-head sign convention (Δ > 0 = equity wins).
             point = sum(base_terms[i] - model_terms[i] for i in idxs) / n
             if n < min_n:
-                # Below the floor a resampled CI is untrustworthy; report the point delta
-                # but force `inconclusive` (no CI) so a tiny slice can't read significant.
+                # Below the small-n floor a resampled CI is untrustworthy; report the point
+                # delta but force no CI so a tiny slice can't read significant. Such a band
+                # is also below the underpowered floor, so it reads `underpowered` (task
+                # 0146); only with the floor disabled does it fall back to `inconclusive`.
+                verdict = (
+                    "underpowered"
+                    if underpowered_n > 0 and n < underpowered_n
+                    else "inconclusive"
+                )
                 slice_cis.append(
-                    SliceDeltaCI(slicer_name, value, n, point, None, None, "inconclusive")
+                    SliceDeltaCI(slicer_name, value, n, point, None, None, verdict)
                 )
                 offset += 1
                 continue
@@ -1133,6 +1179,11 @@ def head_to_head_slice_cis(
                 verdict = "baseline"
             else:
                 verdict = "inconclusive"
+            # A band below the underpowered floor can never read as a per-band win or loss,
+            # however its CI lands — too few rows to trust (task 0146). Keep the CI bounds
+            # (informative) but override the verdict to `underpowered`.
+            if underpowered_n > 0 and n < underpowered_n:
+                verdict = "underpowered"
             slice_cis.append(SliceDeltaCI(slicer_name, value, n, point, lo, hi, verdict))
 
     slice_cis.sort(key=lambda d: d.delta, reverse=True)
@@ -1141,6 +1192,7 @@ def head_to_head_slice_cis(
         model=best,
         metric=metric,
         min_n=min_n,
+        underpowered_n=underpowered_n,
         confidence=confidence,
         n_resamples=n_resamples,
         slices=slice_cis,
@@ -1156,19 +1208,31 @@ def format_head_to_head_cis(h2h: HeadToHeadCI) -> str:
         f"## Head-to-head significance: per-slice CIs ({h2h.baseline} vs {h2h.model})"
     )
     out.append("")
+    floor_note = (
+        f" A band with fewer than n={h2h.underpowered_n} rows reads `underpowered` and is "
+        "excluded from any per-band beats/loses claim — its own win or loss is small-n "
+        "noise, not the thesis (e.g. a 2000-2399 band at n=415 can flip on a handful of "
+        "games)."
+        if h2h.underpowered_n > 0
+        else ""
+    )
     out.append(
         f"Paired bootstrap ({h2h.n_resamples} resamples) on the per-row {metric_label} "
         f"delta *within each slice*. Δ = `{h2h.baseline}` − `{h2h.model}` "
         f"(**Δ > 0 = equity wins**); `equity` means the whole {conf_pct}% CI clears zero, "
         f"so the band-level win is real and not small-n noise. Slices below n={h2h.min_n} "
-        "read `small-n` (too few rows for a trustworthy CI). Sorted by Δ, biggest win first."
+        f"read `small-n` (too few rows for a trustworthy CI).{floor_note} "
+        "Sorted by Δ, biggest win first."
     )
     out.append("")
     out.append(f"| slice | value | n | Δ {metric_label} | {conf_pct}% CI | verdict |")
     out.append("|---|---|--:|--:|:--:|:--:|")
     for d in h2h.slices:
         ci_str = f"n<{h2h.min_n}" if d.lo is None else f"[{d.lo:+.4f}, {d.hi:+.4f}]"
+        verdict = (
+            f"underpowered (n={d.n})" if d.verdict == "underpowered" else d.verdict
+        )
         out.append(
-            f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {d.verdict} |"
+            f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {verdict} |"
         )
     return "\n".join(out)
