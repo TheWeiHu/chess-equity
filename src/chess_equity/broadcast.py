@@ -230,6 +230,50 @@ def game_event(
     )
 
 
+@dataclass(frozen=True)
+class BoardSelector:
+    """Pick which board of a multi-game round to follow on the live feed.
+
+    A round PGN (Titled Tuesday, a simul, any multi-board event) carries several
+    simultaneous games; by default the ingestor follows *all* of them. A selector
+    narrows the stream to one board, chosen either by **player name** (a
+    case-insensitive substring matched against either side's name) or by **board
+    index** (the 0-based position of the game in the round PGN). With both unset the
+    selector matches everything (the default, follow-all behaviour).
+    """
+
+    player: Optional[str] = None
+    index: Optional[int] = None
+
+    def matches(self, headers: chess.pgn.Headers, index: int) -> bool:
+        """True if the game at ``index`` with these ``headers`` should be followed."""
+        if self.index is not None and index != self.index:
+            return False
+        if self.player is not None:
+            needle = self.player.casefold()
+            white = (headers.get("White", "") or "").casefold()
+            black = (headers.get("Black", "") or "").casefold()
+            if needle not in white and needle not in black:
+                return False
+        return True
+
+
+def parse_board_selector(spec: Optional[str]) -> Optional[BoardSelector]:
+    """Interpret a ``--board`` spec into a :class:`BoardSelector` (``None`` = follow all).
+
+    An all-digits spec is a 0-based board index; anything else is a case-insensitive
+    player-name substring. A blank/``None`` spec returns ``None`` (default behaviour).
+    """
+    if spec is None:
+        return None
+    spec = spec.strip()
+    if not spec:
+        return None
+    if spec.isdigit():
+        return BoardSelector(index=int(spec))
+    return BoardSelector(player=spec)
+
+
 def _game_id(headers: chess.pgn.Headers, fallback: int) -> str:
     """Stable-ish identity for a game within a round.
 
@@ -629,12 +673,15 @@ class BroadcastIngestor:
         black_elo: Optional[int] = None,
         clock_aware: bool = True,
         engine: Optional[ObjectiveEngine] = None,
+        select: Optional[BoardSelector] = None,
     ) -> None:
         self.feed = feed
         self.model = model
         self.white_elo = white_elo
         self.black_elo = black_elo
         self.clock_aware = clock_aware
+        # Which board(s) of a multi-game round to follow; None = all (the default).
+        self.select = select
         # Objective engine for the cp fallback on cp-less models (task 0103); threaded
         # to every per-game tracker.
         self.engine = engine
@@ -667,6 +714,9 @@ class BroadcastIngestor:
         for index, game_pgn in enumerate(split_games(pgn_text)):
             headers = chess.pgn.read_headers(io.StringIO(game_pgn))
             if headers is None:
+                continue
+            # Multi-board round: skip games the streamer isn't following (task 0182).
+            if self.select is not None and not self.select.matches(headers, index):
                 continue
             gid = _game_id(headers, index)
             if gid not in self._announced:
