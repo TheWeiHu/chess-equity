@@ -72,6 +72,18 @@ html, body {
 .player.time-pressure .clock::before { content: "⏱ "; }
 @keyframes clockpulse { 50% { opacity: 0.45; } }
 
+/* Flag-risk alert (task 0243): a 🚩 badge that lights when the MODEL's per-side
+   flag_risk crosses its alert threshold — real time trouble, not just a low raw clock.
+   The server decides when it shows (`flag_risk.<side>.alert`); a steady pulse + the bad
+   colour make it read as danger. Hidden via [hidden] until the server flags the side. */
+.player .flag-risk {
+  font-size: 18px;
+  margin-top: 2px;
+  filter: drop-shadow(0 0 4px var(--bad));
+  animation: flagpulse 0.9s ease-in-out infinite;
+}
+@keyframes flagpulse { 50% { opacity: 0.4; transform: scale(0.92); } }
+
 /* The middle column: the equity bar, with the optional full centipawn bar stacked
    beneath it (?cpbar=1). */
 .bar-stack {

@@ -660,6 +660,15 @@
     setPressure(".player-white", clk.white, lc);
     setPressure(".player-black", clk.black, lc);
 
+    // Flag-risk alert (task 0243): light the 🚩 badge when the SERVER's per-side
+    // flag_risk crosses its alert threshold — the model's time-trouble read, distinct
+    // from the raw-seconds low-clock tint above. Absent on clock-blind feeds -> badges
+    // stay hidden (graceful degrade). The server already applies the threshold, so the
+    // overlay just reads each side's `.alert` boolean.
+    const fr = evt.flag_risk || {};
+    setFlagRisk("[data-white-flagrisk]", fr.white);
+    setFlagRisk("[data-black-flagrisk]", fr.black);
+
     // Per-move Δequity grade pill.
     if (evt.grade && evt.grade.label) showGrade(evt.grade);
 
@@ -682,6 +691,16 @@
   function setPressure(playerSel, secs, threshold) {
     const el = q(playerSel);
     if (el) el.classList.toggle("time-pressure", timePressure(secs, threshold));
+  }
+
+  // Show/hide a side's flag-risk badge from its `{risk, alert}` payload (task 0243). The
+  // server decides `alert` (flag_risk over threshold); a missing/clock-blind side -> hidden.
+  function flagRiskAlert(side) {
+    return !!(side && side.alert === true);
+  }
+  function setFlagRisk(sel, side) {
+    const el = q(sel);
+    if (el) el.hidden = !flagRiskAlert(side);
   }
 
   function showGrade(grade) {
@@ -946,6 +965,7 @@
     cpToWhitePos: cpToWhitePos,
     formatClock: formatClock,
     timePressure: timePressure,
+    flagRiskAlert: flagRiskAlert,
     overrideRating: overrideRating,
     fmtDelta: fmtDelta,
     dramaSwing: dramaSwing,

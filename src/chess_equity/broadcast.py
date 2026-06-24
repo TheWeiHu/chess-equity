@@ -48,7 +48,11 @@ import chess
 import chess.pgn
 
 from chess_equity.adapters import EquityModel, ObjectiveEngine
-from chess_equity.clock import clock_adjusted_white_equity
+from chess_equity.clock import (
+    clock_adjusted_white_equity,
+    flag_risk,
+    is_flag_risk_alert,
+)
 from chess_equity.data.schema import tc_bucket
 from chess_equity.grading import ACCURATE_LABELS
 
@@ -192,6 +196,14 @@ class MoveEvent:
     # the whole stream. Both sides ride every event so the overlay needs no extra state.
     cumulative_accuracy_white: Optional[float] = None
     cumulative_accuracy_black: Optional[float] = None
+    # Per-side flag risk in [0, MAX_FLAG_RISK=0.6] (task 0243): each side's modelled
+    # P(loses on time) from its own remaining clock + the game's time control, via
+    # :func:`chess_equity.clock.flag_risk`. Distinct from the raw-seconds low-clock cue
+    # (task 0105) — this surfaces the MODEL's time-trouble read so the overlay can light
+    # a flag/flame alert (see :func:`chess_equity.clock.is_flag_risk_alert`). ``None`` for
+    # a clock-blind side (no ``[%clk]``), so clock-blind feeds carry no flag-risk block.
+    flag_risk_white: Optional[float] = None
+    flag_risk_black: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -241,6 +253,23 @@ class MoveEvent:
             event["accuracy"] = {
                 "white": self.cumulative_accuracy_white,
                 "black": self.cumulative_accuracy_black,
+            }
+        # Per-side flag-risk alert (task 0243): the MODEL's time-trouble read per side, so
+        # the overlay can light a flag/flame badge when a side is in real danger of losing
+        # on time — distinct from the raw-seconds low-clock nameplate cue (task 0105) and
+        # the drama toast (0241). Emitted only when a side has a flag_risk (clocked +
+        # time-control known); absent entirely on clock-blind feeds, so the overlay
+        # degrades gracefully (no badge) rather than showing a bogus zero.
+        if self.flag_risk_white is not None or self.flag_risk_black is not None:
+            event["flag_risk"] = {
+                "white": {
+                    "risk": self.flag_risk_white,
+                    "alert": is_flag_risk_alert(self.flag_risk_white),
+                },
+                "black": {
+                    "risk": self.flag_risk_black,
+                    "alert": is_flag_risk_alert(self.flag_risk_black),
+                },
             }
         # Real drama classification (tasks 0020/0053): attach the chess_equity.drama
         # verdict so the overlay flares on the actual classifier (clutch / missed_win /
@@ -908,6 +937,8 @@ class GameTracker:
                     cumulative_accuracy_black=_accuracy_pct(
                         self._acc_accurate[False], self._acc_total[False]
                     ),
+                    flag_risk_white=self._flag_risk(white_clock),
+                    flag_risk_black=self._flag_risk(black_clock),
                 )
             )
             prev_equity_white = equity_white
@@ -918,6 +949,17 @@ class GameTracker:
 
     def _equity_white(self, fen: str, white_elo: int, black_elo: int) -> float:
         return self.model.evaluate(fen, white_elo, black_elo).equity_white
+
+    def _flag_risk(self, clock_remaining: Optional[float]) -> Optional[float]:
+        """A side's modelled flag risk from its remaining clock + the game's time control.
+
+        Returns ``None`` (no alert) when the side is clock-blind (no recorded clock) or no
+        time control has been read yet, so clock-blind feeds carry no flag-risk block.
+        Otherwise :func:`chess_equity.clock.flag_risk` — correspondence games map to 0.0.
+        """
+        if clock_remaining is None or self.tc_bucket is None:
+            return None
+        return flag_risk(clock_remaining, self.tc_bucket)
 
     def _clock_warp(
         self,

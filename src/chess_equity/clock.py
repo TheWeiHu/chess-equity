@@ -38,6 +38,12 @@ SCRAMBLE_SCALE = 30.0
 # Even at maximum scramble the mover does not flag with certainty — cap the risk.
 MAX_FLAG_RISK = 0.6
 
+# A :func:`flag_risk` at or above this trips the overlay's time-trouble alert (task 0243).
+# flag_risk is in [0, MAX_FLAG_RISK=0.6]; 0.2 lights up a real scramble — a bullet/blitz
+# side in the last ~30s — while a comfortable clock (minutes to spare -> risk ~0) stays
+# dark. A sensible default knob the overlay can override, not a fit.
+FLAG_RISK_ALERT_THRESHOLD = 0.2
+
 # A scramble in bullet is far deadlier than the same seconds in classical: moves keep
 # coming fast and there is no time to steady. Multiplies flag risk by time control.
 _TC_FLAG_MULTIPLIER = {
@@ -69,6 +75,18 @@ def flag_risk(clock_remaining: Optional[float], tc_bucket: str) -> float:
     """
     multiplier = _TC_FLAG_MULTIPLIER.get(tc_bucket, 0.7)
     return MAX_FLAG_RISK * time_pressure(clock_remaining) * multiplier
+
+
+def is_flag_risk_alert(
+    risk: Optional[float], threshold: float = FLAG_RISK_ALERT_THRESHOLD
+) -> bool:
+    """Should a side's :func:`flag_risk` trip the overlay's time-trouble alert?
+
+    ``True`` when ``risk`` is at or above ``threshold`` (default
+    :data:`FLAG_RISK_ALERT_THRESHOLD`). ``risk`` is ``None`` for a clock-blind side (the
+    feed carried no ``[%clk]``), which never alerts — so clock-blind data is a no-op.
+    """
+    return risk is not None and risk >= threshold
 
 
 def clock_adjusted_white_equity(

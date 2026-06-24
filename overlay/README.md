@@ -169,6 +169,11 @@ Static, fixture-driven — no live model.
   `model` field — so viewers know it's a human win-probability model, not Stockfish
   (task 0222; hidden when the feed sends no `model`).
 - Both **clocks** (turn red under 10s — the time pressure that drives the wedge).
+- A per-side **flag-risk alert** 🚩 badge (task 0243) that lights when the *model's*
+  `flag_risk` for that side crosses its alert threshold — real time trouble (a bullet/
+  blitz scramble), read straight off the feed's `flag_risk.<side>.alert`. Distinct from
+  the raw-seconds clock tint above: this is the modelled P(loses on time), not just a low
+  number. Omitted entirely on clock-blind feeds, so the badge simply never shows.
 - The last move's **Δequity grade** pill (task 0008) — flares green when a player
   finds better than their level expects, red on a blunder.
 - A dashed **centipawn ghost tick** showing where the classic engine bar would
@@ -232,7 +237,9 @@ values are **seconds remaining**.
   "clock": { "white": 13.2, "black": 1.6 }, // optional — seconds remaining
   "grade": { "label": "blunder", "delta": -0.22 },     // optional — Δequity grade (mover POV)
   "drama": { "kind": "scramble", "magnitude": 0.55,    // optional — caster-mode drama (task 0020)
-             "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" }
+             "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" },
+  "flag_risk": { "white": { "risk": 0.02, "alert": false },   // optional — per-side time-trouble alert (task 0243)
+                 "black": { "risk": 0.51, "alert": true } }   // `alert` lights the 🚩 badge; omitted on clock-blind feeds
 }
 
 // board roster — only for a multi-game broadcast round (task 0185). Emitted (and
