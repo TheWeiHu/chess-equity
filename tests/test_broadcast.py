@@ -18,6 +18,7 @@ from chess_equity.broadcast import (
     GameTracker,
     LocalPgnFeed,
     MoveEvent,
+    PinChannel,
     game_event,
     grade_delta,
     overlay_events,
@@ -858,6 +859,145 @@ def test_auto_follow_off_emits_no_focus_events():
     """Without `--board auto` the bridge emits no focus events (the default follow-all)."""
     events = _overlay_events_for(_two_board_round_with_drama())
     assert not any(e.get("type") == "focus" for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# Caster pin INPUT channel (task 0261)
+# --------------------------------------------------------------------------- #
+
+
+def test_pin_channel_delivers_directives_fifo_then_empties():
+    """The channel is a FIFO mailbox: drain returns every queued directive in order
+    (a None board is an unpin) and leaves the channel empty."""
+    ch = PinChannel()
+    ch.submit(1, 3)
+    ch.submit(0, 5)
+    ch.submit(None)  # explicit unpin
+    assert ch.drain() == [(1, 3), (0, 5), (None, 0)]
+    assert ch.drain() == []  # draining empties it
+
+
+def test_overlay_events_applies_a_channel_pin_suppressing_the_auto_cut():
+    """A pin delivered out-of-band on the channel reaches the live director: it cuts to
+    the pinned (quiet) board and holds it, so the dramatic board never steals focus —
+    the auto-cut that `test_auto_follow_emits_focus_cut_to_the_dramatic_board` proves."""
+    ch = PinChannel()
+    ch.submit(0, 50)  # caster pins the quiet board before the scholar's-mate fires
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor, auto_follow=True, pin_channel=ch, interval=0.0, sleep=lambda _: None
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the channel pin must emit a focus cut to the pinned board"
+    assert all(f["board"] == 0 for f in focuses), "the pin holds board 0; drama can't steal it"
+    assert focuses[0]["game_id"] == "https://lichess.org/abcd1234"
+
+
+def test_overlay_events_ignores_a_channel_when_auto_follow_is_off():
+    """No director without `--board auto`, so channel pins are inert (no focus events)."""
+    ch = PinChannel()
+    ch.submit(1, 5)
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor, auto_follow=False, pin_channel=ch, interval=0.0, sleep=lambda _: None
+        )
+        if isinstance(e, dict)
+    ]
+    assert not any(e.get("type") == "focus" for e in events)
+
+
+def test_sse_server_accepts_a_pin_post_onto_the_channel():
+    """`POST /pin {board, plies}` queues the directive on the shared channel (HTTP input
+    side of the caster pin), returning 204."""
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    ch = PinChannel()
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        pin_channel=ch,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin",
+            data=b'{"board": 1, "plies": 4}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        assert resp.status == 204
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ch.drain() == [(1, 4)]
+
+
+def test_sse_server_pin_post_rejects_bad_json():
+    """A malformed pin body is a 400, not a crash or a silent drop."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    ch = PinChannel()
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        pin_channel=ch,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin", data=b"not json", method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ch.drain() == []  # nothing queued from a rejected body
+
+
+def test_sse_server_404s_pin_post_when_no_channel():
+    """Without a pin channel the server has no input side: `POST /pin` is a 404."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin", data=b"{}", method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 # --------------------------------------------------------------------------- #
