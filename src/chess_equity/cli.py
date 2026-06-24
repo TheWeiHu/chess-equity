@@ -692,7 +692,26 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         black_elo=args.black_elo,
     )
     events = ingestor.ingest_snapshot(pgn_text)
-    reel = reel_mod.build_reel(events, top=args.top)
+
+    # --min-magnitude FLOOR (task 0240): drop trivial swings before ranking. Build the
+    # full ranked reel first, filter below the 0..1 floor (logging how many were cut so
+    # nothing is silently truncated), then apply --top to the qualified pool.
+    reel = reel_mod.build_reel(events)
+    floor = getattr(args, "min_magnitude", None)
+    if floor is not None and not (0.0 <= floor <= 1.0):
+        print(
+            f"error: --min-magnitude must be in [0, 1] (got {floor:g})", file=sys.stderr
+        )
+        return 1
+    if floor is not None:
+        reel, dropped = reel_mod.drop_below_magnitude(reel, floor)
+        if dropped:
+            print(
+                f"--min-magnitude {floor:g}: dropped {dropped} moment(s) below the floor",
+                file=sys.stderr,
+            )
+    if args.top is not None:
+        reel = reel[: args.top]
 
     # --round (task 0198): a cross-game ROUND recap. The pooling is already done — a
     # multi-game PGN tags every event with its game_id and the drama detector is
@@ -1802,6 +1821,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     rl.add_argument("--white-elo", type=int, default=None, help="override White rating")
     rl.add_argument("--black-elo", type=int, default=None, help="override Black rating")
     rl.add_argument("--top", type=int, default=None, help="cap the reel to the top N moments")
+    rl.add_argument(
+        "--min-magnitude",
+        type=float,
+        default=None,
+        metavar="FLOOR",
+        help=(
+            "drop moments whose 0..1 drama magnitude is below FLOOR before "
+            "ranking/rendering (a quiet-game noise filter; logs how many were dropped)"
+        ),
+    )
     rl.add_argument(
         "--round",
         dest="round_recap",
