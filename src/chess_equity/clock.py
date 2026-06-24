@@ -20,8 +20,11 @@ calibrated against real low-clock outcomes in the 0009 harness:
    pulled *down*, holding eval and ratings fixed. The worse the time trouble and
    the more they had to lose, the larger the drop.
 
-These are heuristics with sensible shape, not a fit — the constants are the obvious
-knobs to calibrate on real data once the validation suite slices by clock.
+:data:`_TC_FLAG_MULTIPLIER` is fit to the real per-time-control time-forfeit rate
+(task 0268; see ``reports/clock_calibration_real.md``). The clock-band-shaped knobs —
+:data:`SCRAMBLE_SCALE`, :data:`MAX_FLAG_RISK`, :data:`FLAG_RISK_ALERT_THRESHOLD` — are
+still heuristics with sensible shape: fitting them needs per-move ``[%clk]`` clocks,
+which the cached 2016-05 dump predates, so that calibration waits on a >=2017-04 dump.
 """
 
 from __future__ import annotations
@@ -46,12 +49,19 @@ FLAG_RISK_ALERT_THRESHOLD = 0.2
 
 # A scramble in bullet is far deadlier than the same seconds in classical: moves keep
 # coming fast and there is no time to steady. Multiplies flag risk by time control.
+#
+# Calibrated (task 0268) to the REAL per-time-control time-forfeit rate over 6.2M games
+# in the 2016-05 Lichess dump, normalised to bullet=1.0 (see reports/clock_calibration_
+# real.md, reproducible via scripts/calibrate_clock_tc.py). Measured forfeit rates:
+# bullet 54.1%, blitz 27.4%, rapid 15.6%, classical 14.4% — a far steeper drop than the
+# old hand-set guesses (0.8/0.6/0.5). correspondence stays pinned at 0.0 by design: its
+# "Time forfeit" is failing to move within days, not a live clock scramble.
 _TC_FLAG_MULTIPLIER = {
     "bullet": 1.0,
-    "blitz": 0.8,
-    "rapid": 0.6,
-    "classical": 0.5,
-    "correspondence": 0.0,  # days per move — no flag pressure
+    "blitz": 0.51,
+    "rapid": 0.29,
+    "classical": 0.27,
+    "correspondence": 0.0,  # days per move — no live flag pressure (not data-derived)
 }
 
 
