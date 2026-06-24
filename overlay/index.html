@@ -89,6 +89,14 @@
              dims behind it so a frozen bar can't be mistaken for a live one. -->
         <div class="stale-marker" data-stale title="live feed dropped — attempting to reconnect" hidden>⚠ reconnecting…</div>
 
+        <!-- Focus-cut lower third (task 0264): when the server-side auto-director
+             (`--board auto`, tasks 0256/0260) cuts to a different board it emits a
+             `focus` event carrying a `reason` cue ("cut to Bd3: +0.9 swing vs +0.4").
+             Render it as a brief lower-third banner so the streamer-facing payoff of the
+             auto-director is visible on the OBS source, then fade it after a few seconds.
+             Routing-only `focus` events (caster pins with no reason) don't banner. -->
+        <div class="focus-banner" data-focus-banner role="status" aria-live="polite" hidden></div>
+
         <!-- Game-over card (task 0213): shown over the bar when the FOLLOWED board's
              game ends, so a finished game reads as finished instead of a frozen bar.
              Result token + winner headline + the equity the bar froze on. Non-followed
