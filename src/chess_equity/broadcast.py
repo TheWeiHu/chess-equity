@@ -764,6 +764,43 @@ def parse_board_selector(spec: Optional[str]) -> Optional[BoardSelector]:
     return BoardSelector(player=spec)
 
 
+def parse_auto_spec(spec: Optional[str]) -> Tuple[bool, Optional[str]]:
+    """Interpret the auto-follow forms of a ``--board`` spec (tasks 0256 / 0262).
+
+    Returns ``(auto_follow, bias_player)``:
+
+    - ``"auto"`` → ``(True, None)`` — pure drama-following (task 0256).
+    - ``"auto:<name>"`` → ``(True, "<name>")`` — drama-following softly biased toward
+      boards featuring ``<name>`` (task 0262); a blank name (``"auto:"``) degrades to
+      ``(True, None)``.
+    - anything else, including ``None`` → ``(False, None)`` — not an auto spec; the caller
+      falls back to :func:`parse_board_selector` for a fixed one-board follow.
+
+    Case-insensitive on the ``auto`` keyword; the player name keeps its original case
+    (it's matched case-insensitively downstream, like :class:`BoardSelector`)."""
+    if not isinstance(spec, str):
+        return False, None
+    spec = spec.strip()
+    low = spec.lower()
+    if low == "auto":
+        return True, None
+    if low.startswith("auto:"):
+        player = spec[len("auto:"):].strip()
+        return True, (player or None)
+    return False, None
+
+
+def _game_features(game: "GameEvent", player: str) -> bool:
+    """True if ``player`` (a case-insensitive substring) names either side of ``game`` —
+    the auto-bias counterpart of :meth:`BoardSelector.matches` for the soft player bias
+    (task 0262)."""
+    needle = player.casefold()
+    for name in (game.white_name, game.black_name):
+        if name and needle in name.casefold():
+            return True
+    return False
+
+
 def _game_id(headers: chess.pgn.Headers, fallback: int) -> str:
     """Stable-ish identity for a game within a round.
 
@@ -1466,6 +1503,14 @@ FOCUS_MARGIN = 0.15
 # peak yields to a currently-active rival.
 FOCUS_DECAY = 0.85
 
+# Default additive standing bonus for a board featuring the player named by
+# `--board auto:<player>` (task 0262). A *soft* bias: it's added to that board's drama
+# standing so the board wins ties and small margins, and a rival must out-drama it by
+# `margin + bias` (not just `margin`) to steal the cut — yet a big-enough swing still
+# cuts away (this is a bias, not the hard caster pin). Set equal to FOCUS_MARGIN so the
+# favoured board steals the cut the moment it merely *matches* the current focus's drama.
+FOCUS_BIAS = FOCUS_MARGIN
+
 
 class FocusDirector:
     """Pick which board ``broadcast --board auto`` should focus, from per-board drama.
@@ -1495,15 +1540,27 @@ class FocusDirector:
     A pin also clears the moment the pinned board's game ends (:meth:`result`), so a
     caster pinned to a finished game isn't stranded. ``recent`` keeps decaying/updating
     during a pin, so the director is current the instant the pin lifts.
+
+    Player bias (task 0262): ``--board auto:<player>`` softly biases the cut toward
+    boards featuring a named player. :attr:`bias` maps a board index to an additive bonus
+    on that board's drama standing (see :meth:`set_bias`), so a biased board wins ties and
+    small margins, while a rival must out-drama it by ``margin + bias`` to steal the cut.
+    Unlike the caster pin this is a *bias*, not a hold: a big-enough drama swing on
+    another board still cuts away.
     """
 
     def __init__(
-        self, margin: float = FOCUS_MARGIN, decay: float = FOCUS_DECAY
+        self,
+        margin: float = FOCUS_MARGIN,
+        decay: float = FOCUS_DECAY,
+        bias: Optional[Dict[int, float]] = None,
     ) -> None:
         self.margin = margin
         self.decay = decay
         self.focus: Optional[int] = None
         self.recent: Dict[int, float] = {}
+        # Per-board additive standing bonus (task 0262); empty = pure drama-following.
+        self.bias: Dict[int, float] = dict(bias) if bias else {}
         self.pinned: Optional[int] = None  # board a caster has pinned, else None
         self.pin_remaining: int = 0  # note() ticks the pin still holds
         # Human-readable cue explaining the most recent cut (task 0260), e.g.
@@ -1516,6 +1573,22 @@ class FocusDirector:
     def board_label(board: int) -> str:
         """Caster-facing 1-based board name for the 0-based ``board`` index ("Bd1")."""
         return f"Bd{board + 1}"
+
+    def set_bias(self, board: int, bonus: float = FOCUS_BIAS) -> None:
+        """Register a soft focus bias toward ``board`` (task 0262): ``bonus`` is added to
+        the board's drama standing in every cut comparison. Called as a round's games are
+        announced, once :func:`overlay_events` learns which board features the biased
+        player. A ``bonus`` of 0 is a no-op (no preference)."""
+        if bonus:
+            self.bias[board] = bonus
+
+    def _standing(self, board: Optional[int]) -> float:
+        """A board's effective drama standing: its decayed recency score plus any soft
+        player bias (task 0262). With no bias registered this is just the recency score,
+        so unbiased drama-following is unchanged."""
+        if board is None:
+            return 0.0
+        return self.recent.get(board, 0.0) + self.bias.get(board, 0.0)
 
     def _drama_cut_reason(self, board: int, magnitude: float) -> str:
         """Build the director cue for a drama-driven cut TO ``board`` (task 0260).
@@ -1578,7 +1651,10 @@ class FocusDirector:
             return None
         if board == self.focus:
             return None
-        if magnitude - self.recent.get(self.focus, 0.0) >= self.margin:
+        if self._standing(board) - self._standing(self.focus) >= self.margin:
+            # A rival steals only when its (bias-adjusted) standing clears the focus's by
+            # the margin — so a biased focus board holds until out-dramaed by margin+bias,
+            # and a biased rival steals on ties/small margins (task 0262).
             # Build the cue BEFORE moving focus so it compares against the board we're
             # leaving (task 0260).
             self.last_reason = self._drama_cut_reason(board, magnitude)
@@ -1621,6 +1697,7 @@ def overlay_events(
     ingestor: "BroadcastIngestor",
     *,
     auto_follow: bool = False,
+    bias_player: Optional[str] = None,
     pin_channel: "Optional[PinChannel]" = None,
     **stream_kwargs,
 ) -> Iterator[object]:
@@ -1636,6 +1713,11 @@ def overlay_events(
     ``stream_kwargs`` pass straight through to ``stream`` (``interval`` / ``max_polls``
     / ``max_idle_polls`` / ``sleep`` / ``heartbeat``). With ``heartbeat=True`` an idle
     poll yields the :data:`HEARTBEAT` sentinel instead of a ``position`` dict.
+
+    With ``auto_follow`` and a ``bias_player`` (``--board auto:<player>``, task 0262) the
+    director softly biases the cut toward boards featuring that player: as each board is
+    announced its name-plate is matched and, on a hit, a :data:`FOCUS_BIAS` standing bonus
+    is registered for it (:meth:`FocusDirector.set_bias`).
     """
     queued: List[Dict[str, object]] = []
     # Board roster for the overlay's live board selector (task 0185). As each game of a
@@ -1653,6 +1735,11 @@ def overlay_events(
         if game.board is not None:
             board_of[game.game_id] = game.board
             game_of_board[game.board] = game.game_id
+            # `--board auto:<player>` soft bias (task 0262): a round announces its games as
+            # they appear, so we learn which board features the biased player only here —
+            # register a standing bonus on this board the moment its name-plate matches.
+            if director is not None and bias_player and _game_features(game, bias_player):
+                director.set_bias(game.board)
             roster.append(
                 {
                     "index": game.board,
