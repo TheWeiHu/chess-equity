@@ -151,6 +151,67 @@ def test_rating_gap_slice_in_report_and_head_to_head():
     assert gap_slices["300+"].delta > gap_slices["<100"].delta
 
 
+# --- failure-mode slicer (task 0111) -------------------------------------------
+
+def test_failure_mode_tags_rows_by_curated_anchor():
+    from chess_equity.validate.failure_modes import UNTAGGED, failure_mode
+
+    # cp≈0 -> the drawn failure mode; cp≈±1000 -> the absurd-refutation mode (symmetric
+    # in colour, so a Black-side -1000 counts too); anything else -> the untagged bucket.
+    assert failure_mode(_row(cp=0)) == "dead-draw-hard"
+    assert failure_mode(_row(cp=70)) == "dead-draw-hard"  # inside the ±75cp window
+    assert failure_mode(_row(cp=1000)) == "absurd-refutation"
+    assert failure_mode(_row(cp=-1000)) == "absurd-refutation"  # colour mirror
+    assert failure_mode(_row(cp=400)) == UNTAGGED  # off every anchor (the +0.76 band)
+
+
+def test_failure_mode_slice_in_report():
+    # Rows on the two named modes plus an off-mode row: the slice must surface all three
+    # buckets and the report must render a `## By failure_mode` section with a per-mode
+    # baseline-vs-wdl-a row (the most direct read on the thesis, objective 0003).
+    rows = (
+        [_row(cp=0, result=0.5)] * 8  # dead-draw-hard: engine 0.00
+        + [_row(cp=1000, result=1.0)] * 8  # absurd-refutation: engine winning
+        + [_row(cp=400, result=1.0)] * 8  # off-mode -> "none"
+    )
+
+    def wdl_a(row):  # a stand-in rating-aware model; value is irrelevant to the slicing
+        return 0.6
+
+    reports = evaluate(rows, {"baseline": baseline_cp, "wdl-a": wdl_a})
+    base = next(r for r in reports if r.name == "baseline")
+    assert "failure_mode" in base.slices
+    assert set(base.slices["failure_mode"]) == {
+        "dead-draw-hard",
+        "absurd-refutation",
+        "none",
+    }
+    assert base.slices["failure_mode"]["dead-draw-hard"].n == 8
+
+    text = format_report(reports)
+    assert "## By failure_mode" in text
+    # Both predictors get a per-mode row in the section.
+    assert "| baseline | dead-draw-hard" in text
+    assert "| wdl-a | absurd-refutation" in text
+
+
+def test_failure_mode_anchors_match_committed_json():
+    # Drift guard: the slicer's anchors are derived from baseline/failure_modes.json, so if
+    # a curated position's category/engine_cp changes, this catches the slicer going stale.
+    import json
+    from pathlib import Path
+
+    from chess_equity.validate.failure_modes import _FAILURE_MODES_JSON, _anchors
+
+    data = json.loads(Path(_FAILURE_MODES_JSON).read_text())
+    expected: dict = {}
+    for pos in data["positions"]:
+        expected.setdefault(pos["category"], set()).add(float(pos["engine_cp"]))
+    assert {k: set(v) for k, v in _anchors().items()} == expected
+    # The two named modes from objective 0003 are present.
+    assert {"dead-draw-hard", "absurd-refutation"} <= set(_anchors())
+
+
 # --- harness end to end --------------------------------------------------------
 
 def test_evaluate_overall_and_slices():
@@ -751,7 +812,9 @@ def test_worst_slice_verdict_names_worst_and_counts_wins():
     ]
     h2h = head_to_head_deltas(evaluate(rows, {"baseline": baseline_cp, "model": lambda r: r.result}))
     assert h2h is not None
-    line = worst_slice_verdict(h2h)
+    # underpowered_n=0 disables the per-band sample floor (task 0146) so this 2-row
+    # fixture still exercises the raw worst-slice/win-count mechanic.
+    line = worst_slice_verdict(h2h, underpowered_n=0)
     # Names the worst slice (the last, lowest-Δ entry) and reports wins/total.
     worst = h2h.slices[-1]
     assert f"`{worst.slicer}` `{worst.value}`" in line
@@ -1104,7 +1167,12 @@ def test_head_to_head_slice_cis_sign_and_floor():
     rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(40)]
     rows += [_row(cp=0, we=1500, be=1500, phase="middlegame", result=1.0)]  # singleton slice
     preds = {"baseline": baseline_cp, "oracle": lambda r: r.result}
-    h2h = head_to_head_slice_cis(rows, preds, min_n=10, n_resamples=500, seed=0)
+    # underpowered_n=0 disables the per-band sample floor (task 0146); this test exercises
+    # the small-n *CI* floor (min_n), so the n=40 slices must still be allowed to read
+    # `equity` rather than being capped as `underpowered`.
+    h2h = head_to_head_slice_cis(
+        rows, preds, min_n=10, underpowered_n=0, n_resamples=500, seed=0
+    )
     assert h2h is not None
     assert h2h.baseline == "baseline" and h2h.model == "oracle"
     assert h2h.metric == "log_loss" and h2h.min_n == 10
@@ -1145,7 +1213,11 @@ def test_head_to_head_slice_cis_deterministic_on_sample():
         "wdl-a": PREDICTORS["wdl-a"],
     }
     # min_n=8: the larger slices (n>=9) get real CIs; n<=6 slices stay inconclusive.
-    h2h = head_to_head_slice_cis(rows, preds, min_n=8, n_resamples=2000, seed=0)
+    # underpowered_n=0 disables the per-band sample floor (task 0146) so the small sample
+    # slices can still read `equity`; the floor itself is covered by its own tests below.
+    h2h = head_to_head_slice_cis(
+        rows, preds, min_n=8, underpowered_n=0, n_resamples=2000, seed=0
+    )
     assert h2h is not None and h2h.model == "wdl-a"
     by_key = {(d.slicer, d.value): d for d in h2h.slices}
 
@@ -1164,14 +1236,16 @@ def test_head_to_head_slice_cis_deterministic_on_sample():
     assert small.delta < 0.0  # baseline is better here, but we don't call it significant
 
     # Determinism: a second seeded run yields identical CIs.
-    again = head_to_head_slice_cis(rows, preds, min_n=8, n_resamples=2000, seed=0)
+    again = head_to_head_slice_cis(
+        rows, preds, min_n=8, underpowered_n=0, n_resamples=2000, seed=0
+    )
     assert [(d.lo, d.hi, d.verdict) for d in again.slices] == [
         (d.lo, d.hi, d.verdict) for d in h2h.slices
     ]
 
 
 def test_head_to_head_slice_cis_default_floor_guards_tiny_sample():
-    """The default floor (30) leaves the 15-row sample with no significant slice."""
+    """The default floors leave the 15-row sample with no significant slice."""
     from pathlib import Path
 
     from chess_equity.data.build import load_rows
@@ -1181,10 +1255,132 @@ def test_head_to_head_slice_cis_default_floor_guards_tiny_sample():
     rows = load_rows(str(sample))
     preds = {"baseline": PREDICTORS["baseline"], "wdl-a": PREDICTORS["wdl-a"]}
     h2h = head_to_head_slice_cis(rows, preds, n_resamples=200, seed=0)
-    assert h2h is not None and h2h.min_n == 30
-    # Every slice is below the default floor on this tiny fixture -> all inconclusive,
-    # none gets a CI. The thesis can't be "proven" on 15 rows by accident.
-    assert all(d.lo is None and d.verdict == "inconclusive" for d in h2h.slices)
+    assert h2h is not None and h2h.min_n == 30 and h2h.underpowered_n == 1000
+    # Every slice is below the default small-n floor on this tiny fixture -> no CI; and
+    # below the n=1000 underpowered floor -> every band reads `underpowered`, none reads a
+    # per-band win/loss. The thesis can't be "proven" on 15 rows by accident (task 0146).
+    assert all(d.lo is None and d.verdict == "underpowered" for d in h2h.slices)
+
+
+def test_head_to_head_slice_cis_underpowered_floor_caps_band_verdict():
+    """A band below the underpowered floor reads `underpowered`, never `equity` (0146)."""
+    from chess_equity.validate.harness import head_to_head_slice_cis
+
+    # An oracle wins every slice, so each band's CI clears zero — but only a band with
+    # enough rows may *read* as a significant equity win; smaller bands are capped.
+    rows = [_row(cp=0, we=1000, be=1000, phase="opening", result=1.0) for _ in range(100)]
+    rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(20)]
+    rows += [_row(cp=0, we=1500, be=1500, phase="middlegame", result=1.0) for _ in range(5)]
+    preds = {"baseline": baseline_cp, "oracle": lambda r: r.result}
+    h2h = head_to_head_slice_cis(
+        rows, preds, min_n=10, underpowered_n=50, n_resamples=400, seed=0
+    )
+    assert h2h is not None and h2h.underpowered_n == 50
+    by = {(d.slicer, d.value): d for d in h2h.slices}
+    # n=100 >= 50: a real, significant equity win (whole CI above zero).
+    big = by[("phase", "opening")]
+    assert big.n == 100 and big.verdict == "equity" and big.lo is not None and big.lo > 0
+    # n=20: a CI is computed (>= min_n) but the band is below the floor -> `underpowered`,
+    # so an oracle's would-be win can't read as significant on 20 rows.
+    mid = by[("phase", "endgame")]
+    assert mid.n == 20 and mid.verdict == "underpowered" and mid.lo is not None
+    # n=5: below min_n -> no CI at all, and below the floor -> still `underpowered`.
+    tiny = by[("phase", "middlegame")]
+    assert tiny.n == 5 and tiny.verdict == "underpowered" and tiny.lo is None
+
+
+def test_worst_slice_verdict_excludes_underpowered_band():
+    """The worst-slice verdict ignores below-floor bands' losses as small-n noise (0146)."""
+    from chess_equity.validate.harness import HeadToHead, SliceDelta, worst_slice_verdict
+
+    # Mirrors the real-data shape: two big bands where equity wins, plus a small n=415 band
+    # that reads as a wdl-a "loss" purely from small-n (Δ < 0).
+    h2h = HeadToHead(
+        baseline="baseline",
+        model="wdl-a",
+        overall_delta=0.34,
+        slices=[
+            SliceDelta("rating", "1600-1999", 7000, 0.93, 0.54, +0.39),
+            SliceDelta("rating", "1200-1599", 4000, 0.87, 0.57, +0.30),
+            SliceDelta("rating", "2000-2399", 415, 0.78, 0.97, -0.19),
+        ],
+    )
+    # Floor on (default 1000): the n=415 band is excluded, so the worst *powered* slice is
+    # an equity win — the line must not claim the baseline wins anywhere.
+    line = worst_slice_verdict(h2h)
+    assert "the baseline wins here" not in line
+    assert "equity still wins every slice" in line
+    assert "Equity wins on 2/2 adequately-powered slices" in line
+    assert "1 band(s) below n=1000 excluded as underpowered" in line
+    # Floor off: the naive read counts the noisy band and calls it a loss.
+    naive = worst_slice_verdict(h2h, underpowered_n=0)
+    assert "the baseline wins here" in naive
+    assert "Equity wins on 2/3 slices" in naive
+
+
+def test_worst_slice_verdict_ci_caveat():
+    """The worst-slice line carries a clears-zero / straddles-zero CI caveat (task 0161)."""
+    from chess_equity.validate.harness import (
+        HeadToHead,
+        HeadToHeadCI,
+        SliceDelta,
+        SliceDeltaCI,
+        worst_slice_verdict,
+    )
+
+    h2h = HeadToHead(
+        baseline="baseline",
+        model="wdl-a",
+        overall_delta=0.34,
+        slices=[
+            SliceDelta("rating", "1600-1999", 7000, 0.93, 0.54, +0.39),
+            SliceDelta("rating", "2000-2399", 415, 0.78, 0.97, -0.19),
+        ],
+    )
+
+    def _cis(lo, hi, verdict):
+        return HeadToHeadCI(
+            baseline="baseline", model="wdl-a", metric="log_loss", min_n=30,
+            underpowered_n=1000, confidence=0.95, n_resamples=1000,
+            slices=[SliceDeltaCI("rating", "2000-2399", 415, -0.19, lo, hi, verdict)],
+        )
+
+    # Straddles zero (the real-data shape): the apparent loss is small-n noise, not proof.
+    straddle = worst_slice_verdict(
+        h2h, underpowered_n=0, cis=_cis(-0.3672, +0.0327, "inconclusive")
+    )
+    assert "the baseline wins here" in straddle
+    assert "[-0.3672, +0.0327]" in straddle
+    assert "straddles zero" in straddle and "small-n noise" in straddle
+
+    # CI wholly below zero (in baseline−model terms): a real, significant regression.
+    real = worst_slice_verdict(
+        h2h, underpowered_n=0, cis=_cis(-0.40, -0.05, "baseline")
+    )
+    assert "clears zero" in real and "not small-n noise" in real
+
+    # No cis -> the bare point read, unchanged (back-compat).
+    bare = worst_slice_verdict(h2h, underpowered_n=0)
+    assert "the baseline wins here." in bare
+    assert "95% CI" not in bare
+
+
+def test_format_head_to_head_cis_marks_underpowered_bands():
+    """The per-slice CI table tags below-floor bands `underpowered (n=…)` (task 0146)."""
+    from chess_equity.validate.harness import format_head_to_head_cis, head_to_head_slice_cis
+
+    rows = [_row(cp=0, we=1000, be=1000, phase="opening", result=1.0) for _ in range(40)]
+    rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(40)]
+    h2h = head_to_head_slice_cis(
+        rows, {"baseline": baseline_cp, "oracle": lambda r: r.result},
+        min_n=10, underpowered_n=1000, n_resamples=200, seed=0,
+    )
+    md = format_head_to_head_cis(h2h)
+    # Every band here is < 1000 rows -> tagged underpowered with its n, and the note
+    # explains the floor. No band clears the floor, so none reads a bare per-band `equity`.
+    assert "underpowered (n=40)" in md
+    assert "excluded from any per-band beats/loses claim" in md
+    assert "| equity |" not in md
 
 
 def test_format_head_to_head_cis_table():
@@ -1194,7 +1390,7 @@ def test_format_head_to_head_cis_table():
     rows += [_row(cp=0, we=2500, be=2500, phase="endgame", result=0.0) for _ in range(40)]
     h2h = head_to_head_slice_cis(
         rows, {"baseline": baseline_cp, "oracle": lambda r: r.result},
-        min_n=10, n_resamples=300, seed=0,
+        min_n=10, underpowered_n=0, n_resamples=300, seed=0,
     )
     md = format_head_to_head_cis(h2h)
     assert "## Head-to-head significance: per-slice CIs (baseline vs oracle)" in md

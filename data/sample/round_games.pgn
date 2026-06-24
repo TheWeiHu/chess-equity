@@ -1,0 +1,25 @@
+[Event "Sample Round, Board 1"]
+[Site "https://lichess.org/round01"]
+[Round "1.1"]
+[White "alice"]
+[Black "bob"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1480"]
+[TimeControl "180+2"]
+[Termination "Normal"]
+
+1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
+
+[Event "Sample Round, Board 2"]
+[Site "https://lichess.org/round02"]
+[Round "1.2"]
+[White "carol"]
+[Black "alice"]
+[Result "1/2-1/2"]
+[WhiteElo "1490"]
+[BlackElo "1500"]
+[TimeControl "180+2"]
+[Termination "Normal"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Nf3 Be7 1/2-1/2

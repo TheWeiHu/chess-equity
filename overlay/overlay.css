@@ -15,13 +15,35 @@ html, body {
   --accent: #4ade80;                 /* equity-positive flare */
   --bad: #f87171;
   --pad: 10px;
+  /* Room above & below the bar for the grade/drama/human-edge badges, which sit
+     at negative offsets outside the bar box. Without it they clip off the top
+     (and bottom) of the OBS canvas — their text is cut off at 1080p. */
+  --badge-reserve: 36px;
   box-sizing: border-box;
+  position: relative;                /* anchor for the absolutely-placed legend key */
   display: grid;
   gap: 8px;
   width: 100%;
-  padding: var(--pad);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  padding: var(--badge-reserve) var(--pad);
+  /* Heavier halo so white labels stay legible over a light/busy stream
+     background (e.g. a light chessboard), not just a dark one. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.7);
 }
+
+/* Colorblind-safe palette (task 0254): ?palette=cvd / config.html toggle adds
+   `.palette-cvd` to #overlay. The default red(--bad)/green(--accent) signalling is the
+   classic deuteranopia/protanopia failure case (~8% of male viewers can't separate them),
+   so flip ONLY the red-green axis to a CVD-safe blue/orange pair (Okabe-Ito inspired).
+   Custom-property overrides cascade to everything driven by --accent/--bad (grade pills,
+   flag-risk, momentum, legend swatches); the equity bar is white/black and already safe.
+   Additive — without the class the default palette is untouched. */
+.overlay.palette-cvd {
+  --accent: #4ea3f5;                 /* equity-positive: blue, not green */
+  --bad: #f08c00;                    /* flag-risk / negative: orange, not red */
+}
+/* Drama toasts hardcode the green clutch / red blunder kinds, so override them too. */
+.overlay.palette-cvd .drama-toast.kind-clutch  { background: #4ea3f5; color: #04223a; }
+.overlay.palette-cvd .drama-toast.kind-blunder { background: #f08c00; color: #2a1a06; box-shadow: 0 0 14px rgba(240, 140, 0, 0.7); }
 
 /* Horizontal: names flank a wide bar. */
 .layout-horizontal {
@@ -36,7 +58,7 @@ html, body {
   height: 100vh;
 }
 .layout-vertical .bar { flex-direction: column-reverse; width: 36px; height: 100%; }
-.layout-vertical .bar-fill-white { width: 100%; }
+.layout-vertical .bar-fill-white { width: 100%; border-radius: 0 0 6px 6px; }  /* white sits at the bottom */
 .layout-vertical .bar-fill-black { width: 100%; }
 
 .player {
@@ -65,6 +87,18 @@ html, body {
 .player.time-pressure .clock::before { content: "⏱ "; }
 @keyframes clockpulse { 50% { opacity: 0.45; } }
 
+/* Flag-risk alert (task 0243): a 🚩 badge that lights when the MODEL's per-side
+   flag_risk crosses its alert threshold — real time trouble, not just a low raw clock.
+   The server decides when it shows (`flag_risk.<side>.alert`); a steady pulse + the bad
+   colour make it read as danger. Hidden via [hidden] until the server flags the side. */
+.player .flag-risk {
+  font-size: 18px;
+  margin-top: 2px;
+  filter: drop-shadow(0 0 4px var(--bad));
+  animation: flagpulse 0.9s ease-in-out infinite;
+}
+@keyframes flagpulse { 50% { opacity: 0.4; transform: scale(0.92); } }
+
 /* The middle column: the equity bar, with the optional full centipawn bar stacked
    beneath it (?cpbar=1). */
 .bar-stack {
@@ -81,7 +115,10 @@ html, body {
   display: flex;
   height: 34px;
   border-radius: 6px;
-  overflow: hidden;
+  /* NOT overflow:hidden — the grade/drama/human-edge badges are children of the
+     bar positioned outside its box, and overflow:hidden clipped them away
+     entirely (they never rendered at any resolution). The fills round their own
+     outer corners instead, so the pill shape is preserved without clipping. */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   background: var(--black);
 }
@@ -89,6 +126,7 @@ html, body {
   background: var(--white);
   transition: width 0.5s ease, height 0.5s ease;
   width: 50%;
+  border-radius: 6px 0 0 6px;   /* match the bar's rounded left edge */
 }
 .bar-fill-black {
   background: var(--black);
@@ -132,6 +170,24 @@ html, body {
   pointer-events: none;
 }
 
+/* Model badge (task 0222): a small static pill above the bar naming the model that
+   drives the fill (e.g. "Maia-2"), so a viewer can tell this is a rating-conditioned
+   human win-probability bar, not a Stockfish eval. Hidden when no model is announced. */
+.model-badge {
+  align-self: flex-start;
+  margin-bottom: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e8e8e8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.model-badge[hidden] { display: none; }
+
 /* Caster-mode drama flare (task 0022): a banner over the bar on a big practical
    swing, emphasised when it's a swing the engine bar misses. */
 .drama-flare {
@@ -161,6 +217,72 @@ html, body {
   to   { transform: translateY(0)   scale(1);   opacity: 1; }
 }
 
+/* Drama toast (task 0241): a transient, labelled flash for a SERVER-classified drama
+   event (clutch / missed-win / escape / scramble). Centered above the bar so it reads
+   as the headline moment, then auto-hides as quiet moves decay it. Per-kind colors:
+   green for a gain the player earned (clutch/escape), amber/red for a slip (missed-win),
+   blue for a clock scramble. Distinct from the caster-mode drama-flare (top-right). */
+.drama-toast {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 16px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #06210f;
+  background: var(--accent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
+  animation: toast-in 0.4s ease;
+  pointer-events: none;
+}
+.drama-toast.kind-clutch  { background: #4ade80; color: #06210f; }
+.drama-toast.kind-escape  { background: #38bdf8; color: #04212e; }
+.drama-toast.kind-missed_win {
+  background: #f87171; color: #2a0606;
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.7);
+}
+.drama-toast.kind-scramble { background: #facc15; color: #2a1f02; }
+.drama-toast[hidden] { display: none; }
+@keyframes toast-in {
+  from { transform: translate(-50%, 8px) scale(0.7); opacity: 0; }
+  to   { transform: translateX(-50%) scale(1);    opacity: 1; }
+}
+
+/* Focus-cut lower third (task 0264): a brief banner under the bar showing WHY the
+   server-side auto-director (`--board auto`) just cut to this board — the `reason` cue
+   on the `focus` event ("cut to Bd3: +0.9 swing vs +0.4"). Broadcast lower-third look:
+   dark slab, accent left rule, slides up on each cut, then fades via a JS timer. */
+.focus-banner {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 92%;
+  padding: 6px 16px 6px 14px;
+  border-left: 4px solid var(--accent, #4ade80);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f3f6fb;
+  background: rgba(8, 14, 24, 0.82);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  animation: focus-banner-in 0.35s ease;
+  pointer-events: none;
+}
+.focus-banner[hidden] { display: none; }
+@keyframes focus-banner-in {
+  from { transform: translate(-50%, 10px); opacity: 0; }
+  to   { transform: translateX(-50%);      opacity: 1; }
+}
+
 /* Human-edge badge (task 0048): persistent while the practical equity bar and the
    classic centipawn bar disagree on the position — the project's wedge made visible.
    Sits below the bar (left) so it doesn't collide with the drama flare (top-right). */
@@ -180,6 +302,60 @@ html, body {
 .human-edge.black { background: #cbd5e1; color: #0b1220; }
 .human-edge[hidden] { display: none; }
 
+/* Out-of-distribution high-rating marker (task 0255): when both players are above
+   Maia-2's coarse `>2000` bucket the bar can't resolve 2200 from 2800, so we (a) hatch
+   the whole bar with a faint diagonal overlay and (b) show a small `?` chip top-left.
+   Subtle by design — an honesty cue, not an alarm. */
+.bar.ood::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.0) 0,
+    rgba(255, 255, 255, 0.0) 6px,
+    rgba(255, 255, 255, 0.14) 6px,
+    rgba(255, 255, 255, 0.14) 8px
+  );
+}
+.rating-ood {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  z-index: 3;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  cursor: help;
+}
+.rating-ood[hidden] { display: none; }
+
+/* Momentum arrow (task 0208): a single up/down glyph at the bottom-right marking the
+   direction of the last equity swing. White-gaining points up (accent), Black-gaining
+   points down (light). Opacity + font-size are set inline by overlay.js so the arrow
+   fades over the decay window and grows with the swing — kept clear of the human-edge
+   badge (bottom-left). */
+.momentum {
+  position: absolute;
+  bottom: -30px;
+  right: 4px;
+  line-height: 1;
+  font-weight: 900;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.4s ease, font-size 0.2s ease;
+}
+.momentum.white { color: var(--accent); }
+.momentum.black { color: #e2e8f0; }
+.momentum[hidden] { display: none; }
+
 .equity-readout {
   position: absolute;
   inset: 0;
@@ -194,6 +370,26 @@ html, body {
 }
 .pct-white { color: #1a1a1a; text-shadow: none; }
 .pct-black { color: #f5f5f0; }
+
+/* Side-to-move readout (?pov=stm, task 0206): a small centered pill above the bar
+   naming the player on the move and their equity. Off by default. In stm POV the
+   per-player percentages get out of the way so the one oriented number reads clearly. */
+.stm-readout {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.stm-readout[hidden] { display: none; }
+.pov-stm .equity-readout { opacity: 0.55; }
 
 /* Δequity grade pill — flashes when a move beats the player's level. */
 .grade-pill {
@@ -216,4 +412,201 @@ html, body {
   to   { transform: translateX(-50%) scale(1);   opacity: 1; }
 }
 
+/* Stale-feed state (task 0178): the live feed dropped. Dim the live data so a
+   frozen bar can't be mistaken for a current one, and surface a small
+   "reconnecting" marker over the bar. Cleared automatically on the next event.
+   The marker itself stays full-opacity so it reads against the dimmed bar. */
+.feed-stale .bar-fill-white,
+.feed-stale .bar-fill-black,
+.feed-stale .equity-readout,
+.feed-stale .cp-ghost,
+.feed-stale .player {
+  opacity: 0.35;
+  transition: opacity 0.3s ease;
+}
+.stale-marker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: #2a1f02;
+  background: #facc15;                /* amber: attention, not alarm */
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  animation: stalepulse 1.4s ease-in-out infinite;
+  z-index: 2;
+}
+.stale-marker[hidden] { display: none; }
+@keyframes stalepulse { 50% { opacity: 0.55; } }
+
+/* Game-over card (task 0213): when the FOLLOWED board's game ends, a clean end card
+   centered over the bar so the final position reads as finished, not as a frozen live
+   bar. One pill: the result token, the winner headline, and the equity the bar froze
+   on. Cleared the moment a live position arrives (focus moved to another board). */
+.gameover-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  white-space: nowrap;
+  color: #f3f4f6;
+  background: rgba(10, 12, 18, 0.9);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+  z-index: 3;                          /* above the stale marker and badges */
+}
+.gameover-card[hidden] { display: none; }
+.gameover-result {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: #fbbf24;                      /* gold: the result token stands out */
+}
+.gameover-headline { font-size: 13px; }
+.gameover-equity {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* Legend key (task 0201): an optional one-line key a streamer toggles on (?legend=1)
+   so a first-time viewer can read the bar. Anchored to the bottom of the overlay,
+   inside the reserved badge room (--badge-reserve) so it never clips at 1080p; its
+   own translucent pill keeps it legible over any background. Off by default (the
+   element is `hidden` until overlay.js reveals it). */
+.legend {
+  position: absolute;
+  left: var(--pad);
+  bottom: 4px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #f3f4f6;
+  background: rgba(0, 0, 0, 0.62);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.legend[hidden] { display: none; }
+.legend-item { display: flex; align-items: center; gap: 5px; }
+.legend .sw {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+.legend .sw-bar { background: linear-gradient(90deg, var(--white) 0 50%, var(--black) 50% 100%); }
+.legend .sw-good { background: var(--accent); }   /* gained equity — good/brilliant */
+.legend .sw-bad { background: var(--bad); }        /* lost equity — inaccuracy/mistake/blunder */
+.theme-light .legend { color: #f3f4f6; }           /* keep the dark pill; readable on light streams too */
+
 .theme-light .player { color: #111; text-shadow: 0 1px 2px rgba(255,255,255,0.6); }
+
+/* Live board switcher (task 0185): a small dropdown a caster uses to flip which board of
+   a broadcast round the bar follows. Spans the grid so it sits above the bar in both
+   layouts; hidden for a single-board feed. */
+.board-select {
+  grid-column: 1 / -1;
+  justify-self: center;
+  max-width: 360px;
+  margin-bottom: 4px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--white);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  padding: 2px 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+.board-select[hidden] { display: none; }
+.theme-light .board-select { color: #111; background: rgba(255, 255, 255, 0.7); }
+
+/* ── Lower-third STANDINGS panel (task 0231) ─────────────────────────────────────
+   A standalone OBS browser source (standings.html) fed by the `grade --round --json`
+   leaderboard export. Anchored bottom-left of the 1080p canvas; transparent page so
+   only the panel composites. Sized so the top-5 rows clear the lower edge at 1080p. */
+.standings {
+  --st-accent: #4ade80;            /* matches the equity-positive flare */
+  position: fixed;
+  left: 48px;
+  bottom: 54px;
+  min-width: 420px;
+  max-width: 560px;
+  box-sizing: border-box;
+  padding: 14px 18px 16px;
+  border-radius: 10px;
+  background: rgba(20, 20, 24, 0.82);
+  border-left: 5px solid var(--st-accent);
+  color: var(--white, #f5f5f0);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.theme-light .standings {
+  background: rgba(245, 245, 240, 0.9);
+  color: #1b1b1b;
+  text-shadow: none;
+}
+
+.st-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--st-accent);
+  margin-bottom: 8px;
+}
+
+/* Header + rows share one 4-column grid so the columns line up. */
+.st-head,
+.st-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 84px 72px;
+  align-items: baseline;
+  column-gap: 10px;
+}
+.st-head {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  margin-bottom: 4px;
+}
+.theme-light .st-head { border-bottom-color: rgba(0, 0, 0, 0.18); }
+
+.st-row {
+  font-size: 22px;
+  line-height: 1.5;
+  padding: 1px 0;
+}
+.st-row:nth-child(odd) { background: rgba(255, 255, 255, 0.04); }
+.theme-light .st-row:nth-child(odd) { background: rgba(0, 0, 0, 0.04); }
+
+.st-rank { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.85; }
+.st-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-acc { text-align: right; font-variant-numeric: tabular-nums; color: var(--st-accent); font-weight: 700; }
+.st-delta { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.7; font-size: 18px; }
+
+/* Leader row gets a subtle highlight so #1 reads at a glance. */
+.st-rows .st-row:first-child { font-weight: 700; }
+.st-rows .st-row:first-child .st-rank { color: var(--st-accent); opacity: 1; }
+
+.st-empty { font-size: 16px; opacity: 0.6; padding: 6px 0; }

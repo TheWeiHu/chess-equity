@@ -8,15 +8,24 @@ import chess
 import pytest
 
 from chess_equity.broadcast import (
+    FOCUS_BIAS,
+    FOCUS_BIAS_BONUS,
+    FOCUS_DECAY,
+    FOCUS_MARGIN,
     BroadcastFeed,
     BroadcastIngestor,
     FeedError,
+    FocusDirector,
     GameEvent,
     GameTracker,
     LocalPgnFeed,
     MoveEvent,
+    PinChannel,
+    focus_recap_md,
     game_event,
     grade_delta,
+    overlay_events,
+    parse_focus_bias,
     split_games,
 )
 from chess_equity.adapters import EquityModel
@@ -250,6 +259,99 @@ def test_ingestor_survives_feed_error_and_reconnects():
     assert [e.san for e in events] == ["e4", "e5", "Nf3", "Nc6"]
 
 
+class _ConnectThenErrorFeed(BroadcastFeed):
+    """Connects once (so trackers exist), then raises FeedError on every later poll.
+
+    Models a live feed that drops mid-stream and stays down — the worst case for the
+    reconnect backoff, since the ingestor must keep retrying (it connected) instead of
+    giving up, ramping the wait each time.
+    """
+
+    def __init__(self):
+        self._n = 0
+
+    def poll(self):
+        self._n += 1
+        if self._n == 1:
+            return GAME_PGN
+        raise FeedError("feed down")
+
+
+def test_reconnect_backoff_is_exponential_and_bounded():
+    # A feed that drops after connecting should be retried with a geometric, capped
+    # backoff, and announce each reconnect attempt — no network, sleep is recorded.
+    delays: list[float] = []
+    reconnects: list[tuple[int, float]] = []
+    ingestor = BroadcastIngestor(_ConnectThenErrorFeed(), _model())
+    stats = ingestor.run(
+        lambda _: None,
+        interval=2.0,
+        max_polls=7,
+        sleep=delays.append,
+        reconnect_backoff=1.0,
+        backoff_factor=2.0,
+        backoff_max=8.0,
+        on_reconnect=lambda attempt, delay: reconnects.append((attempt, delay)),
+    )
+    # poll 1 connects (no sleep before it); the first inter-poll sleep is the normal
+    # interval, then each subsequent sleep is the prior error's backoff.
+    assert delays[0] == 2.0  # healthy cadence before the drop
+    assert delays[1:] == [1.0, 2.0, 4.0, 8.0, 8.0]  # geometric, capped at backoff_max
+    # on_reconnect fires once per FeedError with the growing (capped) delay.
+    assert reconnects == [(1, 1.0), (2, 2.0), (3, 4.0), (4, 8.0), (5, 8.0), (6, 8.0)]
+    assert stats.errors == 6
+    assert stats.max_backoff_s == 8.0
+    # It never crashes and never gives up once connected (kept polling to max_polls).
+    assert stats.polls == 7
+
+
+class _ErrorsThenRecoversFeed(BroadcastFeed):
+    """Errors twice, recovers and serves a move, then errors again — a flicker.
+
+    Lets us assert the backoff *resets* on a successful poll instead of ramping forever.
+    """
+
+    def __init__(self):
+        self._inner = LocalPgnFeed(GAME_PGN)
+        self._n = 0
+
+    def poll(self):
+        self._n += 1
+        if self._n in (2, 3, 5):
+            raise FeedError("flicker")
+        return self._inner.poll()
+
+
+def test_reconnect_backoff_resets_after_a_successful_poll():
+    reconnects: list[tuple[int, float]] = []
+    ingestor = BroadcastIngestor(_ErrorsThenRecoversFeed(), _model())
+    stats = ingestor.run(
+        lambda _: None,
+        interval=0.0,
+        max_polls=10,
+        sleep=lambda _: None,
+        reconnect_backoff=1.0,
+        backoff_factor=2.0,
+        on_reconnect=lambda attempt, delay: reconnects.append((attempt, delay)),
+    )
+    # Two consecutive errors ramp to 1,2; the recovery (poll 4) resets the attempt
+    # counter, so the later lone error starts again at attempt 1 (delay 1.0).
+    assert reconnects == [(1, 1.0), (2, 2.0), (1, 1.0)]
+    # Two separate recovery episodes (after the 2-error burst, after the lone error).
+    assert stats.reconnects == 2
+
+
+def test_reconnect_resumes_from_last_seen_move_losing_nothing():
+    # A drop mid-stream must not lose moves: the tracker keeps its emitted prefix, so
+    # after reconnecting the feed catches up and all four moves still arrive in order.
+    ingestor = BroadcastIngestor(_ErrorsThenRecoversFeed(), _model())
+    events: list[MoveEvent] = []
+    ingestor.run(
+        events.append, interval=0.0, max_polls=10, sleep=lambda _: None
+    )
+    assert [e.san for e in events] == ["e4", "e5", "Nf3", "Nc6"]
+
+
 def test_ingestor_routes_multiple_games():
     game2 = GAME_PGN.replace("Carlsen", "Ding").replace(
         'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
@@ -263,6 +365,90 @@ def test_ingestor_routes_multiple_games():
     assert len(game_ids) == 2
     # Each game contributed its 4 moves.
     assert len(events) == 8
+
+
+# --------------------------------------------------------------------------- #
+# BoardSelector — follow one board of a multi-game round (task 0182)
+# --------------------------------------------------------------------------- #
+
+
+# Illustrative fixture only (NOT evidence): a tiny two-board round snapshot used to
+# unit-test board selection. Real broadcasts carry the same multi-game shape.
+def _two_board_round():
+    game2 = GAME_PGN.replace("Carlsen", "Ding").replace("Nakamura", "Firouzja").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    return GAME_PGN + "\n" + game2
+
+
+def test_parse_board_selector_modes():
+    from chess_equity.broadcast import BoardSelector, parse_board_selector
+
+    assert parse_board_selector(None) is None
+    assert parse_board_selector("  ") is None
+    assert parse_board_selector("1") == BoardSelector(index=1)
+    assert parse_board_selector("Carlsen") == BoardSelector(player="Carlsen")
+
+
+def test_parse_auto_spec_modes():
+    """`--board auto[:player]` is recognised as the auto-follow form; everything else
+    (incl. a fixed one-board follow) is not (tasks 0256 / 0262)."""
+    from chess_equity.broadcast import parse_auto_spec
+
+    assert parse_auto_spec("auto") == (True, None)
+    assert parse_auto_spec("AUTO") == (True, None)  # keyword is case-insensitive
+    assert parse_auto_spec("  auto  ") == (True, None)
+    assert parse_auto_spec("auto:Carlsen") == (True, "Carlsen")  # name keeps its case
+    assert parse_auto_spec("auto: ding ") == (True, "ding")
+    assert parse_auto_spec("auto:") == (True, None)  # blank name degrades to plain auto
+    # Not an auto spec — the caller falls back to parse_board_selector.
+    assert parse_auto_spec(None) == (False, None)
+    assert parse_auto_spec("Carlsen") == (False, None)
+    assert parse_auto_spec("1") == (False, None)
+
+
+def test_ingestor_follows_one_board_by_player():
+    from chess_equity.broadcast import parse_board_selector
+
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("ding"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Only Ding's board streams (game_id is its Site URL); Carlsen's is filtered out.
+    game_ids = {e.game_id for e in events}
+    assert game_ids == {"https://lichess.org/wxyz9999"}
+    assert len(events) == 4  # the followed game's 4 moves only
+
+
+def test_ingestor_follows_one_board_by_index():
+    from chess_equity.broadcast import parse_board_selector
+
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("0"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Board 0 is the first game (Carlsen's, Site abcd1234).
+    assert {e.game_id for e in events} == {"https://lichess.org/abcd1234"}
+
+
+def test_ingestor_no_selector_follows_all_boards():
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model())  # default: follow every board
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    assert len({e.game_id for e in events}) == 2
+
+
+def test_selector_matches_either_color():
+    from chess_equity.broadcast import parse_board_selector
+
+    # The needle matches the *Black* player of board 1 (Firouzja).
+    feed = _OneShotFeed(_two_board_round())
+    ingestor = BroadcastIngestor(feed, _model(), select=parse_board_selector("firouzja"))
+    events = []
+    ingestor.run(events.append, interval=0.0, sleep=lambda _: None)
+    # Matched on Black; only board 1 (Ding vs Firouzja, Site wxyz9999) streams.
+    assert {e.game_id for e in events} == {"https://lichess.org/wxyz9999"}
 
 
 class _OneShotFeed(BroadcastFeed):
@@ -344,6 +530,838 @@ def test_ingestor_emits_one_game_event_per_game():
     ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
     names = {g.white_name for g in games}
     assert names == {"Carlsen", "Ding"}
+
+
+# --------------------------------------------------------------------------- #
+# Live board switcher — boards roster + per-board routing (task 0185)
+# --------------------------------------------------------------------------- #
+
+
+def _overlay_events_for(snapshot):
+    """Drive a snapshot through the overlay bridge and collect the emitted events."""
+    feed = _OneShotFeed(snapshot)
+    ingestor = BroadcastIngestor(feed, _model())
+    return [
+        e
+        for e in overlay_events(ingestor, interval=0.0, sleep=lambda _: None)
+        if isinstance(e, dict)
+    ]
+
+
+def test_overlay_bridge_announces_boards_for_a_multi_game_round():
+    """A multi-game round emits a `boards` roster event listing every board
+    (index + players), so the overlay can render a live board selector."""
+    events = _overlay_events_for(_two_board_round())
+    rosters = [e for e in events if e.get("type") == "boards"]
+    assert rosters, "a multi-game round must announce a boards roster"
+    # The final roster lists both boards with their index + players.
+    boards = rosters[-1]["boards"]
+    assert {b["index"] for b in boards} == {0, 1}
+    by_index = {b["index"]: b for b in boards}
+    assert by_index[0]["players"]["white"]["name"] == "Carlsen"
+    assert by_index[1]["players"]["white"]["name"] == "Ding"
+
+
+def test_overlay_bridge_stamps_board_index_on_each_event():
+    """Every game/position event of a multi-game round carries its 0-based `board`
+    index, so the overlay can route it to the chosen board."""
+    events = _overlay_events_for(_two_board_round())
+    games = {e["game_id"]: e["board"] for e in events if e.get("type") == "game"}
+    # Two games, board 0 and board 1.
+    assert set(games.values()) == {0, 1}
+    positions = [e for e in events if e.get("type") == "position"]
+    assert positions, "moves must stream"
+    for e in positions:
+        assert e["board"] in (0, 1), "each position routes to a known board"
+
+
+def test_overlay_bridge_single_game_has_no_boards_or_index():
+    """Default single-board behavior: a single-game feed announces no roster and tags
+    no `board`, so the overlay shows no selector and renders every event."""
+    events = _overlay_events_for(GAME_PGN)
+    assert not any(e.get("type") == "boards" for e in events), "no roster for one board"
+    for e in events:
+        assert "board" not in e, "single-game events carry no board index"
+
+
+# --------------------------------------------------------------------------- #
+# Auto-advance off a finished board — game-end result signal (task 0189)
+# --------------------------------------------------------------------------- #
+
+
+# Board 0 has ended (Result "1-0"); board 1 is still in progress (Result "*"). The
+# overlay bridge should announce board 0's result so the router can advance focus.
+def _round_with_board0_finished():
+    board1 = (
+        GAME_PGN.replace("Carlsen", "Ding")
+        .replace("Nakamura", "Firouzja")
+        .replace('Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"')
+    )
+    board0 = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]')
+    return board0 + "\n" + board1
+
+
+def test_overlay_bridge_emits_result_when_a_board_finishes():
+    """A board whose PGN reaches a terminal Result emits a `result` event carrying its
+    board index, so the overlay can auto-advance focus off the finished game."""
+    events = _overlay_events_for(_round_with_board0_finished())
+    results = [e for e in events if e.get("type") == "result"]
+    assert len(results) == 1, "exactly one board finished"
+    assert results[0]["board"] == 0
+    assert results[0]["result"] == "1-0"
+
+
+def test_overlay_bridge_no_result_while_games_in_progress():
+    """While every board's Result is still `*`, the bridge emits no result events —
+    nothing has ended to advance off of."""
+    events = _overlay_events_for(_two_board_round())
+    assert not any(e.get("type") == "result" for e in events)
+
+
+def test_overlay_bridge_single_game_finish_emits_no_result():
+    """A finished single-game feed emits no result event — there's no other board to
+    advance to, and its event stream stays unchanged (no `board`, no `result`)."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]')
+    events = _overlay_events_for(finished)
+    assert not any(e.get("type") == "result" for e in events)
+
+
+def test_ingestor_fires_on_result_once_per_finished_board():
+    """`on_result` fires exactly once per game, the first time it reaches a terminal
+    result — even across repeated snapshots of the same finished round."""
+    from chess_equity.broadcast import ResultEvent
+
+    snapshot = _round_with_board0_finished()
+
+    class _RepeatFeed(BroadcastFeed):
+        def __init__(self, snap, times):
+            self._snap, self._times = snap, times
+
+        def poll(self):
+            if self._times <= 0:
+                return None
+            self._times -= 1
+            return self._snap
+
+    ingestor = BroadcastIngestor(_RepeatFeed(snapshot, 3), _model())
+    results = []
+    ingestor.on_result = results.append
+    ingestor.run(lambda _e: None, interval=0.0, sleep=lambda _: None)
+    assert len(results) == 1, "result announced once, not re-fired on every poll"
+    assert isinstance(results[0], ResultEvent)
+    assert results[0].board == 0 and results[0].result == "1-0"
+
+
+# --------------------------------------------------------------------------- #
+# Drama auto-follow — `broadcast --board auto` server-side focus (task 0256)
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_director_adopts_first_board_silently():
+    """The first board seen is adopted without a focus event — the overlay router
+    already defaults to board 0, so an opening cut would be redundant."""
+    d = FocusDirector()
+    assert d.note(0, 0.0) is None
+    assert d.focus == 0
+
+
+def test_focus_director_follows_the_more_dramatic_board():
+    """A rival board that out-dramas the focus by the margin steals the cut."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)  # adopt board 0 silently
+    assert d.note(0, 0.0) is None  # quiet move on the focused board: no cut
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1  # board 1 erupts -> cut to it
+    assert d.focus == 1
+
+
+def test_focus_director_hysteresis_ignores_tiny_swings():
+    """A blip below the margin can't thrash the focus off the followed board."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    # Board 1 is barely more dramatic than board 0 (under the margin) — no cut.
+    assert d.note(1, FOCUS_MARGIN - 0.01) is None
+    assert d.focus == 0
+
+
+def test_focus_director_no_cut_on_the_focused_board():
+    """Repeated drama on the already-followed board never re-emits a focus event."""
+    d = FocusDirector()
+    d.note(0, 0.0)
+    assert d.note(0, 0.9) is None  # huge swing, but we're already on board 0
+    assert d.focus == 0
+
+
+def test_focus_director_decays_a_stale_peak_so_an_active_rival_steals_focus():
+    """A board whose drama PEAK was its final move must not hold focus forever: as it
+    goes quiet its standing score decays each tick, so a board playing steady moderate
+    drama eventually out-dramas the stale peak and steals the cut (task 0257)."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=0.5)
+    d.note(0, 0.0)  # adopt board 0
+    assert d.note(1, 0.9) == 1  # board 1 erupts on its final move -> cut to it
+    assert d.focus == 1
+    # Board 1 is now silent (no follow-up). Board 0 plays steady moderate drama; each
+    # tick decays board 1's standing 0.9 (0.45, 0.225, 0.1125, ...) until board 0's
+    # 0.3 clears it by the margin and steals focus back.
+    assert d.note(0, 0.3) is None  # 0.3 - 0.45  -> still below margin
+    assert d.note(0, 0.3) is None  # 0.3 - 0.225 = 0.075 < 0.15
+    assert d.note(0, 0.3) == 0  # 0.3 - 0.1125 = 0.1875 >= 0.15 -> steal
+    assert d.focus == 0
+
+
+def test_focus_director_without_decay_a_stale_peak_holds_focus_forever():
+    """Contrast: with ``decay=1.0`` (the old behaviour) the same stale peak is never
+    eroded, so the steady-moderate rival can never out-drama it — proving the decay is
+    what frees the cut."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d.note(0, 0.0)
+    assert d.note(1, 0.9) == 1
+    # No matter how many moderate moves board 0 plays, board 1's 0.9 never fades.
+    for _ in range(20):
+        assert d.note(0, 0.3) is None
+    assert d.focus == 1
+
+
+def test_focus_decay_default_is_a_gentle_per_ply_factor():
+    """The shipped default decays but stays well under 1 (a real recency window)."""
+    assert 0.5 < FOCUS_DECAY < 1.0
+    assert FocusDirector().decay == FOCUS_DECAY
+
+
+# Player bias (tasks 0258/0262): `--board auto:<player>` softly biases the cut toward a
+# named player's boards via an additive standing bonus, so a biased board wins ties/small
+# margins while a rival must out-drama it by margin+bias to steal the cut.
+
+
+def test_focus_bias_default_equals_the_margin():
+    """The shipped bias is the margin, so a favoured board steals on a mere tie."""
+    assert FOCUS_BIAS == FOCUS_MARGIN
+    assert FOCUS_BIAS_BONUS == FOCUS_MARGIN
+
+
+def test_parse_focus_bias_splits_auto_and_player():
+    """`auto` -> follow-all no bias; `auto:<player>` -> follow-all biased to that name;
+    anything else -> not auto (hard-filtered by the board selector instead)."""
+    assert parse_focus_bias("auto") == (True, None)
+    assert parse_focus_bias("AUTO") == (True, None)
+    assert parse_focus_bias("auto:Carlsen") == (True, "Carlsen")
+    assert parse_focus_bias("auto: Nakamura ") == (True, "Nakamura")
+    assert parse_focus_bias("auto:") == (True, None)  # empty bias degrades to plain auto
+    assert parse_focus_bias("Carlsen") == (False, None)
+    assert parse_focus_bias("3") == (False, None)
+    assert parse_focus_bias(None) == (False, None)
+
+
+def test_focus_director_bias_wins_a_tie():
+    """A biased rival steals the cut the moment it merely MATCHES the focus's drama —
+    unbiased an exact tie can never out-drama the focus by the margin."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={1: FOCUS_BIAS})
+    d.note(0, 0.5)  # adopt board 0 (unbiased)
+    # Board 1 ties board 0's 0.5 drama: standing 0.5 + bias(0.15) = 0.65 vs 0.5 -> cut.
+    assert d.note(1, 0.5) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_bias_wins_a_small_margin_unbiased_would_not_cut():
+    """A biased board with only a hair of lead (well under the margin) steals — the same
+    swing on an unbiased board leaves the focus put."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={1: FOCUS_BIAS})
+    d.note(0, 0.5)
+    assert d.note(1, 0.55) == 1  # 0.55 + 0.15 - 0.5 = 0.20 >= margin -> cut
+    # Contrast: no bias, the same 0.05 lead is under the margin, so no cut.
+    d2 = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d2.note(0, 0.5)
+    assert d2.note(1, 0.55) is None
+    assert d2.focus == 0
+
+
+def test_focus_director_bias_focus_held_until_rival_exceeds_margin_plus_bias():
+    """A biased FOCUS board holds the cut until a rival out-dramas it by margin+bias —
+    a bigger margin than the plain hysteresis, but still beatable (it's a bias, not a
+    pin). The boundary swing steals; one hair under it does not."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={0: FOCUS_BIAS})
+    d.note(0, 0.5)  # board 0 is biased AND focus; effective standing 0.5 + 0.15 = 0.65
+    # A rival needs to clear 0.65 by the margin -> reach 0.80 (= 0.5 + margin + bias).
+    assert d.note(1, 0.79) is None  # just under: 0.79 - 0.65 = 0.14 < margin
+    assert d.focus == 0
+    assert d.note(1, 0.80) == 1  # at the threshold: 0.80 - 0.65 = 0.15 -> steal
+    assert d.focus == 1
+
+
+def test_focus_director_set_bias_registers_and_zero_is_a_noop():
+    """`set_bias` records a per-board bonus; a zero bonus registers no preference."""
+    d = FocusDirector()
+    d.set_bias(2)  # defaults to FOCUS_BIAS
+    assert d.bias == {2: FOCUS_BIAS}
+    d.set_bias(3, 0.0)  # no-op
+    assert 3 not in d.bias
+
+
+# Caster pin (task 0259): a pin holds focus for N note() ticks regardless of rival
+# drama, then auto-resumes drama-following; it also clears the moment the pinned
+# board's game ends.
+
+
+def test_focus_director_pin_holds_through_bigger_rival_drama():
+    """While pinned, no rival can steal the cut no matter how dramatic it gets."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)  # adopt board 0
+    assert d.pin(0, 2) is None  # pin the already-focused board: no cut emitted
+    # Two huge swings on board 1 land inside the 2-ply pin window: both suppressed.
+    assert d.note(1, 0.99) is None
+    assert d.note(1, 0.99) is None
+    assert d.focus == 0
+
+
+def test_focus_director_pin_to_another_board_emits_a_cut():
+    """Pinning a board other than the current focus moves the cut and returns it."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.pin(1, 3) == 1  # caster cuts to board 1 and pins it
+    assert d.focus == 1
+    assert d.pinned == 1
+
+
+def test_focus_director_pin_expires_then_drama_following_resumes():
+    """After the pin window elapses, normal margin logic resumes immediately."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 1)  # hold board 0 for exactly one tick
+    assert d.note(1, 0.99) is None  # tick 1: suppressed by the pin
+    assert d.pin_remaining == 0 and d.pinned is None  # pin has lifted
+    # Next dramatic move on board 1 now steals focus under the usual margin rule.
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_pin_cleared_on_result_of_pinned_board():
+    """A result for the pinned board clears the pin so focus can auto-resume."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 5)  # long pin on board 0
+    d.result(0)  # board 0's game ends -> pin lifts even though plies remained
+    assert d.pinned is None and d.pin_remaining == 0
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1  # drama-following resumes at once
+
+
+def test_focus_director_result_for_other_board_keeps_the_pin():
+    """A result for a *different* board must not disturb an active pin."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 5)
+    d.result(1)  # some other board ended; our pin is untouched
+    assert d.pinned == 0 and d.pin_remaining == 5
+    assert d.note(1, 0.99) is None  # still suppressed by the pin
+
+
+# Director cue (task 0260): every cut sets a human-readable `last_reason` explaining
+# WHY focus moved, reusing the magnitudes already in `recent` so casters/captions can
+# voice the cut. Board labels are 1-based ("Bd3" == 0-based index 2).
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_director_cut_emits_a_reason_naming_board_and_magnitudes():
+    """A drama cut records a cue that names the new (1-based) board and BOTH compared
+    magnitudes — the erupting board's swing vs the board being left."""
+    # decay=1.0 keeps the standing scores exact so the cue's magnitudes are unambiguous;
+    # the cue always reports the *decayed* prev score (the same value the margin test uses).
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d.note(0, 0.4)  # adopt board 0 with a moderate standing score
+    assert d.last_reason is None  # silent adoption: no cut, no cue yet
+    assert d.note(2, 0.9) == 2  # board 2 (index 2 -> "Bd3") erupts and steals focus
+    reason = d.last_reason
+    assert reason is not None
+    assert "Bd3" in reason  # names the NEW board, 1-based
+    assert "+0.9" in reason  # the erupting board's magnitude
+    assert "+0.4" in reason  # the board being cut away from
+
+
+def test_focus_director_reason_unset_when_no_cut():
+    """Hysteresis blip below the margin leaves `last_reason` untouched (no cut fired)."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.note(1, FOCUS_MARGIN - 0.01) is None
+    assert d.last_reason is None
+
+
+def test_focus_director_pin_records_a_pin_reason():
+    """Pinning a different board sets a caster-pin cue naming the pinned (1-based) board."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.pin(2, 3) == 2
+    assert d.last_reason is not None and "Bd3" in d.last_reason
+    assert "pin" in d.last_reason.lower()
+
+
+def test_auto_follow_focus_event_carries_the_director_cue():
+    """The overlay `focus` event threads the cue so the cut reason can be voiced/subtitled
+    via the --captions-srt/vtt path."""
+    events = _auto_overlay_events_for(_two_board_round_with_drama())
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a dramatic board must trigger a focus cut"
+    reason = focuses[-1].get("reason")
+    assert isinstance(reason, str) and reason, "focus event must carry a reason string"
+    assert "Bd2" in reason  # cut to the dramatic board (0-based index 1 -> "Bd2")
+
+
+# More player-bias coverage (tasks 0258/0262), adapted to the dict-bias FocusDirector API.
+
+
+def test_focus_director_bias_yields_to_a_much_bigger_swing():
+    """The bias is a thumb on the scale, not a hard filter: a rival board with a swing
+    big enough to clear margin + bonus still steals focus off the favored board.
+    ``decay=1.0`` keeps the held score steady so the threshold is exactly margin+bonus."""
+    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=1.0)
+    d.note(0, 0.5)  # adopt + bias the focused board 0
+    # A sub-(margin+bonus) rival can't steal from the favored board...
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS - 0.01) is None
+    assert d.focus == 0
+    # ...but a swing clearing margin + bonus does.
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS + 0.01) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_bias_still_fades_when_the_favorite_goes_quiet():
+    """Bias is added on top of the DECAYED recency score, so a favored board that stops
+    playing still loses the cut to a steadily-active rival (recency + bias compose)."""
+    # Strong decay so the stale favorite erodes within a few ticks.
+    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=0.5)
+    d.note(0, 0.9)  # board 0 (the favorite) peaks, then goes silent
+    stole = None
+    for _ in range(6):
+        # Board 1 plays steady moderate drama; its score holds while board 0's decays.
+        stole = d.note(1, 0.5)
+        if stole is not None:
+            break
+    assert stole == 1, "even a biased board must yield once its drama decays away"
+    assert d.focus == 1
+
+
+def test_focus_director_bias_routes_by_player_in_overlay():
+    """End-to-end: `--board auto:Hero` biases the director toward Hero's board, so the
+    favorite still cuts in via the overlay bridge (board 1's White is 'Hero')."""
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor,
+            auto_follow=True,
+            bias_player="Hero",
+            interval=0.0,
+            sleep=lambda _: None,
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the biased dramatic board must still trigger a focus cut"
+    assert focuses[-1]["board"] == 1
+
+
+# A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
+# scholar's mate (a huge final-move swing the material baseline scores as drama). Tiny
+# illustrative fixture for the routing unit test only — NOT thesis evidence.
+def _two_board_round_with_drama():
+    drama = """[Event "Test Broadcast"]
+[Site "https://lichess.org/dramagame"]
+[White "Hero"]
+[Black "Victim"]
+[Round "1"]
+[WhiteElo "1500"]
+[BlackElo "1500"]
+[Result "1-0"]
+
+1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
+"""
+    return GAME_PGN + "\n" + drama
+
+
+def _auto_overlay_events_for(snapshot, bias_player=None):
+    """Drive a snapshot through the overlay bridge with `--board auto` on (optionally
+    softly biased toward ``bias_player``'s boards, task 0262)."""
+    feed = _OneShotFeed(snapshot)
+    ingestor = BroadcastIngestor(feed, _model())
+    return [
+        e
+        for e in overlay_events(
+            ingestor,
+            auto_follow=True,
+            bias_player=bias_player,
+            interval=0.0,
+            sleep=lambda _: None,
+        )
+        if isinstance(e, dict)
+    ]
+
+
+def test_auto_follow_emits_focus_cut_to_the_dramatic_board():
+    """`--board auto` emits a `focus` event cutting to the board with the biggest recent
+    swing (the scholar's-mate board), routed to its game_id."""
+    events = _auto_overlay_events_for(_two_board_round_with_drama())
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a dramatic board must trigger a focus cut"
+    last = focuses[-1]
+    assert last["board"] == 1, "focus should land on the dramatic board (index 1)"
+    assert last["game_id"] == "https://lichess.org/dramagame"
+
+
+def test_auto_follow_off_emits_no_focus_events():
+    """Without `--board auto` the bridge emits no focus events (the default follow-all)."""
+    events = _overlay_events_for(_two_board_round_with_drama())
+    assert not any(e.get("type") == "focus" for e in events)
+
+
+def test_auto_bias_registers_bias_for_the_named_players_board(monkeypatch):
+    """`--board auto:<player>` wires a standing bias onto exactly the board(s) featuring
+    that player — matched on either side's name-plate as the round is announced (task
+    0262); a non-matching name registers nothing."""
+    import chess_equity.broadcast as bx
+
+    calls = []
+    orig = bx.FocusDirector.set_bias
+
+    def spy(self, board, bonus=bx.FOCUS_BIAS):
+        calls.append(board)
+        return orig(self, board, bonus)
+
+    monkeypatch.setattr(bx.FocusDirector, "set_bias", spy)
+    # _two_board_round: board 0 = Carlsen/Nakamura, board 1 = Ding/Firouzja.
+    _auto_overlay_events_for(_two_board_round(), bias_player="ding")
+    assert calls == [1], "only board 1 features Ding"
+
+    calls.clear()
+    _auto_overlay_events_for(_two_board_round(), bias_player="nobody")
+    assert calls == [], "no board features 'nobody' -> no bias registered"
+
+
+def test_auto_bias_still_yields_to_a_big_rival_swing():
+    """The bias is soft, not a hard pin: biasing toward the QUIET board's player does not
+    keep the cut there — board 1's scholar's-mate swing is big enough to steal anyway."""
+    events = _auto_overlay_events_for(
+        _two_board_round_with_drama(), bias_player="Carlsen"  # the quiet board 0's player
+    )
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a big-enough rival swing must still cut away despite the bias"
+    assert focuses[-1]["board"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Caster pin INPUT channel (task 0261)
+# --------------------------------------------------------------------------- #
+
+
+def test_pin_channel_delivers_directives_fifo_then_empties():
+    """The channel is a FIFO mailbox: drain returns every queued directive in order
+    (a None board is an unpin) and leaves the channel empty."""
+    ch = PinChannel()
+    ch.submit(1, 3)
+    ch.submit(0, 5)
+    ch.submit(None)  # explicit unpin
+    assert ch.drain() == [(1, 3), (0, 5), (None, 0)]
+    assert ch.drain() == []  # draining empties it
+
+
+def test_overlay_events_applies_a_channel_pin_suppressing_the_auto_cut():
+    """A pin delivered out-of-band on the channel reaches the live director: it cuts to
+    the pinned (quiet) board and holds it, so the dramatic board never steals focus —
+    the auto-cut that `test_auto_follow_emits_focus_cut_to_the_dramatic_board` proves."""
+    ch = PinChannel()
+    ch.submit(0, 50)  # caster pins the quiet board before the scholar's-mate fires
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor, auto_follow=True, pin_channel=ch, interval=0.0, sleep=lambda _: None
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the channel pin must emit a focus cut to the pinned board"
+    assert all(f["board"] == 0 for f in focuses), "the pin holds board 0; drama can't steal it"
+    assert focuses[0]["game_id"] == "https://lichess.org/abcd1234"
+
+
+def test_overlay_events_ignores_a_channel_when_auto_follow_is_off():
+    """No director without `--board auto`, so channel pins are inert (no focus events)."""
+    ch = PinChannel()
+    ch.submit(1, 5)
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor, auto_follow=False, pin_channel=ch, interval=0.0, sleep=lambda _: None
+        )
+        if isinstance(e, dict)
+    ]
+    assert not any(e.get("type") == "focus" for e in events)
+
+
+def test_sse_server_accepts_a_pin_post_onto_the_channel():
+    """`POST /pin {board, plies}` queues the directive on the shared channel (HTTP input
+    side of the caster pin), returning 204."""
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    ch = PinChannel()
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        pin_channel=ch,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin",
+            data=b'{"board": 1, "plies": 4}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        assert resp.status == 204
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ch.drain() == [(1, 4)]
+
+
+def test_sse_server_pin_post_rejects_bad_json():
+    """A malformed pin body is a 400, not a crash or a silent drop."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    ch = PinChannel()
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        pin_channel=ch,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin", data=b"not json", method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ch.drain() == []  # nothing queued from a rejected body
+
+
+def test_sse_server_404s_pin_post_when_no_channel():
+    """Without a pin channel the server has no input side: `POST /pin` is a 404."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pin", data=b"{}", method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# GET /focus status readback — caster OUTPUT side of the pin conduit (task 0265)
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_status_holds_the_live_cut_or_none_until_set():
+    """The thread-safe holder is empty until the first board is live, then snapshots
+    the live cut as ``{board, label, reason}``."""
+    from chess_equity.broadcast import FocusStatus
+
+    fs = FocusStatus()
+    assert fs.get() is None
+    fs.set(2, "Bd3", "cut to Bd3: +0.9 swing vs +0.4")
+    assert fs.get() == {
+        "board": 2,
+        "label": "Bd3",
+        "reason": "cut to Bd3: +0.9 swing vs +0.4",
+    }
+    # A later cut overwrites; reason may be None (silent first-board adoption).
+    fs.set(0, "Bd1", None)
+    assert fs.get() == {"board": 0, "label": "Bd1", "reason": None}
+
+
+def test_sse_server_serves_get_focus_status_json():
+    """`GET /focus` returns the live director state as JSON when a status channel is
+    wired (the caster control-surface readback, task 0265)."""
+    import json as _json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import FocusStatus, make_sse_server, overlay_events
+
+    fs = FocusStatus()
+    fs.set(1, "Bd2", "cut to Bd2: +0.7 swing vs +0.2")
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        focus_status=fs,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "application/json"
+        body = _json.loads(resp.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert body == {"board": 1, "label": "Bd2", "reason": "cut to Bd2: +0.7 swing vs +0.2"}
+
+
+def test_sse_server_get_focus_reports_no_live_board_before_first_cut():
+    """Before any board is live, `GET /focus` is still valid JSON with null fields
+    (so a caster UI renders "no board yet" rather than erroring)."""
+    import json as _json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import FocusStatus, make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        focus_status=FocusStatus(),
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        body = _json.loads(resp.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert body == {"board": None, "label": None, "reason": None}
+
+
+def test_sse_server_404s_get_focus_when_no_status_channel():
+    """Without a focus-status channel the server has no readback side: `GET /focus`
+    is a 404 (mirrors the pinless `POST /pin` 404)."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_overlay_events_publishes_the_live_cut_to_focus_status():
+    """End-to-end: a multi-board stream's `focus` cuts are mirrored onto the shared
+    FocusStatus, so `GET /focus` reflects the director without reaching into it. The
+    drama board steals the cut, so the status ends on it with the cut reason."""
+    from chess_equity.broadcast import FocusStatus
+
+    fs = FocusStatus()
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor,
+            auto_follow=True,
+            focus_status=fs,
+            interval=0.0,
+            sleep=lambda _: None,
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the drama board must steal the cut"
+    snap = fs.get()
+    assert snap is not None
+    # Status mirrors the last emitted focus cut: same board, caster label, and reason.
+    last = focuses[-1]
+    assert snap["board"] == last["board"]
+    assert snap["label"] == f"Bd{last['board'] + 1}"
+    assert snap["reason"] == last.get("reason")
+
+
+# --------------------------------------------------------------------------- #
+# Game-over signal -> overlay auto-advance off a finished board (task 0189), more cases
+# --------------------------------------------------------------------------- #
+
+
+def _round_board0_finished():
+    """A two-board round where board 0 (Carlsen) has a terminal Result and board 1
+    (Ding) is still ongoing — so the bridge should emit a result event for board 0."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]').rstrip().rstrip("*").rstrip() + " 1-0\n"
+    ongoing = GAME_PGN.replace("Carlsen", "Ding").replace("Nakamura", "Firouzja").replace(
+        'Site "https://lichess.org/abcd1234"', 'Site "https://lichess.org/wxyz9999"'
+    )
+    return finished + "\n" + ongoing
+
+
+def test_overlay_bridge_emits_result_event_for_a_finished_board():
+    """When a multi-board game reaches a terminal PGN Result, the bridge emits a
+    `{type:"result", board, result}` event so the overlay can advance focus off it."""
+    events = _overlay_events_for(_round_board0_finished())
+    results = [e for e in events if e.get("type") == "result"]
+    assert results, "a finished board must emit a result event"
+    assert results[0]["board"] == 0, "the result names the finished board's index"
+    assert results[0]["result"] == "1-0"
+    # The still-ongoing board emits no result event.
+    assert {r["board"] for r in results} == {0}
+
+
+def test_overlay_bridge_emits_result_event_once_per_finished_game():
+    """A finished game's result fires once, not on every subsequent poll."""
+    # Poll the same finished snapshot twice; the result event must not repeat.
+    feed = _ScriptedFeed([_round_board0_finished(), _round_board0_finished(), None])
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(ingestor, interval=0.0, sleep=lambda _: None)
+        if isinstance(e, dict)
+    ]
+    results = [e for e in events if e.get("type") == "result"]
+    assert len(results) == 1, "the result event fires exactly once for the finished game"
+
+
+def test_single_game_feed_emits_no_result_event():
+    """Single-game feeds are unchanged: no board index, so no result event even when
+    the game has a terminal Result."""
+    finished = GAME_PGN.replace('[Result "*"]', '[Result "1-0"]').rstrip().rstrip("*").rstrip() + " 1-0\n"
+    events = _overlay_events_for(finished)
+    assert not any(e.get("type") == "result" for e in events), "single game emits no result event"
 
 
 # --------------------------------------------------------------------------- #
@@ -706,8 +1724,9 @@ def test_clock_aware_delta_differs_from_blind_on_low_clock():
 # Scramble drama reachable on a low-clock broadcast replay (task 0108)
 # --------------------------------------------------------------------------- #
 
-# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6 <
-# SLIP_DELTA=12), so to land in that band reliably we drive a stub model with a
+# A scramble is a *modest* positional swing gated by the clock (SCRAMBLE_DELTA=6.5 <
+# CLUTCH_DELTA=10, calibrated in task 0170), so to land in that band reliably we drive a
+# stub model with a
 # controlled ~7pt swing rather than a real engine (which on these toy positions only
 # returns 0 or a large swing that escalates to clutch/escape). The point under test is
 # the wiring: clocks now ride on every MoveEvent (0097), so the clock-gated scramble
@@ -767,3 +1786,69 @@ def test_clock_aware_grade_degrades_to_raw_when_blind():
         " { [%clk 0:00:04] }", ""
     ).replace(" { [%clk 0:00:03] }", "")
     assert _last_delta(no_clk, clock_aware=True) == last.delta_equity
+
+
+# Post-round director-cut recap markdown (task 0265)
+# ---------------------------------------------------------------------------
+def _pos(ply):
+    """A minimal overlay `position` event carrying just the ply the recap needs."""
+    return {"type": "position", "ply": ply, "move": {"san": "e4"}}
+
+
+def test_focus_recap_md_tabulates_cuts_with_next_move_ply():
+    """A recap row per `focus` event: # / ply (the move it precedes) / board / reason."""
+    events = [
+        _pos(1),  # board 0 adopted silently — no focus event before it
+        _pos(2),
+        {"type": "focus", "board": 2, "game_id": "g3", "reason": "cut to Bd3: +0.9 swing vs +0.4"},
+        _pos(3),  # the dramatic move the cut precedes -> ply 3
+        _pos(4),
+        {"type": "focus", "board": 0, "game_id": "g1", "reason": "cut to Bd1: +1.2 swing vs +0.3"},
+        _pos(5),
+    ]
+    md = focus_recap_md(events)
+    lines = md.splitlines()
+    assert lines[0] == "| # | Ply | Board | Reason |"
+    assert lines[1] == "| --- | --- | --- | --- |"
+    assert lines[2] == "| 1 | 3 | Bd3 | cut to Bd3: +0.9 swing vs +0.4 |"
+    assert lines[3] == "| 2 | 5 | Bd1 | cut to Bd1: +1.2 swing vs +0.3 |"
+    assert md.endswith("\n")
+    assert len(lines) == 4  # header + separator + two cuts
+
+
+def test_focus_recap_md_empty_stream_is_header_only():
+    """No events (or no cuts) -> a paste-able header-only table, never a crash."""
+    assert focus_recap_md([]) == (
+        "| # | Ply | Board | Reason |\n| --- | --- | --- | --- |\n"
+    )
+    # A stream of positions with no focus events is still header-only.
+    assert focus_recap_md([_pos(1), _pos(2)]).splitlines() == [
+        "| # | Ply | Board | Reason |",
+        "| --- | --- | --- | --- |",
+    ]
+
+
+def test_focus_recap_md_pin_without_following_move_falls_back_to_last_ply():
+    """A caster pin landing on an idle tick (no later position) reuses the last ply seen,
+    and its `caster pin` reason rides through verbatim."""
+    events = [
+        _pos(7),
+        {"type": "focus", "board": 1, "game_id": "g2", "reason": "caster pin: hold Bd2"},
+    ]
+    rows = focus_recap_md(events).splitlines()[2:]
+    assert rows == ["| 1 | 7 | Bd2 | caster pin: hold Bd2 |"]
+
+
+def test_focus_recap_md_escapes_pipes_and_tolerates_missing_fields():
+    """A `|` in a reason is escaped so it can't break the table; heartbeats/None reason
+    are tolerated (sentinel non-dicts skipped, missing reason -> empty cell)."""
+    events = [
+        "HEARTBEAT",  # sentinel non-dict event from an idle poll
+        {"type": "focus", "board": 0, "reason": "cut to Bd1: a|b"},
+        _pos(4),
+        {"type": "focus", "board": 1},  # no reason field
+        _pos(5),
+    ]
+    rows = focus_recap_md(events).splitlines()[2:]
+    assert rows[0] == "| 1 | 4 | Bd1 | cut to Bd1: a\\|b |"
+    assert rows[1] == "| 2 | 5 | Bd2 |  |"

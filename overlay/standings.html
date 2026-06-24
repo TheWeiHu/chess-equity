@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chess-equity — standings lower third</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<!--
+  OBS lower-third STANDINGS graphic (task 0231).
+
+  A transparent browser source that renders a top-N accuracy leaderboard for a
+  streamed round, fed by the `grade --round --json` export. Drop the URL into
+  OBS → Sources → Browser at 1920x1080; only the lower-third panel composites
+  over your stream (the page background is transparent).
+
+  Generate the feed it reads:
+    chess-equity grade --round --pgn <round.pgn> --json > overlay/leaderboard.json
+  then point the source at ?src=./leaderboard.json. With no ?src it replays the
+  committed illustrative ./mock-leaderboard.json.
+
+  Query params (all optional):
+    ?src=URL    leaderboard JSON — a bare export array, or {leaderboard:[…]} like
+                the mock fixture. Default ./mock-leaderboard.json.
+    ?top=N      how many players to show (default 5, clamped 1..20).
+    ?title=…    panel title (default "STANDINGS").
+    ?theme=dark|light   label theme (default dark).
+-->
+<body class="theme-dark">
+  <!-- Lower third: anchored bottom-left of the 1080p canvas; standings.js paints
+       the title, header, and top-N rows from the leaderboard JSON. -->
+  <div class="standings" data-standings aria-live="polite" aria-label="round standings">
+    <div class="st-title">STANDINGS</div>
+    <div class="st-empty">loading…</div>
+  </div>
+
+  <script src="standings.js"></script>
+</body>
+</html>

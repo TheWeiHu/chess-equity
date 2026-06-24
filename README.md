@@ -72,6 +72,35 @@ programmatically. `--min-n` (default 2000) refuses to call a tiny-n win "proof."
 Full method, the gate's exact meaning, and a no-download sample run are in
 [Data & validation](#data--validation) below.
 
+### How much does the equity bar disagree with Stockfish?
+
+The gate above asks which bar *predicts* better. A separate question is how far the
+rating/clock-aware **equity bar** (`wdl-a`) visibly *departs* from the rating-blind
+**Stockfish bar** (`baseline`, Lichess Win% of `cp_eval`) on the **same** positions —
+product-visible *disagreement*, with no outcomes read. On the same real Lichess dump
+(`2013-01`, n=12,000) the two bars are routinely far apart:
+
+| metric | value |
+|---|--:|
+| mean \|gap\| | **15.4pp** |
+| p90 \|gap\| | **31.2pp** |
+| signed gap (equity − Stockfish) | +2.5pp |
+| rank-disagree (both bars clear ±5pp of 50%) | **8.7%** (n=7,329) |
+
+The disagreement is largest in fast time controls, where rating most changes the practical
+odds, and smallest in classical:
+
+| time control | n | mean \|gap\| (pp) | p90 \|gap\| (pp) | rank-disagree |
+|---|--:|--:|--:|--:|
+| bullet | 4,851 | 16.3 | 33.9 | 9.2% |
+| rapid | 2,731 | 15.2 | 32.4 | 12.8% |
+| blitz | 4,266 | 14.6 | 28.9 | 5.6% |
+| classical | 77 | 8.9 | 15.1 | 1.7% |
+
+This is *disagreement*, not accuracy — it shows the equity bar is a genuinely different
+signal, not that it's right (for that, see the gate above). Full method and the
+by-rating-band breakdown are in **[reports/divergence_real.md](reports/divergence_real.md)**.
+
 ## Install
 
 ```bash
@@ -142,6 +171,70 @@ rating-peers were expected to play, so a strong move can read **positive** (the 
 centipawn-loss grade is capped at 0). `broadcast` emits one JSON event per move for live
 feeds and the OBS overlay (`overlay/`) — point it at a live Lichess broadcast round and
 into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs).
+
+## Live broadcast workflow
+
+The streaming wedge ties the pieces above into one chain a caster can drive: take a live
+(or replayed) feed, rank the players, narrate every move, and paint the equity bar in OBS.
+Each command below is copy-paste runnable against `data/sample/` (swap in
+`--round <lichess-broadcast-round-id>` or `--url <pgn-url>` for a real feed).
+
+**Try it in one command (clone → live bar).** From a fresh checkout, this replays the
+bundled sample game into the transparent `overlay/` browser source and prints the URL to
+open in a browser or add to OBS — no extras, no torch, no network:
+
+```bash
+scripts/live_demo.sh                 # serve the live overlay, print the URL
+scripts/live_demo.sh --check         # offline smoke: assert a non-empty event stream
+```
+
+This chains a bundled `data/sample/` PGN through `broadcast --serve-sse`, serving the
+transparent `overlay/` browser-source plus its live `/sse` feed on one port — a moving
+equity bar with nothing else to set up. The bundled PGNs are illustrative fixtures, not
+validation evidence. The numbered steps below break the same chain into its parts.
+
+**1 — Pick a feed.** `broadcast` reads a live Lichess broadcast round (`--round`), any
+public PGN URL (`--url`), or a local PGN replayed move-by-move as if live (`--pgn`):
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --interval 0   # per-move JSON events
+```
+
+**2 — Rank the table with `grade --round`.** Pool a multi-game broadcast PGN into one
+accuracy leaderboard (columns: `acc% / moves / blun / mist / meanΔ / worst`). Pick the
+primary key with `--sort {accuracy,lead,blunders}`; emit `--json` or `--csv` for an overlay:
+
+```bash
+uv run chess-equity grade --pgn data/sample/round_games.pgn --round --sort accuracy
+```
+
+```
+ #  player          acc%  moves  blun  mist   meanΔ  worst
+---------------------------------------------------------------------
+ 1  alice          100.0      8     0     0   +16.5  e4 +3.0
+ 2  carol          100.0      4     0     0    +5.8  d4 +3.2
+ 3  bob             66.7      3     0     0    +0.6  Nf6 -8.8
+```
+
+**3 — Generate caster captions.** `--captions` prints one caster sentence per graded move;
+`--captions-vtt`/`--captions-srt` write a timestamped subtitle track (cue times come from
+the PGN's `[%clk]` tags, falling back to even spacing) you can drop onto a VOD:
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --captions
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --captions-vtt cast.vtt
+```
+
+**4 — Drive the OBS overlay.** Stream the same per-move events as Server-Sent-Events and
+point the transparent `overlay/` browser-source at the port:
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --serve-sse 8788
+```
+
+Then add the overlay as an OBS browser-source — see the
+[streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs)
+for the live-round wiring and `overlay/config.html` to build the source URL.
 
 ## Web demo
 

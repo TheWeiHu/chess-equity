@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from chess_equity.adapters import EquityModel
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import PositionRow
+from chess_equity.validate.failure_modes import failure_mode
 from chess_equity.types import lichess_win_percent
 from chess_equity.validate.bootstrap import (
     METRIC_TERMS,
@@ -158,9 +159,20 @@ def _build_maia_search() -> EquityModel:
     return build_maia_search()
 
 
+def _build_wdl_net() -> EquityModel:
+    # Approach D (task 0013): the end-to-end board → rating-conditioned WDL net,
+    # scored as a board predictor so the 0009 gate can ask the task's real question —
+    # does predicting WDL straight from the board beat regression-on-Stockfish-eval
+    # (``wdl-a``)? Loads the committed artifact; torch stays unimported until scored.
+    from chess_equity.wdl_net import build_wdl_net_equity
+
+    return build_wdl_net_equity()
+
+
 BOARD_MODELS: Dict[str, Callable[[], EquityModel]] = {
     "maia2": _build_maia2,
     "maia-search": _build_maia_search,
+    "wdl-net": _build_wdl_net,
 }
 
 
@@ -255,6 +267,9 @@ SLICERS: Dict[str, Callable[[PositionRow], str]] = {
     "phase": lambda row: row.phase,
     "clock": clock_band,
     "rating_gap": rating_gap_band,
+    # The most direct read on the thesis: score ON the two named failure modes (task 0111),
+    # tagged from baseline/failure_modes.json. See validate/failure_modes.py.
+    "failure_mode": failure_mode,
 }
 
 
@@ -561,14 +576,35 @@ BASELINE_NAME = "baseline"
 HEADLINE_METRIC = "log_loss"
 
 
-# Below this held-out n the gate refuses to call a PASS — it reads INCONCLUSIVE instead
-# (task 0132). With only a handful of rows a lucky point win and a barely-non-straddling
-# bootstrap CI can read green by chance, overstating the thesis; the committed 15-row
-# `validation_sample.md` is far under this floor, while the real proof run is n=8000. Set
-# at the n>=2000 size the synthetic PASS fixture (task 0131) is built to clear, so an
-# honest PASS needs a sample with the statistical power to back it. Pass ``min_n=0`` to
-# :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+# --- the two sample-size floors (single-sourced here, task 0196) ---------------------
+#
+# The gate trusts a number only when it rests on enough rows, and there are *two* distinct
+# "too few rows" floors because power is needed at two different granularities. They live
+# together here so the rationale for each — and why one is larger than the other — is in
+# one place rather than as two unexplained magic numbers 400 lines apart.
+#
+# 1. ``MIN_GATE_N`` — the *gate-level* floor. The headline PASS/FAIL verdict is computed on
+#    the WHOLE held-out sample, so this is the floor on that aggregate. With only a handful
+#    of rows a lucky point win and a barely-non-straddling bootstrap CI can read green by
+#    chance, overstating the thesis; below this the gate reads INCONCLUSIVE rather than PASS
+#    (task 0132). The committed 15-row ``validation_sample.md`` is far under it, the real
+#    proof run is n>=8000. Set at the n>=2000 size the synthetic PASS fixture (task 0131) is
+#    built to clear, so an honest PASS needs the statistical power to back it. Pass
+#    ``min_n=0`` to :func:`gate_verdicts` (``--min-n 0`` on the CLI) to disable the guard.
+#
+# 2. ``H2H_UNDERPOWERED_N`` — the *per-band* floor. A single rating / clock / phase band
+#    splits the sample into a small slice, so a per-band beats/loses claim needs its OWN
+#    floor. It is deliberately LOWER than ``MIN_GATE_N`` (1000 vs 2000): a single band only
+#    has to support a directional "equity wins / loses here" read, not the headline PASS,
+#    and holding bands to the full gate floor would silence almost every slice on a typical
+#    dump. But it is not tiny — on the real n=12k run the high-rating ``2000-2399`` band held
+#    only **n=415** and read as a wdl-a *loss* purely from small-n (its 95% CI straddles
+#    zero), a spurious thesis regression; 1000 is the floor below which exactly that kind of
+#    band is excluded from any per-band win/loss count. (A *third*, much smaller floor,
+#    ``H2H_SLICE_MIN_N=30`` near :func:`head_to_head_slice_cis`, is only the minimum for
+#    computing a per-slice bootstrap CI at all — orthogonal to these two power floors.)
 MIN_GATE_N = 2000
+H2H_UNDERPOWERED_N = 1000
 
 
 @dataclass(frozen=True)
@@ -816,6 +852,7 @@ def format_report(
     *,
     title: str = "Validation report",
     comparisons: Optional[Sequence[BaselineComparison]] = None,
+    head_to_head_cis: Optional["HeadToHeadCI"] = None,
 ) -> str:
     """Render reports as a Markdown document (lower log-loss / Brier / ECE is better).
 
@@ -824,6 +861,10 @@ def format_report(
     When ``comparisons`` (paired-bootstrap delta CIs) are supplied, the gate verdict is
     significance-aware (task 0069): PASS requires the headline-metric CI to clear zero, and
     each verdict line shows that CI inline. Omit them for the point-only gate.
+
+    ``head_to_head_cis`` (per-slice CIs from :func:`head_to_head_slice_cis`) feeds the
+    worst-slice line a clears-zero / straddles-zero caveat (task 0161); omit it for the
+    point-only worst-slice read.
     """
     out: List[str] = [f"# {title}", ""]
     out.append("Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.")
@@ -853,7 +894,7 @@ def format_report(
     h2h = head_to_head_deltas(reports)
     if h2h is not None:
         out.append("")
-        out.append(format_head_to_head(h2h))
+        out.append(format_head_to_head(h2h, cis=head_to_head_cis))
     out.append("")
     return "\n".join(out)
 
@@ -943,7 +984,63 @@ def head_to_head_deltas(
     )
 
 
-def worst_slice_verdict(h2h: HeadToHead) -> str:
+# Per-band sample floor for a head-to-head beats/loses claim (task 0146). Defined and
+# fully documented above alongside ``MIN_GATE_N`` (the two sample-size floors are
+# single-sourced there, task 0196): a band below this floor is marked ``underpowered
+# (n=…)`` and excluded from any per-band beats/loses claim (the win count and the
+# worst-slice verdict). Pass ``underpowered_n=0`` to disable.
+
+
+def _worst_slice_ci_caveat(
+    worst: SliceDelta, cis: Optional["HeadToHeadCI"]
+) -> str:
+    """A clause stating whether the worst slice's Δ CI clears or straddles zero (task 0161).
+
+    The worst-slice line above reads a *point* Δ that may favour the baseline, but a point
+    delta on a small band can't tell "equity is broken at this level" from "too few games to
+    say". This looks up that slice's paired-bootstrap CI (the per-slice CIs from task 0068,
+    same head-to-head convention: Δ = baseline − model, Δ > 0 = equity wins) and returns a
+    one-clause caveat: the CI **clears zero** below (``hi < 0``) → a real, significant
+    regression; the CI **straddles zero** → small-n noise, not a proven regression. Returns
+    ``""`` when no matching CI is available (no ``cis``, no match, or the band was too small
+    for a CI), so the caller falls back to the bare point read.
+    """
+    if cis is None:
+        return ""
+    match = next(
+        (
+            d
+            for d in cis.slices
+            if d.slicer == worst.slicer and d.value == worst.value and d.lo is not None
+        ),
+        None,
+    )
+    if match is None or match.lo is None or match.hi is None:
+        return ""
+    conf = round(cis.confidence * 100)
+    ci = f"[{match.lo:+.4f}, {match.hi:+.4f}]"
+    if match.hi < 0:  # whole CI below zero in baseline−model terms: baseline really wins
+        return (
+            f" — but note the {conf}% CI on that Δ is {ci}, which clears zero, so the "
+            f"baseline win here is real and not small-n noise"
+        )
+    if match.lo > 0:  # whole CI above zero: equity actually wins significantly here
+        return (
+            f" — though the {conf}% CI on that Δ is {ci}, which clears zero the other way: "
+            f"equity in fact wins this band significantly"
+        )
+    return (
+        f" — but the {conf}% CI on that Δ is {ci}, which straddles zero, so at n={match.n} "
+        f"this is small-n noise, not a proven regression at this level"
+    )
+
+
+def worst_slice_verdict(
+    h2h: HeadToHead,
+    *,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+    cis: Optional["HeadToHeadCI"] = None,
+) -> str:
     """A one-line read on the head-to-head's *worst* slice (task 0121).
 
     The head-to-head table is sorted equity-wins-first, so the single worst slice — the
@@ -952,24 +1049,60 @@ def worst_slice_verdict(h2h: HeadToHead) -> str:
     the rating-conditioned model actually LOSES to the baseline? This states the win/total
     slice count and names that worst slice (``baseline log-loss − model log-loss``; Δ < 0
     means the baseline is better there). Returns ``""`` when there are no comparable slices.
+
+    Bands with fewer than ``underpowered_n`` rows are *excluded* from the win/total count
+    and from the worst-slice pick (task 0146): a single small band's loss is small-n noise,
+    not a real regression, so it must not read as "the baseline wins here". The count of
+    excluded bands is reported. Pass ``underpowered_n=0`` to disable the floor.
+
+    When ``cis`` (the per-slice paired-bootstrap CIs from :func:`head_to_head_slice_cis`,
+    task 0068) is supplied, the named worst slice gets a CI caveat appended (task 0161):
+    whether the Δ CI clears zero (a real regression) or straddles it (small-n, inconclusive)
+    — so a reader can tell "equity is broken at master level" from "too few games to say".
     """
     if not h2h.slices:
         return ""
-    wins = sum(1 for d in h2h.slices if d.delta > 0)
-    total = len(h2h.slices)
-    worst = h2h.slices[-1]  # smallest Δ — most baseline-favouring
-    where = (
-        "the baseline wins here" if worst.delta < 0 else "equity still wins every slice"
-    )
-    return (
-        f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
-        f"Δ={worst.delta:+.4f} — {where}. "
-        f"Equity wins on {wins}/{total} slices."
-    )
+    powered = [d for d in h2h.slices if d.n >= underpowered_n]
+    weak = [d for d in h2h.slices if d.n < underpowered_n]
+    wins = sum(1 for d in powered if d.delta > 0)
+    total = len(powered)
+    if powered:
+        worst = powered[-1]  # smallest Δ among adequately-powered slices (sorted desc)
+        where = (
+            "the baseline wins here"
+            if worst.delta < 0
+            else "equity still wins every slice"
+        )
+        caveat = _worst_slice_ci_caveat(worst, cis) if worst.delta < 0 else ""
+        head = (
+            f"**Worst slice:** `{worst.slicer}` `{worst.value}` (n={worst.n}) "
+            f"Δ={worst.delta:+.4f} — {where}{caveat}. "
+        )
+    else:
+        head = "**Worst slice:** no adequately-powered band to judge. "
+    label = "slices" if not weak else "adequately-powered slices"
+    line = f"{head}Equity wins on {wins}/{total} {label}."
+    if weak:
+        line += f" {len(weak)} band(s) below n={underpowered_n} excluded as underpowered."
+    return line
 
 
-def format_head_to_head(h2h: HeadToHead) -> str:
-    """Render the head-to-head deltas as a compact Markdown table (equity-wins first)."""
+def format_head_to_head(
+    h2h: HeadToHead,
+    *,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+    cis: Optional["HeadToHeadCI"] = None,
+) -> str:
+    """Render the head-to-head deltas as a compact Markdown table (equity-wins first).
+
+    Bands below ``underpowered_n`` rows are tagged ``(underpowered)`` in the Δ table and
+    excluded from the worst-slice beats/loses verdict (task 0146) — their per-band Δ is
+    small-n noise, not a thesis win or loss. Pass ``underpowered_n=0`` to disable.
+
+    When ``cis`` (the per-slice CIs from :func:`head_to_head_slice_cis`) is supplied, the
+    worst-slice line gets a CI caveat — clears zero (real regression) vs straddles it
+    (small-n, inconclusive) — so the headline read on the losing slice is honest (task 0161).
+    """
     out: List[str] = []
     out.append(f"## Head-to-head: where equity wins ({h2h.baseline} vs {h2h.model})")
     out.append("")
@@ -978,16 +1111,24 @@ def format_head_to_head(h2h: HeadToHead) -> str:
         "**Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first."
     )
     out.append(f"Overall Δ: {h2h.overall_delta:+.4f}")
-    verdict = worst_slice_verdict(h2h)
+    if underpowered_n > 0:
+        out.append(
+            f"Bands with fewer than n={underpowered_n} rows are tagged `(underpowered)` "
+            "and excluded from the worst-slice beats/loses claim — a single band that small "
+            "can flip its own win or loss on a handful of games, so its per-band Δ is "
+            "small-n noise, not the thesis."
+        )
+    verdict = worst_slice_verdict(h2h, underpowered_n=underpowered_n, cis=cis)
     if verdict:
         out.append(verdict)
     out.append("")
     out.append("| slice | value | n | baseline log-loss | model log-loss | Δ |")
     out.append("|---|---|--:|--:|--:|--:|")
     for d in h2h.slices:
+        weak = " (underpowered)" if underpowered_n > 0 and d.n < underpowered_n else ""
         out.append(
             f"| {d.slicer} | {d.value} | {d.n} | "
-            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f} |"
+            f"{d.baseline_log_loss:.4f} | {d.model_log_loss:.4f} | {d.delta:+.4f}{weak} |"
         )
     return "\n".join(out)
 
@@ -1015,12 +1156,13 @@ class SliceDeltaCI:
 
     ``delta`` keeps the head-to-head sign convention — ``baseline`` metric minus ``model``
     metric on that slice's rows, so **Δ > 0 means equity wins**. ``lo``/``hi`` are the
-    confidence bounds on that delta; they are ``None`` for a below-floor slice (fewer than
-    the floor's rows), where no CI is computed and the verdict is forced to
-    ``inconclusive`` so a tiny slice can never read as significant. ``verdict`` is one of
+    confidence bounds on that delta; they are ``None`` for a below-``min_n`` slice (fewer
+    than the small-n floor's rows), where no CI is computed. ``verdict`` is one of
     ``equity`` (whole CI above zero — a significant equity win), ``baseline`` (whole CI
-    below zero — baseline significantly better), or ``inconclusive`` (CI straddles zero,
-    or the slice was below the small-n floor — then ``lo``/``hi`` is ``None``).
+    below zero — baseline significantly better), ``inconclusive`` (CI straddles zero),
+    or ``underpowered`` (the band has fewer than the underpowered floor's rows, task 0146 —
+    a CI may still be shown but the band is excluded from any per-band beats/loses claim;
+    a below-``min_n`` band is also underpowered and additionally has ``lo``/``hi`` ``None``).
     """
 
     slicer: str
@@ -1040,6 +1182,7 @@ class HeadToHeadCI:
     model: str
     metric: str
     min_n: int
+    underpowered_n: int  # bands below this read `underpowered`, never a per-band win/loss
     confidence: float
     n_resamples: int
     slices: List[SliceDeltaCI]  # every comparable (slicer, value), sorted by delta desc
@@ -1053,6 +1196,7 @@ def head_to_head_slice_cis(
     metric: str = "log_loss",
     slicers: Dict[str, Callable[[PositionRow], str]] = SLICERS,
     min_n: int = H2H_SLICE_MIN_N,
+    underpowered_n: int = H2H_UNDERPOWERED_N,
     n_resamples: int = 2000,
     confidence: float = 0.95,
     seed: int = 0,
@@ -1104,10 +1248,17 @@ def head_to_head_slice_cis(
             # baseline − model, in the head-to-head sign convention (Δ > 0 = equity wins).
             point = sum(base_terms[i] - model_terms[i] for i in idxs) / n
             if n < min_n:
-                # Below the floor a resampled CI is untrustworthy; report the point delta
-                # but force `inconclusive` (no CI) so a tiny slice can't read significant.
+                # Below the small-n floor a resampled CI is untrustworthy; report the point
+                # delta but force no CI so a tiny slice can't read significant. Such a band
+                # is also below the underpowered floor, so it reads `underpowered` (task
+                # 0146); only with the floor disabled does it fall back to `inconclusive`.
+                verdict = (
+                    "underpowered"
+                    if underpowered_n > 0 and n < underpowered_n
+                    else "inconclusive"
+                )
                 slice_cis.append(
-                    SliceDeltaCI(slicer_name, value, n, point, None, None, "inconclusive")
+                    SliceDeltaCI(slicer_name, value, n, point, None, None, verdict)
                 )
                 offset += 1
                 continue
@@ -1129,6 +1280,11 @@ def head_to_head_slice_cis(
                 verdict = "baseline"
             else:
                 verdict = "inconclusive"
+            # A band below the underpowered floor can never read as a per-band win or loss,
+            # however its CI lands — too few rows to trust (task 0146). Keep the CI bounds
+            # (informative) but override the verdict to `underpowered`.
+            if underpowered_n > 0 and n < underpowered_n:
+                verdict = "underpowered"
             slice_cis.append(SliceDeltaCI(slicer_name, value, n, point, lo, hi, verdict))
 
     slice_cis.sort(key=lambda d: d.delta, reverse=True)
@@ -1137,6 +1293,7 @@ def head_to_head_slice_cis(
         model=best,
         metric=metric,
         min_n=min_n,
+        underpowered_n=underpowered_n,
         confidence=confidence,
         n_resamples=n_resamples,
         slices=slice_cis,
@@ -1152,19 +1309,175 @@ def format_head_to_head_cis(h2h: HeadToHeadCI) -> str:
         f"## Head-to-head significance: per-slice CIs ({h2h.baseline} vs {h2h.model})"
     )
     out.append("")
+    floor_note = (
+        f" A band with fewer than n={h2h.underpowered_n} rows reads `underpowered` and is "
+        "excluded from any per-band beats/loses claim — its own win or loss is small-n "
+        "noise, not the thesis (e.g. a 2000-2399 band at n=415 can flip on a handful of "
+        "games)."
+        if h2h.underpowered_n > 0
+        else ""
+    )
     out.append(
         f"Paired bootstrap ({h2h.n_resamples} resamples) on the per-row {metric_label} "
         f"delta *within each slice*. Δ = `{h2h.baseline}` − `{h2h.model}` "
         f"(**Δ > 0 = equity wins**); `equity` means the whole {conf_pct}% CI clears zero, "
         f"so the band-level win is real and not small-n noise. Slices below n={h2h.min_n} "
-        "read `small-n` (too few rows for a trustworthy CI). Sorted by Δ, biggest win first."
+        f"read `small-n` (too few rows for a trustworthy CI).{floor_note} "
+        "Sorted by Δ, biggest win first."
     )
     out.append("")
     out.append(f"| slice | value | n | Δ {metric_label} | {conf_pct}% CI | verdict |")
     out.append("|---|---|--:|--:|:--:|:--:|")
     for d in h2h.slices:
         ci_str = f"n<{h2h.min_n}" if d.lo is None else f"[{d.lo:+.4f}, {d.hi:+.4f}]"
+        verdict = (
+            f"underpowered (n={d.n})" if d.verdict == "underpowered" else d.verdict
+        )
         out.append(
-            f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {d.verdict} |"
+            f"| {d.slicer} | {d.value} | {d.n} | {d.delta:+.4f} | {ci_str} | {verdict} |"
+        )
+    return "\n".join(out)
+
+
+# --- per-time-control-bucket gate: does equity beat the baseline within each TC class? --
+#
+# The thesis' north star is the streaming / time-pressure wedge, but a clock-bearing dump
+# is held (task 0153). This is the torch-free step toward it the *current* real dump already
+# supports: slice the gate by the position's time-control class (bullet / blitz / rapid /
+# classical), present on every row as ``row.tc_bucket`` (data/schema.py) — derived from the
+# game's TimeControl header, so it is set even on a clock-blind dump where the per-move
+# ``clock`` slicer is a no-op (e.g. 2013-01). For each bucket it asks the gate's core
+# question — does the best rating-conditioned model beat the rating-blind centipawn baseline
+# here? — on BOTH headline metrics (log-loss and Brier). Buckets below the head-to-head
+# underpowered floor (:data:`H2H_UNDERPOWERED_N`, task 0146) are flagged, never silently
+# passed: a small bucket's per-band win or loss is sampling noise, not the thesis.
+
+
+@dataclass(frozen=True)
+class TcBucketDelta:
+    """One time-control bucket's head-to-head gate result (task 0155).
+
+    ``log_loss_delta`` / ``brier_delta`` are ``model − baseline`` on that bucket's rows, so
+    a *negative* delta means equity wins (lower loss). ``verdict`` is ``beats`` (both deltas
+    negative — an unambiguous bucket-level win), ``worse`` (both positive), ``mixed`` (the
+    two metrics disagree), or ``underpowered`` (fewer than the floor's rows — too few to
+    trust either way, so excluded from any beats/loses claim).
+    """
+
+    bucket: str
+    n: int
+    log_loss_delta: float
+    brier_delta: float
+    underpowered: bool
+    verdict: str
+
+
+@dataclass(frozen=True)
+class TcBucketGate:
+    """Per-``tc_bucket`` gate, baseline vs the best rating-conditioned challenger (0155)."""
+
+    baseline: str
+    model: str
+    underpowered_n: int
+    buckets: List[TcBucketDelta]  # sorted by log-loss delta ascending (biggest win first)
+
+
+def tc_bucket_gate(
+    rows: Sequence[PositionRow],
+    predictors: Dict[str, Predictor],
+    *,
+    baseline_name: str = "baseline",
+    underpowered_n: int = H2H_UNDERPOWERED_N,
+) -> Optional[TcBucketGate]:
+    """Slice the thesis gate by time-control bucket (task 0155).
+
+    Picks ``baseline_name`` as the rating-blind reference and the non-baseline predictor
+    with the lowest *overall* log-loss as its challenger (the same "best rating-conditioned
+    model" :func:`head_to_head_deltas` ranks against), groups the rows by ``row.tc_bucket``,
+    and per bucket computes the challenger's log-loss and Brier deltas vs the baseline.
+    Buckets with fewer than ``underpowered_n`` rows are flagged ``underpowered`` (the task
+    0146 floor) so a small bucket's win or loss is not read as the thesis. Returns the
+    buckets sorted by log-loss delta (biggest equity win first), or ``None`` when there is
+    no baseline or no challenger. Pure computation; no torch needed when the challenger is a
+    row predictor (e.g. ``wdl-a``). Pass ``underpowered_n=0`` to disable the floor.
+    """
+    if baseline_name not in predictors:
+        return None
+    challengers = [n for n in predictors if n != baseline_name]
+    if not challengers:
+        return None
+    rows = list(rows)
+    labels = [r.result for r in rows]
+    preds_by_name = {n: [predictors[n](r) for r in rows] for n in predictors}
+    base = preds_by_name[baseline_name]
+    best = min(challengers, key=lambda n: log_loss(preds_by_name[n], labels))
+    model = preds_by_name[best]
+
+    grouped: Dict[str, List[int]] = {}
+    for i, row in enumerate(rows):
+        grouped.setdefault(row.tc_bucket, []).append(i)
+
+    deltas: List[TcBucketDelta] = []
+    for bucket, idxs in grouped.items():
+        n = len(idxs)
+        bl = [labels[i] for i in idxs]
+        ll_delta = log_loss([model[i] for i in idxs], bl) - log_loss(
+            [base[i] for i in idxs], bl
+        )
+        br_delta = brier_score([model[i] for i in idxs], bl) - brier_score(
+            [base[i] for i in idxs], bl
+        )
+        underpowered = underpowered_n > 0 and n < underpowered_n
+        if underpowered:
+            verdict = "underpowered"
+        elif ll_delta < 0 and br_delta < 0:
+            verdict = "beats"
+        elif ll_delta > 0 and br_delta > 0:
+            verdict = "worse"
+        else:
+            verdict = "mixed"
+        deltas.append(
+            TcBucketDelta(bucket, n, ll_delta, br_delta, underpowered, verdict)
+        )
+    deltas.sort(key=lambda d: d.log_loss_delta)
+    return TcBucketGate(baseline_name, best, underpowered_n, deltas)
+
+
+def format_tc_bucket_gate(gate: TcBucketGate) -> str:
+    """Render the per-time-control-bucket gate as a Markdown section (task 0155)."""
+    out: List[str] = []
+    out.append(
+        f"## By time-control bucket: does equity still beat centipawns? "
+        f"({gate.baseline} vs {gate.model})"
+    )
+    out.append("")
+    out.append(
+        f"Δ = `{gate.model}` − `{gate.baseline}` on each bucket's rows; **Δ < 0 means equity "
+        "wins** (lower loss). `beats` = both log-loss and Brier deltas are negative; `worse` "
+        "= both positive; `mixed` = the two metrics disagree. A bucket with fewer than "
+        f"n={gate.underpowered_n} rows reads `underpowered` and is excluded from any "
+        "beats/loses claim — its win or loss is small-n noise, not the thesis. Sorted by "
+        "Δ log-loss, biggest equity win first."
+    )
+    powered = [d for d in gate.buckets if not d.underpowered]
+    weak = [d for d in gate.buckets if d.underpowered]
+    wins = sum(1 for d in powered if d.verdict == "beats")
+    summary = (
+        f"Equity beats the baseline on {wins}/{len(powered)} adequately-powered "
+        "time-control bucket(s)."
+    )
+    if weak:
+        summary += (
+            f" {len(weak)} bucket(s) below n={gate.underpowered_n} excluded as underpowered."
+        )
+    out.append(summary)
+    out.append("")
+    out.append("| time control | n | Δ log-loss | Δ Brier | verdict |")
+    out.append("|---|--:|--:|--:|:--:|")
+    for d in gate.buckets:
+        verdict = f"underpowered (n={d.n})" if d.underpowered else d.verdict
+        out.append(
+            f"| {d.bucket} | {d.n} | {d.log_loss_delta:+.4f} | {d.brier_delta:+.4f} "
+            f"| {verdict} |"
         )
     return "\n".join(out)

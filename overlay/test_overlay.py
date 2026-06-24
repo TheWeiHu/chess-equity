@@ -173,6 +173,182 @@ def test_default_threshold_lights_the_cue_on_the_fixture():
     assert lit, "fixture should drive the time-pressure cue at the default threshold"
 
 
+class StaleTracker:
+    """Mirror of feed.js ``makeStaleTracker`` — the pure stale-state machine the
+    overlay uses to show a STALE/reconnecting state when the live feed drops.
+
+    No real timers: the caller passes ``now`` (ms). Each method returns a
+    transition string only on the edge ("stale"/"recovered"), else None, so the
+    overlay fires its UI side-effect exactly once per transition.
+    """
+
+    def __init__(self, stale_ms=10000):
+        self.stale_ms = stale_ms or 10000
+        self.last_event_at = None
+        self.stale = False
+
+    def event(self, now):
+        self.last_event_at = now
+        if self.stale:
+            self.stale = False
+            return "recovered"
+        return None
+
+    def fail(self):
+        if not self.stale:
+            self.stale = True
+            return "stale"
+        return None
+
+    def poll(self, now):
+        if self.stale or self.last_event_at is None:
+            return None
+        if now - self.last_event_at >= self.stale_ms:
+            self.stale = True
+            return "stale"
+        return None
+
+    def is_stale(self):
+        return self.stale
+
+
+def test_stale_tracker_enters_stale_on_silence():
+    """No event for >= staleMs -> the bar goes STALE (silence-driven)."""
+    t = StaleTracker(stale_ms=10000)
+    assert t.event(0) is None and t.is_stale() is False
+    # Polling before the threshold keeps it live...
+    assert t.poll(5000) is None
+    assert t.is_stale() is False
+    # ...and crossing the threshold flips it exactly once.
+    assert t.poll(10000) == "stale"
+    assert t.is_stale() is True
+    assert t.poll(20000) is None, "stale transition should fire only on the edge"
+
+
+def test_stale_tracker_enters_stale_on_transport_error():
+    """An EventSource/WebSocket error forces STALE immediately, before any timeout."""
+    t = StaleTracker(stale_ms=10000)
+    t.event(0)
+    assert t.fail() == "stale"
+    assert t.is_stale() is True
+    assert t.fail() is None, "already-stale fail must not re-fire"
+
+
+def test_stale_tracker_recovers_on_next_event():
+    """The next event after going stale clears the state exactly once (recover)."""
+    t = StaleTracker(stale_ms=10000)
+    t.event(0)
+    assert t.poll(10000) == "stale"
+    assert t.is_stale() is True
+    # Next event recovers...
+    assert t.event(12000) == "recovered"
+    assert t.is_stale() is False
+    # ...and a normal event while live reports no transition.
+    assert t.event(13000) is None
+
+
+def test_stale_tracker_no_op_before_first_event():
+    """Polling before any event ever arrives must not declare a frozen-from-birth feed."""
+    t = StaleTracker(stale_ms=10000)
+    assert t.poll(999999) is None
+    assert t.is_stale() is False
+
+
+class AutoDirector:
+    """Mirror of overlay.js ``makeBoardRouter``'s auto-director (task 0188).
+
+    A multi-game round feeds every board down one stream; each event carries a server
+    ``drama`` magnitude (0..1). With autofollow on, ``note(board, mag)`` steals focus to
+    whichever board has the biggest live swing — but a focus lock of ``lock_plies`` plies
+    after each switch keeps noise from thrashing the bar (a real swing only wins once the
+    lock expires). A manual ``select(idx)`` PINS the board and disables autofollow until
+    ``resume()``. Pure + timer-free (plies, not seconds) so it mirrors the JS exactly.
+    """
+
+    def __init__(self, autofollow=False, lock_plies=6):
+        self.autofollow = autofollow
+        self.lock_plies = lock_plies
+        self.selected = None
+        self.pinned = False
+        self._lock = 0
+        self._last_drama = {}
+
+    def select(self, idx):
+        self.selected = idx
+        self.pinned = True
+        self._lock = 0
+
+    def resume(self):
+        self.pinned = False
+        self._lock = 0
+
+    def note(self, board, mag=0.0):
+        if not self.autofollow or self.pinned:
+            return
+        if not isinstance(board, int):
+            return
+        if self.selected is None:
+            self.selected = board
+            self._last_drama[board] = mag
+            return
+        self._last_drama[board] = mag
+        if board == self.selected:
+            if self._lock > 0:
+                self._lock -= 1
+            return
+        if self._lock > 0:
+            self._lock -= 1
+            return
+        if mag > self._last_drama.get(self.selected, 0.0):
+            self.selected = board
+            self._lock = self.lock_plies
+
+
+def test_autodirector_higher_drama_steals_focus():
+    """(a) Under autofollow, the board with the bigger live swing steals focus."""
+    d = AutoDirector(autofollow=True, lock_plies=3)
+    d.note(0, 0.1)  # following board 0, quiet
+    assert d.selected == 0
+    d.note(1, 0.9)  # board 1 erupts
+    assert d.selected == 1, "the higher-drama board should steal focus"
+
+
+def test_autodirector_focus_lock_prevents_thrash():
+    """(b) After a switch the focus lock blocks an immediate re-switch until it expires."""
+    d = AutoDirector(autofollow=True, lock_plies=3)
+    d.note(0, 0.1)
+    d.note(1, 0.9)  # steal to board 1, lock = 3
+    assert d.selected == 1
+    for tick in range(3):  # three locked plies, even with a hotter board 0
+        d.note(0, 0.99)
+        assert d.selected == 1, "lock should block the re-switch (tick %d)" % tick
+    d.note(0, 0.99)  # lock expired — the bigger swing finally wins
+    assert d.selected == 0, "after the lock expires a real swing takes over"
+
+
+def test_autodirector_manual_select_pins_and_overrides():
+    """(c) A manual select pins the board and disables autofollow until resume()."""
+    d = AutoDirector(autofollow=True, lock_plies=3)
+    d.note(0, 0.1)
+    d.select(0)  # caster pins board 0
+    assert d.pinned is True
+    d.note(1, 1.0)  # a maximal swing elsewhere must NOT steal focus
+    assert d.selected == 0, "manual pin must override the auto-director"
+    d.resume()  # reset re-enables autofollow
+    assert d.pinned is False
+    d.note(1, 1.0)
+    assert d.selected == 1, "after resume the director follows drama again"
+
+
+def test_autodirector_inert_without_autofollow():
+    """Without the autofollow flag the director never moves focus (default routing)."""
+    d = AutoDirector(autofollow=False, lock_plies=3)
+    d.select(0)
+    d.resume()  # even un-pinned, autofollow is off
+    d.note(1, 1.0)
+    assert d.selected == 0, "no autofollow → focus is never stolen by drama"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

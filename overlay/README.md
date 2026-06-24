@@ -17,6 +17,11 @@ the bar. The live ingestion task (**0018**) produces that feed; the equity model
 (**0005**) fills in the numbers. Until those land, a bundled **mock replay**
 (`mock-game.json`) drives the overlay so it's demonstrable today.
 
+> **Going live for a real broadcast?** See the end-to-end
+> [`docs/STREAMING.md`](../docs/STREAMING.md) runbook — Lichess round URL →
+> `chess-equity broadcast --serve-sse` → OBS browser source → troubleshooting.
+> This page is the front-end's option reference.
+
 ## Quick start (under 2 minutes)
 
 ```bash
@@ -41,16 +46,45 @@ background is transparent, so only the bar composites over your stream.
 | --- | --- | --- |
 | `src`    | `./mock-game.json` | SSE endpoint, `ws[s]://` WebSocket, or a `.json` replay file |
 | `layout` | `horizontal` | `horizontal` (names flank a wide bar) or `vertical` (classic eval-bar) |
+| `pov`    | `white` | whose point of view the bar reads from — see [Point of view](#point-of-view-pov) below |
 | `theme`  | `dark` | `dark` or `light` label text |
+| `palette` | _(default)_ | `cvd` swaps the red/green signalling (flag-risk, grade, drama) to a **colorblind-safe** blue/orange set for deuteranopia/protanopia viewers (task 0254) |
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
 | `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |
+| `legend` | `0` | **legend key** — a compact one-line key (bar = White win-equity %; green = good/brilliant, red = inaccuracy/blunder) so first-time viewers can read the bar (task 0201) |
+| `autofollow` | `0` | **auto-director** — in a multi-game round, auto-switch focus to the board with the biggest live `drama`; a manual pick pins and overrides (task 0188) |
+| `focuslock` | `6` | autofollow focus-lock window (plies) — a switched board is held this long so noise can't thrash the bar |
+| `dramamargin` | `0.1` | autofollow anti-flap — a rival board must out-drama the followed board by at least this magnitude before it can cut (task 0203) |
+| `challenge` | `2` | autofollow anti-flap — a rival must sustain that margin lead for this many **consecutive** ticks before it cuts, so a busy round can't flip-flop (task 0203) |
 | `speed`  | `1` | replay speed multiplier for `.json` feeds |
 | `welo`   | _(feed)_ | override the White rating shown (Maia-2's top band is a coarse `>2000` — pin the real number) |
 | `belo`   | _(feed)_ | override the Black rating shown |
 
 Example: `http://localhost:8777/?src=/sse&layout=vertical&cp=0`
 Caster setup: `http://localhost:8777/?caster=1&cpbar=1`
+
+#### Point of view (`pov`)
+
+The bar reports practical win chances. `?pov=` chooses *whose* chances the bar and
+its readout speak for. The underlying number never changes — only how it's framed:
+
+| `pov` | What the bar shows | How to read it |
+| --- | --- | --- |
+| `white` *(default)* | White's win-equity, always | the fill is **White's** share — left/up = White ahead, exactly like a classic eval bar. Never flips mid-game. |
+| `stm` | White's win-equity (bar unchanged) **plus** a "*X to move · NN%*" readout pill | the bar stays White-honest so it never jumps when the turn changes; the pill reframes the *same* number for **whoever is on move**. |
+| `stm-bar` | the **whole bar** flips to the side-to-move's view (board-flip style) | the fill itself adopts the **mover's** POV — left/up = *the player to move* is ahead. The readout pill names that player. Best when you want the bar to "face" the player whose clock is running. |
+
+`stm` and `stm-bar` use the same side-to-move math; the only difference is whether the
+flip drives just the readout (`stm`) or the bar fill too (`stm-bar`).
+
+#### Bar model badge
+
+When the feed's `game` event carries a `model` field (e.g. `"Maia-2"`, task 0222), the
+overlay shows a small static **badge** naming the model that drives the bar — so a viewer
+can tell the bar is a *human win-probability* model, **not** Stockfish's centipawn eval.
+No `model` field → no badge. This is a feed property, not a query param (the ingestor
+stamps it; see `chess-equity broadcast --model …`).
 
 ### Streamer quickstart — a live Lichess broadcast round → OBS
 
@@ -79,6 +113,15 @@ python3 overlay/serve.py                 # http://localhost:8777/
 `--white-elo/--black-elo` pin the ratings the bar conditions on (a broadcast round's
 headers are often blank or `?`); `--model maia2` swaps the placeholder baseline for the
 real rating-conditioned bar once its weights are installed (see `DEPENDENCIES.md`).
+
+> **Auto-follow the drama (`--board auto`, task 0256).** A multi-board round
+> (`--board <player|index>` follows one) can instead be set to `--board auto`: the
+> ingestor follows *every* board but auto-cuts the overlay focus to whichever game has
+> the highest recent drama (clutch / missed-win / escape / scramble), emitting a `focus`
+> event when the lead board changes — "show the caster the most exciting game right now".
+> Light hysteresis keeps it from thrashing every ply; a manual pick in the selector still
+> pins and overrides it. This is the server-side counterpart to the client `?autofollow=1`
+> director — use one.
 
 > **One-command live bridge (task 0094).** `chess-equity broadcast --round <id>
 > --serve-sse 8777` streams the round straight into the overlay as Server-Sent-Events:
@@ -110,10 +153,42 @@ Lichess broadcast round URL and it shows the `chess-equity broadcast … --serve
 command to run the [0018](../src/chess_equity/broadcast.py) ingestor that feeds the
 overlay.
 
+### Standings lower third (task 0231)
+
+A separate OBS browser source, **`standings.html`**, renders a top-N accuracy
+**standings lower third** for a multi-game round, fed by the `grade --round` leaderboard
+JSON (the same export documented in [grading](../src/chess_equity/grading.py)). Generate
+the feed and point the source at it:
+
+```sh
+chess-equity grade --round --pgn round.pgn --json > overlay/leaderboard.json
+# OBS → Browser source → .../standings.html?src=./leaderboard.json&top=5
+```
+
+With no `?src` it replays the committed illustrative `mock-leaderboard.json`. Params:
+`?src=` (a bare export array, or `{leaderboard:[…]}`), `?top=N` (default 5, 1–20),
+`?title=` (default *STANDINGS*), `?theme=dark|light`. Rows render in strict **rank**
+order (a sub-floor cameo can't jump the board), showing `# · player · acc% · Δpeer`.
+Static, fixture-driven — no live model.
+
 ## What it shows
 
-- The **equity bar** (0–100% practical), both names + ratings.
+- The **equity bar** (0–100% practical), both names + ratings, framed by the chosen
+  [point of view](#point-of-view-pov) (`?pov=white`/`stm`/`stm-bar`).
+- A **model badge** naming the bar's model (e.g. *Maia-2*) when the feed stamps a
+  `model` field — so viewers know it's a human win-probability model, not Stockfish
+  (task 0222; hidden when the feed sends no `model`).
 - Both **clocks** (turn red under 10s — the time pressure that drives the wedge).
+- A per-side **flag-risk alert** 🚩 badge (task 0243) that lights when the *model's*
+  `flag_risk` for that side crosses its alert threshold — real time trouble (a bullet/
+  blitz scramble), read straight off the feed's `flag_risk.<side>.alert`. Distinct from
+  the raw-seconds clock tint above: this is the modelled P(loses on time), not just a low
+  number. Omitted entirely on clock-blind feeds, so the badge simply never shows.
+- An **out-of-distribution high-rating marker** (task 0255): when BOTH players are above
+  Maia-2's coarse `>2000` rating bucket (the feed's `rating_ood` boolean), the bar can't
+  tell 2200 from 2800, so it hatches faintly and shows a small `?` (tooltip "rating bucket
+  coarse above 2000") — an honesty cue that ties a documented model limit to the UI. Off
+  whenever a rating is unknown or either side is in-distribution.
 - The last move's **Δequity grade** pill (task 0008) — flares green when a player
   finds better than their level expects, red on a blunder.
 - A dashed **centipawn ghost tick** showing where the classic engine bar would
@@ -122,6 +197,20 @@ overlay.
 - In **caster mode** (`?caster=1`), a **drama flare** on big practical equity
   swings, glowing gold when it's a swing the engine bar misses (e.g. a clock
   scramble the centipawn eval calls quiet) — the caster's "look at THIS" cue.
+- A **momentum arrow** (bottom-right, always on) showing the direction and size of
+  the last equity swing — ▲ accent when equity moved toward White, ▼ when toward
+  Black — so a viewer sees *who just gained* at a glance (task 0208). It's derived
+  purely from the move-to-move equity delta (no extra feed field), stays hidden
+  while equity is steady (swing < 2 points), and **fades out over the next few
+  moves** after a swing rather than blinking off. Distinct from the drama flare
+  (which only fires in caster mode, on big engine-blind swings).
+- A **drama toast** (centered above the bar, always on) — a transient labelled flash
+  (`CLUTCH +12%`, `ESCAPE`, `MISSED WIN`, `SCRAMBLE`) fed by the feed's per-move
+  `drama` payload (the server's `chess_equity.drama.score_event` classification, task
+  0241). It appears on a drama-tagged move, colored by `kind` (green clutch/escape,
+  red missed-win, amber scramble), then **auto-hides as quiet moves decay it**. Unlike
+  the caster-mode drama flare, the toast reads the *server*'s drama `kind` directly, so
+  it names *what kind* of moment it was, not just the size of the swing.
 
 The bundled `mock-game.json` is a bullet time-scramble: around the time scramble
 the centipawn eval reads ≈0.00 (or slightly for Black) while the clock-aware
@@ -142,17 +231,32 @@ values are **seconds remaining**.
 // one-time metadata
 {
   "type": "game",
+  "game_id": "abcd1234",                     // optional — board identity (multi-board rounds)
   "format": "bullet",                       // optional label
+  "board": 0,                               // optional — 0-based board index in a multi-game round (task 0185)
+  "model": "Maia-2",                        // optional — human-readable bar-model badge (task 0222); omitted -> no badge
   "players": {
     "white": { "name": "Carlsen", "rating": 2839 },
     "black": { "name": "Nakamura", "rating": 2802 }
   }
 }
 
+// board roster — emitted only for a multi-game round (>1 board), so the overlay can
+// show a live board switcher (task 0185). A single-board feed never emits it.
+{
+  "type": "boards",
+  "boards": [
+    { "index": 0, "game_id": "abcd1234", "white": "Carlsen", "black": "Nakamura" },
+    { "index": 1, "game_id": "wxyz5678", "white": "Caruana", "black": "Firouzja" }
+  ]
+}
+
 // per-move update
 {
   "type": "position",
+  "game_id": "abcd1234",                    // which board this move is on (for routing)
   "ply": 44,
+  "board": 0,                               // optional — board index (multi-game round); omitted for a single game
   "move": { "san": "Rxd5??" },              // optional, for display
   "equity": 0.88,                           // REQUIRED — White-POV practical win chance 0..1
   "cp": 60,                                 // optional — classic centipawn eval (White POV)
@@ -160,12 +264,66 @@ values are **seconds remaining**.
   "clock": { "white": 13.2, "black": 1.6 }, // optional — seconds remaining
   "grade": { "label": "blunder", "delta": -0.22 },     // optional — Δequity grade (mover POV)
   "drama": { "kind": "scramble", "magnitude": 0.55,    // optional — caster-mode drama (task 0020)
-             "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" }
+             "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" },
+  "flag_risk": { "white": { "risk": 0.02, "alert": false },   // optional — per-side time-trouble alert (task 0243)
+                 "black": { "risk": 0.51, "alert": true } },  // `alert` lights the 🚩 badge; omitted on clock-blind feeds
+  "rating_ood": true                        // optional — both players over the coarse `>2000` Maia-2 bucket (task 0255):
+                                            // hatches the bar + shows a `?` mark (lower-confidence). Absent/false = in-distribution
+}
+
+// board roster — only for a multi-game broadcast round (task 0185). Emitted (and
+// re-emitted as boards appear) so the overlay can render a live board selector. Pure
+// routing metadata: never rendered on the bar. A single-game feed never sends one.
+{
+  "type": "boards",
+  "boards": [
+    { "index": 0, "players": { "white": { "name": "Carlsen" }, "black": { "name": "Nakamura" } } },
+    { "index": 1, "players": { "white": { "name": "Nepo" }, "black": { "name": "Ding" } } }
+  ]
+}
+
+// board result — emitted once when a board's game ends (task 0189). Routing metadata
+// (never rendered): when the FOLLOWED board finishes and the caster hasn't manually
+// pinned it, the overlay auto-advances focus to the next still-live board so a caster
+// isn't stranded on an ended game. Multi-game rounds only.
+{
+  "type": "result",
+  "board": 0,
+  "game_id": "abcd1234",
+  "result": "1-0"                            // "1-0" | "0-1" | "1/2-1/2"
+}
+
+// focus cut — emitted by the SERVER-side drama auto-director when `broadcast --board
+// auto` is on (task 0256): the producer tracks each board's recent drama and sends this
+// the moment the liveliest board changes, so the overlay auto-cuts to it. The overlay
+// follows it unless the caster has pinned a board (a manual pick always wins). A drama
+// cut also carries a caption-ready `reason` cue (task 0260) which the overlay flashes as
+// a brief **lower-third banner** under the bar (task 0264) — "cut to Bd3: +0.9 swing vs
+// +0.4". A routing-only focus event (no `reason`, e.g. a caster-pin re-route) re-routes
+// silently without bannering. Multi-game rounds only. This is the server-driven
+// counterpart to the client `?autofollow=1` director above — use one or the other.
+{
+  "type": "focus",
+  "board": 1,
+  "game_id": "drama002",
+  "reason": "cut to Bd2: +0.9 swing vs +0.4"
 }
 ```
 
 Only `type` and (for positions) `equity` are required; everything else degrades
-gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). The
+gracefully (missing clock hides the clock, missing `cp` hides the ghost tick). In a
+multi-game round, events carry a `board` index and the feed sends a `boards` roster so
+the overlay shows a selector; the chosen board's events flow to the bar (default: when
+only one board exists, no selector appears and every event renders). With `?autofollow=1`
+the overlay becomes an **auto-director**: it follows whichever board's latest `drama`
+magnitude is highest, holding focus for `?focuslock=` plies after each switch so a real
+swing — not noise — wins. To stop a busy round from flip-flopping every move, a rival
+board must also out-drama the followed board by `?dramamargin=` (default `0.1`) for
+`?challenge=` **consecutive** ticks (default `2`) before it can cut. The caster can still
+click the selector to pin a board (which
+disables autofollow until reset). When the followed board's game ends, a `result` event
+auto-advances focus to the next still-live board — unless the caster pinned a board by
+picking it from the selector (task 0189). The
 optional `drama` payload mirrors `chess_equity.drama.DramaEvent` — when present it
 supplies the caster-mode flare's headline; otherwise caster mode derives a flare
 from the equity swing itself, so it works on any feed.
@@ -174,6 +332,7 @@ from the equity swing itself, so it works on any feed.
 
 ```bash
 python3 test_overlay.py        # or: pytest overlay/test_overlay.py
+node test_routing.js           # multi-board switcher routing (task 0185)
 ```
 
 Validates the schema and asserts the headline acceptance criterion — that the

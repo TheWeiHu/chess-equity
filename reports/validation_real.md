@@ -119,7 +119,7 @@ For each predicted-probability bin: mean predicted vs **observed** White expecte
 
 Δ log-loss = `baseline` − `wdl-a` on the same rows; **Δ > 0 means equity wins** (lower model log-loss). Sorted by Δ, biggest win first.
 Overall Δ: +0.3403
-**Worst slice:** `high_rating` `2000-2199` (n=415) Δ=-0.1910 — the baseline wins here. Equity wins on 7/9 slices.
+**Worst slice:** `high_rating` `2000-2199` (n=415) Δ=-0.1910 — the baseline wins here — but the 95% CI on that Δ is [-0.3672, +0.0327], which straddles zero, so at n=415 this is small-n noise, not a proven regression at this level. Equity wins on 7/9 slices.
 
 | slice | value | n | baseline log-loss | model log-loss | Δ |
 |---|---|--:|--:|--:|--:|
@@ -169,3 +169,51 @@ Paired bootstrap (1000 resamples) on the per-row log-loss delta *within each sli
 | phase | opening | 3408 | +0.0954 | [+0.0790, +0.1185] | equity |
 | rating | 2000-2399 | 415 | -0.1910 | [-0.3596, +0.0160] | inconclusive |
 | high_rating | 2000-2199 | 415 | -0.1910 | [-0.3672, +0.0327] | inconclusive |
+
+## By time-control bucket: does equity still beat centipawns? (baseline vs wdl-a)
+
+Δ = `wdl-a` − `baseline` on each bucket's rows; **Δ < 0 means equity wins** (lower loss). `beats` = both log-loss and Brier deltas are negative; `worse` = both positive; `mixed` = the two metrics disagree. A bucket with fewer than n=1000 rows reads `underpowered` and is excluded from any beats/loses claim — its win or loss is small-n noise, not the thesis. Sorted by Δ log-loss, biggest equity win first.
+Equity beats the baseline on 3/3 adequately-powered time-control bucket(s). 2 bucket(s) below n=1000 excluded as underpowered.
+
+| time control | n | Δ log-loss | Δ Brier | verdict |
+|---|--:|--:|--:|:--:|
+| blitz | 4266 | -0.4369 | -0.0633 | beats |
+| bullet | 4851 | -0.3769 | -0.0282 | beats |
+| rapid | 2731 | -0.1475 | -0.0117 | beats |
+| classical | 77 | +0.0735 | +0.0112 | underpowered (n=77) |
+| correspondence | 75 | +0.0821 | +0.1681 | underpowered (n=75) |
+
+_The time-control slice (task 0155) toward the streaming / time-pressure north star: even
+on this clock-blind 2013-01 dump (per-move clocks absent, so the `clock` slice is a single
+`no-clock` band), the rating-conditioned model still beats the rating-blind centipawn
+baseline within every adequately-powered time-control class — biggest in `blitz`. The two
+small buckets (`classical` n=77, `correspondence` n=75) read `wdl-a` worse but are below
+the n=1000 floor, so they are flagged, not counted as a thesis loss. Generated torch-free
+from the same cached `2013-01` dump (n=12000) via `validate --models baseline,wdl-a`; the
+best challenger is `wdl-a` (lowest overall log-loss), the same one the maia2-inclusive run
+above ranks against, so these numbers are identical to that run's tc_bucket gate._
+
+## Good moves read as good (move-level Δequity, task 0117)
+
+Per consecutive ply-pair, the engine's cp swing (mover POV, clamped ±1000) is the ground-truth move quality. **Good** = mover lost ≤10cp (engine-approved); **blunder** = dropped ≥100cp. `Δgood`/`Δblunder` are the mean mover-POV equity swing (pp) the bar showed on each. The thesis: good moves should read as a *positive* gain, not a saturated ~0.
+
+`sign-acc` (direction on |cp|≥25cp moves) is a sanity floor — any monotone-in-cp bar scores ~1.0. `corr` is **baseline-biased** (the cp swing is the baseline's own input), shown for transparency, not as the win condition.
+
+| predictor | moves | good | blunder | sign-acc | Δgood (pp) | Δblunder (pp) | corr |
+|---|--:|--:|--:|:--:|--:|--:|--:|
+| baseline | 11829 | 6197 | 1683 | 1.000 | +0.12 | -18.55 | +0.951 |
+| wdl-a | 11829 | 6197 | 1683 | 0.993 | +0.08 | -11.59 | +0.829 |
+
+**Direction:** every bar reads engine-approved moves above blunders (Δgood > Δblunder) — good moves read as good, not as bad. ✅
+
+**Rating signal:** every rating-conditioned bar reads blunders as less catastrophic than the rating-blind baseline (Δblunder -18.55pp) — a refutation a rating-peer won't find is discounted. (With cp-delta as ground truth the cp-based baseline is strong by construction; the good-move *upside* needs Maia's rating-relative policy — task 0008/0005.)
+
+See [`reports/goodmoves_real.md`](reports/goodmoves_real.md) for the fuller move-level write-up — the reproduce recipe, the rating-signal (blunder-leniency) read, and what this slice proves and does *not* prove (the rating-conditioned good-move upside needs Maia's policy — task 0008/0005).
+
+_The positive half of the thesis (task 0117), folded into the headline gate artifact (task
+0158): a reader of this single file now sees both that the rating-conditioned bar beats the
+centipawn baseline at predicting outcomes (above) AND that it reads engine-approved moves as
+good, not backwards. Generated torch-free from the same cached `2013-01` dump (n=12000) via
+`validate --models baseline,wdl-a` — `maia2` carries no move-level policy here — so the
+move-pair counts and Δ values are identical to the standalone `reports/goodmoves_real.md`
+run._

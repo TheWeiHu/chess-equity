@@ -8,7 +8,20 @@ name: CI
 on:
   push:
     branches: [main, staging]
+  # Only run PR CI for PRs targeting `main` (the gate into the protected base).
+  # The nightshift fleet opens ~120 short-lived `todo/* -> nightshift` PRs per night,
+  # each of which would otherwise trigger CI and email on failure (the 177-email flood).
+  # Those branches are already covered by the orchestrator's local green-gate
+  # (scripts/gate.sh — the same check CI runs) before merge, so PR CI on them is
+  # redundant noise. See nightshift skill.
   pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so rapid re-pushes don't stack (and don't
+# email): a cancelled run is not a failed run, so it raises no failure notification.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -23,14 +36,13 @@ jobs:
       # `maia2`/`plots` stay out so CI never pulls torch/matplotlib for the smoke run.
       - name: Install
         run: pip install -e ".[dev,data]"
-      # Tests live in tests/, plus the isolated baseline/, overlay/, and web/ suites
-      # (web/ holds test_import_game.py — the Lichess game-import tooling).
-      - name: Run tests
-        run: pytest tests baseline overlay web -q
-      # The live demo's eval-cache logic (web/live.js) is gated by a dependency-free node
-      # test: scrubbing a charted game must make zero /api/play calls (task 0123).
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run web JS tests
-        run: node web/test_live.js
+      # SINGLE SOURCE OF TRUTH: CI and the nightshift fleet's --test-cmd both run
+      # scripts/gate.sh, so the local green-gate and CI can never drift apart. The script
+      # runs `pytest tests baseline overlay web` plus every dependency-free Node suite
+      # (web/test_live.js + overlay/*.test.js, globbed so new ones are gated automatically).
+      # Run it locally before pushing: `scripts/gate.sh`.
+      - name: Gate (same check developers run locally)
+        run: bash scripts/gate.sh
