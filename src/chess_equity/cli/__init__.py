@@ -808,6 +808,13 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     if args.top is not None:
         reel = reel[: args.top]
 
+    # Human-vs-engine DIVERGENCE category (task 0272): a SEPARATE ranked list — the
+    # moves where the rating-aware bar most disagrees with the engine (cp-implied) bar.
+    # Computed from the raw events (drama events drop cp), independent of the drama
+    # ranking + the --min-magnitude floor (a quiet move can be a huge divergence). It
+    # rides alongside the drama reel in the json + markdown artifacts.
+    divergence = reel_mod.detect_divergence(events, top=args.top)
+
     # --round (task 0198): a cross-game ROUND recap. The pooling is already done — a
     # multi-game PGN tags every event with its game_id and the drama detector is
     # stateless, so `reel` above already ranks moments across all boards. --round adds
@@ -866,7 +873,11 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         return 0
 
     if args.out_dir is None:
-        print(reel_mod.render_markdown(reel, title=title, sources=sources))
+        print(
+            reel_mod.render_markdown(
+                reel, title=title, sources=sources, divergence=divergence
+            )
+        )
         return 0
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -874,9 +885,18 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
     md_path = os.path.join(args.out_dir, "reel.md")
     written = [json_path, md_path]
     with open(json_path, "w", encoding="utf-8") as fh:
-        fh.write(reel_mod.render_json(reel, title=title, sources=sources) + "\n")
+        fh.write(
+            reel_mod.render_json(
+                reel, title=title, sources=sources, divergence=divergence
+            )
+            + "\n"
+        )
     with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(reel_mod.render_markdown(reel, title=title, sources=sources))
+        fh.write(
+            reel_mod.render_markdown(
+                reel, title=title, sources=sources, divergence=divergence
+            )
+        )
     if args.html is not None:
         html_path = args.html if args.html != "-" else os.path.join(args.out_dir, "reel.html")
         with open(html_path, "w", encoding="utf-8") as fh:

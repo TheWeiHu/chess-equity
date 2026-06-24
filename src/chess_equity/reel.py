@@ -26,10 +26,11 @@ import base64
 import html
 import io
 import json
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from dataclasses import asdict, dataclass
+from typing import Dict, Iterable, List, Optional, Protocol, Tuple
 
 from chess_equity.drama import DramaEvent, detect
+from chess_equity.types import lichess_win_percent
 
 # Tie-break order when two moments share a magnitude: the bigger *story* first.
 # Mirrors the priority :func:`chess_equity.drama.score_event` itself checks in.
@@ -111,14 +112,24 @@ def game_sources(pgn_text: str) -> Dict[str, GameSource]:
     return sources
 
 
-def _source_text(d: DramaEvent, sources: Optional[Dict[str, GameSource]]) -> str:
+class _Sourced(Protocol):
+    """The two fields the source/mover label helpers read — shared by the drama
+    ``DramaEvent`` and the divergence ``DivergenceMoment`` so both reuse the labellers."""
+
+    @property
+    def game_id(self) -> str: ...
+    @property
+    def mover_white(self) -> bool: ...
+
+
+def _source_text(d: _Sourced, sources: Optional[Dict[str, GameSource]]) -> str:
     """Human-readable source label for one moment ('Board N · W vs B' or 'game <id>')."""
     if sources and d.game_id in sources:
         return sources[d.game_id].label
     return f"game {d.game_id}"
 
 
-def _mover_name(d: DramaEvent, sources: Optional[Dict[str, GameSource]]) -> str:
+def _mover_name(d: _Sourced, sources: Optional[Dict[str, GameSource]]) -> str:
     """The mover's display name — the actual player in a round recap, else the side.
 
     Only a round recap's ``sources`` map carries player names, so a single-game reel
@@ -192,6 +203,180 @@ def drop_below_magnitude(
     return kept, dropped
 
 
+# --- Human-vs-engine DIVERGENCE category (task 0272) -------------------------
+#
+# The reel above ranks DRAMA — big *swings* in the practical-equity bar. But the
+# project's signature is human-vs-engine DIVERGENCE: moves where the rating-conditioned
+# equity bar most *disagrees* with the classic Stockfish (cp-implied) bar. A divergence
+# need NOT be a swing — a quiet move can sit far from the engine bar (the human position
+# is much easier/harder to play than the eval admits) yet move the bar barely at all, so
+# the drama detector never surfaces it. This is a SEPARATE ranked category, computed over
+# the raw ``MoveEvent`` stream (drama events drop ``cp``, which divergence needs).
+#
+# Both bars are White-POV in percentage points: ``equity`` is the rating-conditioned bar
+# the broadcast publishes; the engine bar is ``lichess_win_percent(cp)`` — Lichess's
+# rating-blind Win% of the White-POV centipawn eval (:mod:`chess_equity.types`), the same
+# rating-blind baseline the overlay's human-edge divergence badge draws against (task
+# 0103). The magnitude ranked is ``|equity − engine|``.
+
+
+@dataclass(frozen=True)
+class DivergenceMoment:
+    """One human-vs-engine bar disagreement: how far the rating-conditioned equity
+    bar sits from the rating-blind cp-implied bar at a single move.
+
+    All percentages are White-POV in [0, 100]. ``cp`` is the White-POV centipawn eval;
+    ``cp_win`` is its Lichess rating-blind Win%; ``divergence`` is ``|equity − cp_win|``.
+    ``signed_gap`` (a property) is ``equity − cp_win`` — positive when the human bar reads
+    *more* White-favorable than the engine, negative when *less*.
+    """
+
+    game_id: str
+    ply: int
+    san: str
+    mover_white: bool
+    equity: float
+    cp: float
+    cp_win: float
+    divergence: float
+    fen: Optional[str] = None
+
+    @property
+    def signed_gap(self) -> float:
+        return self.equity - self.cp_win
+
+    def to_dict(self) -> Dict[str, object]:
+        d = asdict(self)
+        d["signed_gap"] = self.signed_gap
+        return d
+
+
+def _divergence_rank_key(m: DivergenceMoment) -> Tuple[float, int]:
+    # magnitude desc (negated), then ply asc — fully deterministic across runs.
+    return (-m.divergence, m.ply)
+
+
+def detect_divergence(
+    move_events: Iterable, *, top: Optional[int] = None
+) -> List[DivergenceMoment]:
+    """Rank a move stream by human-vs-engine bar divergence (``|equity − cp_win|``).
+
+    One moment per move that carries an engine ``cp`` (moves with ``cp is None`` — mates,
+    or a clock-blind/cp-less feed — are skipped: there is no engine bar to diverge from).
+    Ranked by divergence magnitude descending, ties broken by ply, optionally capped to
+    the ``top`` N. Independent of the drama ranking: a quiet move with a big divergence
+    ranks here even though it never registers as drama.
+    """
+    moments: List[DivergenceMoment] = []
+    for e in move_events:
+        if e.cp is None:
+            continue
+        cp_win = lichess_win_percent(e.cp)
+        moments.append(
+            DivergenceMoment(
+                game_id=e.game_id,
+                ply=e.ply,
+                san=e.san,
+                mover_white=not e.white_to_move,
+                equity=e.equity,
+                cp=e.cp,
+                cp_win=cp_win,
+                divergence=abs(e.equity - cp_win),
+                fen=e.fen,
+            )
+        )
+    moments.sort(key=_divergence_rank_key)
+    return moments[:top] if top is not None else moments
+
+
+def divergence_caption(
+    m: DivergenceMoment, sources: Optional[Dict[str, GameSource]] = None
+) -> str:
+    """One ready-to-post line summarising a divergence moment for a caster/social card.
+
+    Names the source board/pairing (round recap only), the mover + move, both bars, and
+    the signed gap with the side it leans toward — e.g.
+    ``Board 3 — Carlsen Nf3: human bar 65% vs engine 50% (+15 toward White)``.
+    """
+    mover = _mover_name(m, sources)
+    prefix = ""
+    if sources and m.game_id in sources:
+        prefix = f"Board {sources[m.game_id].board} — "
+    toward = "White" if m.signed_gap >= 0 else "Black"
+    return (
+        f"{prefix}{mover} {m.san}: human bar {m.equity:.0f}% vs engine "
+        f"{m.cp_win:.0f}% ({m.signed_gap:+.0f} toward {toward})"
+    )
+
+
+def divergence_payload(
+    moments: List[DivergenceMoment],
+    *,
+    title: str = "Human-vs-engine divergence",
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> Dict[str, object]:
+    """The structured JSON-ready payload for the ranked divergence category.
+
+    Each moment carries a ready-to-post ``caption`` (see :func:`divergence_caption`); a
+    round recap (``sources`` given) additionally tags each with its ``source`` label +
+    ``board`` number and a top-level ``games`` count.
+    """
+    out: List[Dict[str, object]] = []
+    for m in moments:
+        d = m.to_dict()
+        if sources is not None:
+            src = sources.get(m.game_id)
+            d["source"] = _source_text(m, sources)
+            d["board"] = src.board if src is not None else None
+        d["caption"] = divergence_caption(m, sources)
+        out.append(d)
+    payload: Dict[str, object] = {
+        "title": title,
+        "count": len(moments),
+        "moments": out,
+    }
+    if sources is not None:
+        payload["games"] = len({m.game_id for m in moments})
+    return payload
+
+
+def render_divergence_markdown(
+    moments: List[DivergenceMoment],
+    *,
+    title: str = "Human-vs-engine divergence",
+    sources: Optional[Dict[str, GameSource]] = None,
+) -> str:
+    """Render the ranked divergence category as caster-facing markdown.
+
+    A numbered list of the moments where the rating-aware bar most disagrees with the
+    engine bar, each line naming both bars + the signed gap. Stays graceful on an empty
+    list (no cp-bearing moves) rather than emitting an empty doc.
+    """
+    lines: List[str] = [f"# {title}", ""]
+    if not moments:
+        lines.append(
+            "_No human-vs-engine divergence to show — no moves carried an engine "
+            "eval to compare against (a cp-less or mate-only feed)._"
+        )
+        return "\n".join(lines) + "\n"
+
+    span = ""
+    if sources is not None:
+        span = f"across {len({m.game_id for m in moments})} board(s) "
+    lines.append(
+        f"> {len(moments)} moment(s) {span}where the rating-aware bar most "
+        "disagrees with the engine bar, ranked by |gap|"
+    )
+    lines.append("")
+    for i, m in enumerate(moments, start=1):
+        loc = f"{_source_text(m, sources)}, ply {m.ply}"
+        lines.append(
+            f"{i}. ⚖️ `{m.divergence:.0f} pts` — {divergence_caption(m, sources)} "
+            f"_({loc})_"
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def by_kind(reel: Iterable[DramaEvent]) -> Dict[str, int]:
     """Count moments per drama kind (every kind that fired, others omitted)."""
     tally: Dict[str, int] = {}
@@ -205,6 +390,7 @@ def reel_payload(
     *,
     title: str = "Highlight reel",
     sources: Optional[Dict[str, GameSource]] = None,
+    divergence: Optional[List[DivergenceMoment]] = None,
 ) -> Dict[str, object]:
     """The structured JSON-ready payload for a ranked reel.
 
@@ -213,6 +399,11 @@ def reel_payload(
     additionally gains a ``source`` label and ``board`` number, its caption names the
     source board + player, and a top-level ``games`` count is added so downstream tooling
     can see the pool spanned multiple boards.
+
+    When ``divergence`` is given, a distinct ``"divergence"`` block (the ranked
+    human-vs-engine category, see :func:`divergence_payload`) rides alongside the drama
+    ``moments`` so a caster sees both talking-point lists in one artifact. Omitted
+    entirely when ``None`` so the drama-only contract is byte-identical to before.
     """
     moments: List[Dict[str, object]] = []
     for d in reel:
@@ -234,6 +425,8 @@ def reel_payload(
     if sources is not None:
         # How many distinct boards actually contributed a moment to the pool.
         payload["games"] = len({d.game_id for d in reel})
+    if divergence is not None:
+        payload["divergence"] = divergence_payload(divergence, sources=sources)
     return payload
 
 
@@ -286,9 +479,49 @@ def render_json(
     title: str = "Highlight reel",
     indent: int = 2,
     sources: Optional[Dict[str, GameSource]] = None,
+    divergence: Optional[List[DivergenceMoment]] = None,
 ) -> str:
-    """Render the reel as a JSON string (structured payload)."""
-    return json.dumps(reel_payload(reel, title=title, sources=sources), indent=indent)
+    """Render the reel as a JSON string (structured payload).
+
+    When ``divergence`` is given, the human-vs-engine category rides alongside the drama
+    moments under a ``"divergence"`` key (see :func:`reel_payload`).
+    """
+    return json.dumps(
+        reel_payload(reel, title=title, sources=sources, divergence=divergence),
+        indent=indent,
+    )
+
+
+def _divergence_md_section(
+    divergence: Optional[List[DivergenceMoment]],
+    sources: Optional[Dict[str, GameSource]],
+) -> List[str]:
+    """The trailing '## Human-vs-engine divergence' block, or [] when not requested.
+
+    Rendered as an ``##`` section appended under the drama reel so both talking-point
+    lists live in one document. ``None`` (divergence not requested) yields nothing.
+    """
+    if divergence is None:
+        return []
+    out: List[str] = ["", "## Human-vs-engine divergence", ""]
+    if not divergence:
+        out.append(
+            "_No human-vs-engine divergence to show — no moves carried an engine "
+            "eval to compare against._"
+        )
+        return out
+    out.append(
+        "_Moves where the rating-aware bar most disagrees with the engine bar "
+        "(ranked by |gap|) — quiet moves count too._"
+    )
+    out.append("")
+    for i, m in enumerate(divergence, start=1):
+        loc = f"{_source_text(m, sources)}, ply {m.ply}"
+        out.append(
+            f"{i}. ⚖️ `{m.divergence:.0f} pts` — {divergence_caption(m, sources)} "
+            f"_({loc})_"
+        )
+    return out
 
 
 def render_markdown(
@@ -296,13 +529,16 @@ def render_markdown(
     *,
     title: str = "Highlight reel",
     sources: Optional[Dict[str, GameSource]] = None,
+    divergence: Optional[List[DivergenceMoment]] = None,
 ) -> str:
     """Render the reel as caster-facing markdown.
 
     A numbered top-moments list (ranked) followed by a by-drama-type breakdown.
     Stays graceful on an empty reel (a quiet game) rather than emitting an empty doc.
     When ``sources`` is given (a round recap), each top moment names its source board +
-    pairing and the summary line reports how many boards the pool spans.
+    pairing and the summary line reports how many boards the pool spans. When
+    ``divergence`` is given, a distinct '## Human-vs-engine divergence' section is
+    appended below the drama reel.
     """
     lines: List[str] = [f"# {title}", ""]
     if not reel:
@@ -310,7 +546,8 @@ def render_markdown(
             "_No highlight-worthy moments detected — a quiet game, or muted swings "
             "on the baseline model._"
         )
-        return "\n".join(lines) + "\n"
+        lines.extend(_divergence_md_section(divergence, sources))
+        return "\n".join(lines).rstrip() + "\n"
 
     tally = by_kind(reel)
     summary = ", ".join(f"{n} {kind}" for kind, n in sorted(tally.items()))
@@ -346,6 +583,7 @@ def render_markdown(
             lines.append(f"- `{d.magnitude:.2f}` ply {d.ply}: {d.headline}")
         lines.append("")
 
+    lines.extend(_divergence_md_section(divergence, sources))
     return "\n".join(lines).rstrip() + "\n"
 
 
