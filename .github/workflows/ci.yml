@@ -11,8 +11,9 @@ on:
   # Only run PR CI for PRs targeting `main` (the gate into the protected base).
   # The nightshift fleet opens ~120 short-lived `todo/* -> nightshift` PRs per night,
   # each of which would otherwise trigger CI and email on failure (the 177-email flood).
-  # Those branches are already covered by the orchestrator's local `pytest -q` green-gate
-  # before merge, so PR CI on them is redundant noise. See nightshift skill.
+  # Those branches are already covered by the orchestrator's local green-gate
+  # (scripts/gate.sh — the same check CI runs) before merge, so PR CI on them is
+  # redundant noise. See nightshift skill.
   pull_request:
     branches: [main]
 
@@ -35,66 +36,13 @@ jobs:
       # `maia2`/`plots` stay out so CI never pulls torch/matplotlib for the smoke run.
       - name: Install
         run: pip install -e ".[dev,data]"
-      # Tests live in tests/, plus the isolated baseline/, overlay/, and web/ suites
-      # (web/ holds test_import_game.py — the Lichess game-import tooling).
-      - name: Run tests
-        run: pytest tests baseline overlay web -q
-      # The live demo's eval-cache logic (web/live.js) is gated by a dependency-free node
-      # test: scrubbing a charted game must make zero /api/play calls (task 0123).
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run web JS tests
-        run: node web/test_live.js
-      # The overlay's live board router (overlay/overlay.js) is gated by a dependency-free
-      # node test: selecting a board routes only that board's events (task 0185).
-      - name: Run overlay JS tests
-        run: node overlay/test_router.test.js
-      # The live/stale feed state machine (overlay/feed.js makeStaleTracker) is gated by a
-      # dependency-free node test exercising the REAL feed.js so a dropped feed dims the
-      # bar instead of silently freezing on air (task 0202).
-      - name: Run overlay stale-feed JS tests
-        run: node overlay/test_stale.test.js
-      # The equity POV mapping (overlay/overlay.js orient/whiteToMove) is gated by a
-      # dependency-free node test: the side-to-move value flips sign vs white-POV when
-      # Black is on the move (task 0206).
-      - name: Run overlay POV JS tests
-        run: node overlay/test_pov.test.js
-      # The momentum cue (overlay/overlay.js momentum/makeMomentumTracker) is gated by a
-      # dependency-free node test: a swing arms the last-swing arrow and it decays over the
-      # next few quiet moves (task 0208).
-      - name: Run overlay momentum JS tests
-        run: node overlay/test_momentum.test.js
-      # The game-over card (overlay/overlay.js gameOverCard + router playersFor) is gated
-      # by a dependency-free node test: a terminal result maps to result/winner/headline
-      # and the followed board's roster names the winner (task 0213).
-      - name: Run overlay game-over JS tests
-        run: node overlay/test_gameover.test.js
-      # The lower-third standings panel (overlay/standings.js orderTopN/rowsHTML) is gated
-      # by a dependency-free node test: a shuffled `grade --round --json` leaderboard
-      # renders rows in strict rank order, sliced to top-N (task 0231).
-      - name: Run overlay standings JS tests
-        run: node overlay/test_standings.test.js
-      # The flag-risk alert badge (overlay/overlay.js flagRiskAlert) is gated by a
-      # dependency-free node test: a side's 🚩 badge lights iff the server-emitted
-      # flag_risk block flags that side, and clock-blind sides never alert (task 0243).
-      - name: Run overlay flag-risk JS tests
-        run: node overlay/test_flagrisk.test.js
-      # The colorblind-safe palette toggle (overlay/overlay.js paletteClass) is gated by a
-      # dependency-free node test: ?palette=cvd maps to the .palette-cvd class (defined in
-      # overlay.css to swap the red/green signalling to a CVD-safe blue/orange), and the
-      # default palette adds no class (task 0254).
-      - name: Run overlay palette JS tests
-        run: node overlay/test_palette.test.js
-      # The out-of-distribution high-rating marker (overlay/overlay.js ratingOod) is gated
-      # by a dependency-free node test: the bar marks lower-confidence iff the server-emitted
-      # `rating_ood` boolean is strictly true (both players over the coarse >2000 Maia-2
-      # bucket), and a missing field degrades to no marker (task 0255).
-      - name: Run overlay rating-OOD JS tests
-        run: node overlay/test_rating_ood.test.js
-      # The focus-cut lower-third banner (overlay/overlay.js focusBanner) is gated by a
-      # dependency-free node test: a server `focus` event carrying a `reason` cue maps to a
-      # banner spec shown verbatim, while a routing-only focus (no reason, e.g. a caster
-      # pin re-route) produces no banner (task 0264).
-      - name: Run overlay focus-banner JS tests
-        run: node overlay/test_focus_banner.test.js
+      # SINGLE SOURCE OF TRUTH: CI and the nightshift fleet's --test-cmd both run
+      # scripts/gate.sh, so the local green-gate and CI can never drift apart. The script
+      # runs `pytest tests baseline overlay web` plus every dependency-free Node suite
+      # (web/test_live.js + overlay/*.test.js, globbed so new ones are gated automatically).
+      # Run it locally before pushing: `scripts/gate.sh`.
+      - name: Gate (same check developers run locally)
+        run: bash scripts/gate.sh
