@@ -653,6 +653,42 @@ def render_leaderboard_csv(scores: List[PlayerScore]) -> str:
     return buf.getvalue()
 
 
+# Caster-facing markdown leaderboard (task 0244): a GitHub/Discord-flavored table a
+# caster can paste straight into a recap. Display-oriented (mirrors the text columns of
+# `render_leaderboard`), NOT the flat machine schema of the CSV/JSON export.
+LEADERBOARD_MD_HEADERS = ["#", "Player", "Acc%", "Lead", "Blunders", "Worst"]
+
+
+def render_leaderboard_md(scores: List[PlayerScore]) -> str:
+    """The round leaderboard as a GitHub/Discord markdown table (trailing newline).
+
+    One header row + alignment separator + one row per player, in the ranked order of
+    ``scores`` (already sorted by :func:`round_leaderboard`). Columns mirror the caster
+    text table: rank, player, accuracy %, lead (mean Δpeer), blunders, and the worst move
+    (``SAN ±Δ`` via :func:`_worst_cell`). Pure formatting — no model calls. A ``|`` inside
+    a player name would break the table, so any literal pipe is escaped as ``\\|``.
+    """
+
+    def esc(text: str) -> str:
+        return text.replace("|", "\\|")
+
+    lines = [
+        "| " + " | ".join(LEADERBOARD_MD_HEADERS) + " |",
+        "| " + " | ".join("---" for _ in LEADERBOARD_MD_HEADERS) + " |",
+    ]
+    for i, s in enumerate(scores, start=1):
+        cells = [
+            str(i),
+            esc(s.name),
+            f"{s.accuracy:.1f}",
+            f"{s.mean_peer:+.1f}",
+            str(s.blunders),
+            esc(_worst_cell(s.worst)),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def render_scoreline(line: GameScoreline) -> List[str]:
     """A White-vs-Black grade-label table + mean Δpeer + worst move, as text lines."""
     w, b = line.white, line.black

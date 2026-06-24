@@ -410,6 +410,37 @@ def test_leaderboard_export_rows_schema_and_rank():
     assert [p["player"] for p in parsed] == [r["player"] for r in rows]
 
 
+def test_leaderboard_md_is_a_valid_table_ordered_by_sort():
+    from chess_equity.grading import (
+        LEADERBOARD_MD_HEADERS,
+        render_leaderboard_md,
+        round_leaderboard,
+    )
+
+    for sort in ("accuracy", "lead", "blunders"):
+        scores = round_leaderboard(_round_games(), sort=sort)
+        md = render_leaderboard_md(scores)
+        lines = md.splitlines()
+        # Header row + separator row + one row per player; trailing newline present.
+        assert md.endswith("\n")
+        assert len(lines) == len(scores) + 2
+        # Every line is a pipe-delimited markdown row with the same column count.
+        ncols = len(LEADERBOARD_MD_HEADERS)
+        for line in lines:
+            assert line.startswith("| ") and line.endswith(" |")
+            assert line.count("|") == ncols + 1
+        # Header names and a GitHub-style separator row of dashes.
+        header_cells = [c.strip() for c in lines[0].strip("| ").split(" | ")]
+        assert header_cells == LEADERBOARD_MD_HEADERS
+        assert set("".join(lines[1].split())) <= set("|-")
+        # Rows are in ranked order: first column is 1..N, players match `scores`.
+        body = lines[2:]
+        ranks = [row.strip("| ").split(" | ")[0].strip() for row in body]
+        assert ranks == [str(i) for i in range(1, len(scores) + 1)]
+        players = [row.strip("| ").split(" | ")[1].strip() for row in body]
+        assert players == [s.name for s in scores]
+
+
 def test_position_phase_heuristic():
     from chess_equity.grading import position_phase
 
