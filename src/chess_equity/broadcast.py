@@ -245,6 +245,43 @@ def live_caption(
     return base
 
 
+# Short caster lead-ins used to vary a caption that would otherwise repeat the
+# immediately-preceding line verbatim (task 0274). Consecutive plies are opposite
+# colours so SAN usually differs, but an identical SAN can recur back-to-back (e.g.
+# White ``O-O`` then Black ``O-O``); with the same grade and swing the two
+# :func:`live_caption` lines are byte-identical, which reads as a stuck/broken overlay
+# on stream. Each lead-in keeps the move's meaning, so the move still gets a caption —
+# we vary phrasing rather than drop a duplicate.
+_REPEAT_LEADS = ("Again — ", "And once more — ", "Still — ")
+
+
+class CaptionDeduper:
+    """Suppress identical back-to-back caster captions in a live stream (task 0274).
+
+    :func:`live_caption` is stateless — it sees only the current move, so it cannot tell
+    that the line it just composed is byte-identical to the previous one. This thin
+    wrapper holds the previous *base* caption and, when a caption repeats it, prepends a
+    rotating short lead-in (:data:`_REPEAT_LEADS`) so no two consecutive emitted lines
+    are equal. ``None`` (an ungraded tick) passes straight through and does not reset the
+    streak, so a skipped opening ply between two identical captions still de-dupes.
+    """
+
+    def __init__(self) -> None:
+        self._last_base: Optional[str] = None
+        self._streak = 0
+
+    def feed(self, caption: Optional[str]) -> Optional[str]:
+        if caption is None:
+            return None
+        if caption == self._last_base:
+            lead = _REPEAT_LEADS[self._streak % len(_REPEAT_LEADS)]
+            self._streak += 1
+            return lead + caption
+        self._last_base = caption
+        self._streak = 0
+        return caption
+
+
 @dataclass(frozen=True)
 class MoveEvent:
     """One published move: position, clocks, ratings, and equity.
