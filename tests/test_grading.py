@@ -465,3 +465,52 @@ def test_phase_breakdown_in_json_and_csv():
         assert phase_moves == int(p["n_moves"])
         for phase in PHASES:
             assert 0.0 <= float(p[f"{phase}_acc"]) <= 100.0
+
+
+# --------------------------------------------------------------------------- #
+# Equity-swing sparkline (task 0239)
+# --------------------------------------------------------------------------- #
+
+
+def _grade(equity_after, mover_white=True, ply=1):
+    """A minimal MoveGrade fixture for the pure sparkline function."""
+    from chess_equity.grading import MoveGrade
+
+    return MoveGrade(
+        ply=ply, san="e4", uci="e2e4", mover_white=mover_white, mover_elo=1500,
+        phase="opening", equity_after=equity_after, expected_equity=50.0,
+        equity_best=equity_after, grade_peer=0.0, grade_best=0.0,
+        label="ok", best_uci="e2e4", cp_loss=0.0,
+    )
+
+
+def test_sparkline_has_one_block_per_graded_ply():
+    from chess_equity.grading import equity_sparkline
+
+    pgn = "1. e4 e5 2. Nf3 Nc6 *"
+    game = chess.pgn.read_game(io.StringIO(pgn))
+    grades = EquityGrader(LichessBaselineModel()).grade_game(game, 1500, 1500)
+    spark = equity_sparkline(grades)
+    assert len(spark) == len(grades) == 4
+
+
+def test_sparkline_rises_for_a_winning_white_trajectory():
+    from chess_equity.grading import SPARK_BLOCKS, equity_sparkline
+
+    # White equity climbs 5 → 50 → 95 → 100: blocks must be non-decreasing and top out.
+    grades = [_grade(e, mover_white=True, ply=i)
+              for i, e in enumerate([5.0, 50.0, 95.0, 100.0], start=1)]
+    spark = equity_sparkline(grades)
+    assert len(spark) == 4
+    idx = [SPARK_BLOCKS.index(c) for c in spark]
+    assert idx == sorted(idx)              # non-decreasing
+    assert spark[0] == SPARK_BLOCKS[0]     # near-empty board floor
+    assert spark[-1] == SPARK_BLOCKS[-1]   # full block when White is fully winning
+
+
+def test_sparkline_is_white_pov_for_black_movers():
+    from chess_equity.grading import SPARK_BLOCKS, equity_sparkline
+
+    # A Black mover sitting on equity_after=90 (Black winning) is White-POV ~10 → low block.
+    spark = equity_sparkline([_grade(90.0, mover_white=False)])
+    assert spark == SPARK_BLOCKS[0]

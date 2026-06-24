@@ -354,11 +354,20 @@ def _run_grade(args: argparse.Namespace) -> int:
             )
             print(f"wrote {n} annotated moves to {args.annotate_pgn}")
         else:
-            from chess_equity.grading import render_scoreline, scoreline
+            from chess_equity.grading import (
+                equity_sparkline,
+                render_scoreline,
+                scoreline,
+            )
 
             grades = _grade_game(model, args.pgn, args.white_elo, args.black_elo)
             for line in _grade_lines(grades):
                 print(line)
+            # One-line White-POV equity-swing sparkline (task 0239): the whole-game shape
+            # at a glance, pure over the grades above — no extra model calls.
+            if getattr(args, "sparkline", False) and grades:
+                print()
+                print(equity_sparkline(grades))
             # Per-side caster scoreline (task 0200): a one-glance accuracy-style summary
             # aggregated only from the per-move grades — no extra model calls.
             line = scoreline(grades)
@@ -1661,6 +1670,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--csv", action="store_true",
         help="with --round, print the leaderboard to stdout as CSV with the same columns "
              "as --json (suppresses the text table)",
+    )
+    gr.add_argument(
+        "--sparkline", action="store_true",
+        help="also print a one-line eighth-block sparkline of the per-ply White-POV "
+             "equity series (one block per graded ply) — the swing shape at a glance",
     )
     add_model_arg(gr)
 
