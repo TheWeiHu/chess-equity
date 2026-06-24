@@ -762,6 +762,56 @@ def test_focus_director_result_for_other_board_keeps_the_pin():
     assert d.note(1, 0.99) is None  # still suppressed by the pin
 
 
+# Director cue (task 0260): every cut sets a human-readable `last_reason` explaining
+# WHY focus moved, reusing the magnitudes already in `recent` so casters/captions can
+# voice the cut. Board labels are 1-based ("Bd3" == 0-based index 2).
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_director_cut_emits_a_reason_naming_board_and_magnitudes():
+    """A drama cut records a cue that names the new (1-based) board and BOTH compared
+    magnitudes — the erupting board's swing vs the board being left."""
+    # decay=1.0 keeps the standing scores exact so the cue's magnitudes are unambiguous;
+    # the cue always reports the *decayed* prev score (the same value the margin test uses).
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d.note(0, 0.4)  # adopt board 0 with a moderate standing score
+    assert d.last_reason is None  # silent adoption: no cut, no cue yet
+    assert d.note(2, 0.9) == 2  # board 2 (index 2 -> "Bd3") erupts and steals focus
+    reason = d.last_reason
+    assert reason is not None
+    assert "Bd3" in reason  # names the NEW board, 1-based
+    assert "+0.9" in reason  # the erupting board's magnitude
+    assert "+0.4" in reason  # the board being cut away from
+
+
+def test_focus_director_reason_unset_when_no_cut():
+    """Hysteresis blip below the margin leaves `last_reason` untouched (no cut fired)."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.note(1, FOCUS_MARGIN - 0.01) is None
+    assert d.last_reason is None
+
+
+def test_focus_director_pin_records_a_pin_reason():
+    """Pinning a different board sets a caster-pin cue naming the pinned (1-based) board."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.pin(2, 3) == 2
+    assert d.last_reason is not None and "Bd3" in d.last_reason
+    assert "pin" in d.last_reason.lower()
+
+
+def test_auto_follow_focus_event_carries_the_director_cue():
+    """The overlay `focus` event threads the cue so the cut reason can be voiced/subtitled
+    via the --captions-srt/vtt path."""
+    events = _auto_overlay_events_for(_two_board_round_with_drama())
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a dramatic board must trigger a focus cut"
+    reason = focuses[-1].get("reason")
+    assert isinstance(reason, str) and reason, "focus event must carry a reason string"
+    assert "Bd2" in reason  # cut to the dramatic board (0-based index 1 -> "Bd2")
+
+
 # A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
 # scholar's mate (a huge final-move swing the material baseline scores as drama). Tiny
 # illustrative fixture for the routing unit test only — NOT thesis evidence.
