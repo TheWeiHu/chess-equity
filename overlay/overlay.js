@@ -502,12 +502,20 @@
 
   // ---- DOM wiring --------------------------------------------------------
 
+  // Map a palette name to the root CSS class that swaps the red/green signalling to a
+  // colorblind-safe set (task 0254). Pure so it's unit-testable without a DOM; "" means
+  // the default palette (no class added).
+  function paletteClass(palette) {
+    return palette === "cvd" ? "palette-cvd" : "";
+  }
+
   function params() {
     const p = new URLSearchParams(global.location ? global.location.search : "");
     return {
       src: p.get("src") || "./mock-game.json",
       layout: p.get("layout") || "horizontal",
       theme: p.get("theme") || "dark",
+      palette: p.get("palette") === "cvd" ? "cvd" : "default", // colorblind-safe blue/orange vs default red/green (task 0254)
       pov: (p.get("pov") === "stm" || p.get("pov") === "stm-bar") ? p.get("pov") : "white", // bar POV: classic White, side-to-move readout, or side-to-move full-bar flip
       cp: p.get("cp") !== "0",
       cpbar: p.get("cpbar") === "1",
@@ -935,6 +943,7 @@
       root.classList.remove("layout-horizontal", "layout-vertical");
       root.classList.add("layout-" + cfg.layout);
       root.classList.toggle("pov-stm", cfg.pov === "stm" || cfg.pov === "stm-bar");
+      root.classList.toggle("palette-cvd", paletteClass(cfg.palette) === "palette-cvd");
     }
     document.body.className = "theme-" + cfg.theme;
 
@@ -990,6 +999,7 @@
     makeToastTracker: makeToastTracker,
     makeBoardRouter: makeBoardRouter,
     gameOverCard: gameOverCard,
+    paletteClass: paletteClass,
   };
 
   if (typeof document !== "undefined") {

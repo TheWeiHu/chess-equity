@@ -107,6 +107,7 @@
       <label><input type="checkbox" id="cpbar" /> Centipawn full bar</label>
       <label><input type="checkbox" id="caster" /> Caster mode (drama flares)</label>
       <label><input type="checkbox" id="legend" /> Legend key (bar + grade colors)</label>
+      <label><input type="checkbox" id="palette" /> Colorblind-safe colors (blue/orange)</label>
     </div>
   </div>
 
@@ -130,8 +131,8 @@
   var $ = function (id) { return document.getElementById(id); };
 
   // Every form field, so persistence covers exactly what build() reads.
-  var FIELDS = ["feed","round","custom","welo","belo","layout","theme","pov","cp","cpbar","caster","legend"];
-  var CHECKS = { cp: true, cpbar: true, caster: true, legend: true };
+  var FIELDS = ["feed","round","custom","welo","belo","layout","theme","pov","cp","cpbar","caster","legend","palette"];
+  var CHECKS = { cp: true, cpbar: true, caster: true, legend: true, palette: true };
   var STORE_KEY = "chess-equity-overlay-config";
 
   // Persist the setup across reloads — an OBS browser-source reload otherwise loses
@@ -181,6 +182,7 @@
     if ($("cpbar").checked) params.set("cpbar", "1");
     if ($("caster").checked) params.set("caster", "1");
     if ($("legend").checked) params.set("legend", "1");
+    if ($("palette").checked) params.set("palette", "cvd");
     var welo = $("welo").value.trim(), belo = $("belo").value.trim();
     if (welo) params.set("welo", welo);
     if (belo) params.set("belo", belo);

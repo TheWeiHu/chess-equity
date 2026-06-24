@@ -30,6 +30,21 @@ html, body {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.7);
 }
 
+/* Colorblind-safe palette (task 0254): ?palette=cvd / config.html toggle adds
+   `.palette-cvd` to #overlay. The default red(--bad)/green(--accent) signalling is the
+   classic deuteranopia/protanopia failure case (~8% of male viewers can't separate them),
+   so flip ONLY the red-green axis to a CVD-safe blue/orange pair (Okabe-Ito inspired).
+   Custom-property overrides cascade to everything driven by --accent/--bad (grade pills,
+   flag-risk, momentum, legend swatches); the equity bar is white/black and already safe.
+   Additive — without the class the default palette is untouched. */
+.overlay.palette-cvd {
+  --accent: #4ea3f5;                 /* equity-positive: blue, not green */
+  --bad: #f08c00;                    /* flag-risk / negative: orange, not red */
+}
+/* Drama toasts hardcode the green clutch / red blunder kinds, so override them too. */
+.overlay.palette-cvd .drama-toast.kind-clutch  { background: #4ea3f5; color: #04223a; }
+.overlay.palette-cvd .drama-toast.kind-blunder { background: #f08c00; color: #2a1a06; box-shadow: 0 0 14px rgba(240, 140, 0, 0.7); }
+
 /* Horizontal: names flank a wide bar. */
 .layout-horizontal {
   grid-template-columns: minmax(120px, 1fr) 6fr minmax(120px, 1fr);
