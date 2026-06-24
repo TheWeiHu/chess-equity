@@ -1459,6 +1459,13 @@ class FocusDirector:
     peak. A board whose drama peak was its *final* move loses that score over the next
     few plies and yields to a currently-active rival. (Advancing focus off a *finished*
     board is still the overlay router's job, driven by the ``result`` event, task 0189.)
+
+    Caster pin (task 0259): :meth:`pin` lets a caster hold focus on a board for a fixed
+    number of ``note`` ticks (plies), suppressing every auto-cut regardless of how
+    dramatic a rival gets; when the pin expires drama-following resumes automatically.
+    A pin also clears the moment the pinned board's game ends (:meth:`result`), so a
+    caster pinned to a finished game isn't stranded. ``recent`` keeps decaying/updating
+    during a pin, so the director is current the instant the pin lifts.
     """
 
     def __init__(
@@ -1468,6 +1475,34 @@ class FocusDirector:
         self.decay = decay
         self.focus: Optional[int] = None
         self.recent: Dict[int, float] = {}
+        self.pinned: Optional[int] = None  # board a caster has pinned, else None
+        self.pin_remaining: int = 0  # note() ticks the pin still holds
+
+    def pin(self, board: int, plies: int) -> Optional[int]:
+        """Caster directive: hold focus on ``board`` for ``plies`` :meth:`note` ticks,
+        suppressing auto-cuts, then auto-resume drama-following.
+
+        Returns ``board`` when the pin moves the live cut (so the caller emits one
+        ``focus`` event), else ``None`` (the board was already focused). A ``plies`` of
+        0 or less is a no-op hold but still cuts to ``board`` if it differs from focus.
+        """
+        self.pinned = board
+        self.pin_remaining = max(0, int(plies))
+        if self.focus != board:
+            self.focus = board
+            return board
+        return None
+
+    def clear_pin(self) -> None:
+        """Drop any active pin; drama-following resumes on the next :meth:`note`."""
+        self.pinned = None
+        self.pin_remaining = 0
+
+    def result(self, board: int) -> None:
+        """A board's game ended (task 0189). If it was the pinned board, clear the pin
+        so focus can auto-resume off the finished game."""
+        if self.pinned == board:
+            self.clear_pin()
 
     def note(self, board: int, magnitude: float) -> Optional[int]:
         """Record ``board``'s latest drama ``magnitude``; return the new focus board if
@@ -1482,6 +1517,13 @@ class FocusDirector:
         self.recent[board] = magnitude
         if self.focus is None:
             self.focus = board  # adopt the first board silently
+            return None
+        if self.pin_remaining > 0:
+            # A caster pin holds focus regardless of rival magnitude. Tick it down;
+            # when it reaches zero the pin lifts and drama-following resumes next note.
+            self.pin_remaining -= 1
+            if self.pin_remaining == 0:
+                self.pinned = None
             return None
         if board == self.focus:
             return None
@@ -1535,7 +1577,10 @@ def overlay_events(
 
     def on_result(res: "ResultEvent") -> None:
         # A board's game ended: queue a routing-only `result` event so the overlay's
-        # board router can advance focus off the finished board (task 0189).
+        # board router can advance focus off the finished board (task 0189). If a caster
+        # had pinned this board, lift the pin so drama-following auto-resumes (task 0259).
+        if director is not None:
+            director.result(res.board)
         queued.append(res.to_overlay())
 
     # `--board auto` (task 0256): track each board's recent drama and emit a `focus`
