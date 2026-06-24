@@ -283,14 +283,18 @@ values are **seconds remaining**.
 
 // focus cut — emitted by the SERVER-side drama auto-director when `broadcast --board
 // auto` is on (task 0256): the producer tracks each board's recent drama and sends this
-// the moment the liveliest board changes, so the overlay auto-cuts to it. Routing
-// metadata (never rendered); the overlay follows it unless the caster has pinned a board
-// (a manual pick always wins). Multi-game rounds only. This is the server-driven
+// the moment the liveliest board changes, so the overlay auto-cuts to it. The overlay
+// follows it unless the caster has pinned a board (a manual pick always wins). A drama
+// cut also carries a caption-ready `reason` cue (task 0260) which the overlay flashes as
+// a brief **lower-third banner** under the bar (task 0264) — "cut to Bd3: +0.9 swing vs
+// +0.4". A routing-only focus event (no `reason`, e.g. a caster-pin re-route) re-routes
+// silently without bannering. Multi-game rounds only. This is the server-driven
 // counterpart to the client `?autofollow=1` director above — use one or the other.
 {
   "type": "focus",
   "board": 1,
-  "game_id": "drama002"
+  "game_id": "drama002",
+  "reason": "cut to Bd2: +0.9 swing vs +0.4"
 }
 ```
 

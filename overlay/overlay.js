@@ -230,6 +230,25 @@
     };
   }
 
+  // Focus-cut banner (task 0264): map a server-side `focus` routing event to a
+  // lower-third render spec. The auto-director (`--board auto`, tasks 0256/0260) emits a
+  // `focus` event with a caption-ready `reason` ("cut to Bd3: +0.9 swing vs +0.4") the
+  // moment it cuts to a livelier board; this turns it into the banner text. Returns
+  // {board, text} or null when there's nothing to show — a non-focus event, or a
+  // routing-only focus with no `reason` (e.g. a caster pin cut, or the silent opening
+  // adopt), which should re-route the board WITHOUT flashing an empty banner.
+  function focusBanner(evt) {
+    if (!evt || evt.type !== "focus") return null;
+    var reason = evt.reason;
+    if (typeof reason !== "string") return null;
+    reason = reason.trim();
+    if (!reason) return null;
+    return {
+      board: typeof evt.board === "number" ? evt.board : null,
+      text: reason,
+    };
+  }
+
   // Decaying drama-toast tracker (task 0241): a timer-free, tick-driven state machine
   // (mirrors makeMomentumTracker) so the toast lingers a few moves after a drama event
   // and then auto-hides — instead of vanishing the instant a quiet move arrives.
@@ -844,6 +863,26 @@
     }, 5000);
   }
 
+  // Focus-cut lower third (task 0264): render the focusBanner() spec under the bar, then
+  // auto-hide after a few seconds (the cut is a momentary "why" cue, not a standing HUD).
+  // A null spec leaves any standing banner alone (routing-only focus events don't clear
+  // a fresh cut's banner); call with null is a no-op so pins/silent adopts don't blank it.
+  let focusBannerTimer = null;
+  function showFocusBanner(spec) {
+    const el = q("[data-focus-banner]");
+    if (!el || !spec) return;
+    el.textContent = spec.text;
+    el.hidden = false;
+    // Restart the slide-up entrance on each fresh cut.
+    el.style.animation = "none";
+    void el.offsetWidth;
+    el.style.animation = "";
+    if (focusBannerTimer) clearTimeout(focusBannerTimer);
+    focusBannerTimer = setTimeout(function () {
+      el.hidden = true;
+    }, 6000);
+  }
+
   // Live board selector for a multi-game round (task 0185). Hidden for a single board
   // (<= 1 known), revealed and populated otherwise; changing it tells the router which
   // board to follow, and subsequent events for that board flow to the bar.
@@ -907,6 +946,10 @@
       boardRouter.learn(evt);
       boardRouter.note(evt); // auto-director may steal focus to the most-dramatic board
       renderBoardSelector(boardRouter);
+      // A server-side auto-director cut (`focus` event with a `reason`) flashes the
+      // lower-third banner explaining WHY we cut (task 0264). Done before the accepts()
+      // drop below, since `focus` events are routing metadata the router never renders.
+      if (evt.type === "focus") showFocusBanner(focusBanner(evt));
       // Drop events for boards we aren't following (and "boards"/"result" metadata).
       if (!boardRouter.accepts(evt)) return;
     } else if (evt.type === "result") {
@@ -1019,6 +1062,7 @@
     momentum: momentum,
     makeMomentumTracker: makeMomentumTracker,
     dramaToast: dramaToast,
+    focusBanner: focusBanner,
     makeToastTracker: makeToastTracker,
     makeBoardRouter: makeBoardRouter,
     gameOverCard: gameOverCard,

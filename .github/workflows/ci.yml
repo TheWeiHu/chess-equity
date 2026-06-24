@@ -80,3 +80,9 @@ jobs:
       # bucket), and a missing field degrades to no marker (task 0255).
       - name: Run overlay rating-OOD JS tests
         run: node overlay/test_rating_ood.test.js
+      # The focus-cut lower-third banner (overlay/overlay.js focusBanner) is gated by a
+      # dependency-free node test: a server `focus` event carrying a `reason` cue maps to a
+      # banner spec shown verbatim, while a routing-only focus (no reason, e.g. a caster
+      # pin re-route) produces no banner (task 0264).
+      - name: Run overlay focus-banner JS tests
+        run: node overlay/test_focus_banner.test.js

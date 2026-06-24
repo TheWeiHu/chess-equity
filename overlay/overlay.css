@@ -252,6 +252,37 @@ html, body {
   to   { transform: translateX(-50%) scale(1);    opacity: 1; }
 }
 
+/* Focus-cut lower third (task 0264): a brief banner under the bar showing WHY the
+   server-side auto-director (`--board auto`) just cut to this board — the `reason` cue
+   on the `focus` event ("cut to Bd3: +0.9 swing vs +0.4"). Broadcast lower-third look:
+   dark slab, accent left rule, slides up on each cut, then fades via a JS timer. */
+.focus-banner {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 92%;
+  padding: 6px 16px 6px 14px;
+  border-left: 4px solid var(--accent, #4ade80);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f3f6fb;
+  background: rgba(8, 14, 24, 0.82);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  animation: focus-banner-in 0.35s ease;
+  pointer-events: none;
+}
+.focus-banner[hidden] { display: none; }
+@keyframes focus-banner-in {
+  from { transform: translate(-50%, 10px); opacity: 0; }
+  to   { transform: translateX(-50%);      opacity: 1; }
+}
+
 /* Human-edge badge (task 0048): persistent while the practical equity bar and the
    classic centipawn bar disagree on the position — the project's wedge made visible.
    Sits below the bar (left) so it doesn't collide with the drama flare (top-right). */
