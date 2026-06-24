@@ -583,7 +583,12 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         return 0
 
     if args.serve_sse is not None:
-        from chess_equity.broadcast import PinChannel, overlay_events, serve_sse
+        from chess_equity.broadcast import (
+            FocusStatus,
+            PinChannel,
+            overlay_events,
+            serve_sse,
+        )
 
         # A live round (--round/--url) may be tuned into before its first move: keep
         # polling (no idle stop) and send keep-alive heartbeats so the connection
@@ -595,6 +600,10 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         # so a caster can hold focus on a board mid-stream. One shared channel feeds both
         # the handler (writer) and every overlay_events generator (reader/director).
         pin_channel = PinChannel() if auto_follow else None
+        # Caster status OUTPUT channel (task 0265): under `--board auto`, expose
+        # `GET /focus` so a caster control surface can read back which board is live and
+        # why. Shared between the handler (reader) and the overlay_events director (writer).
+        focus_status = FocusStatus() if auto_follow else None
 
         def make_events():
             ingestor = BroadcastIngestor(
@@ -611,6 +620,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
                 auto_follow=auto_follow,
                 bias_player=bias_player,
                 pin_channel=pin_channel,
+                focus_status=focus_status,
                 interval=args.interval,
                 max_polls=args.max_polls,
                 max_idle_polls=None if is_live else 1,
@@ -623,6 +633,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             port=args.serve_sse,
             directory=_overlay_static_dir(),
             pin_channel=pin_channel,
+            focus_status=focus_status,
             log=lambda msg: print(msg, file=sys.stderr),
         )
         return 0
