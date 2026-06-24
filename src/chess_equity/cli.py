@@ -333,14 +333,20 @@ def _run_grade(args: argparse.Namespace) -> int:
             # Pool every board's move grades by player and rank the round (task 0207).
             games = _grade_round(model, args.pgn, args.white_elo, args.black_elo)
             scores = round_leaderboard(games, sort=getattr(args, "sort", "accuracy"))
+            # Optional continuous cp-loss accuracy column (task 0233); 'labels' (default)
+            # keeps every surface byte-identical. Ranking is unaffected either way.
+            accuracy_model = getattr(args, "accuracy_model", "labels")
             # --json/--csv emit ONLY the machine-readable leaderboard to stdout (task 0214)
             # so it pipes cleanly into broadcast lower-third graphics; --json wins if both.
             if getattr(args, "json", False):
-                print(json.dumps(leaderboard_export_rows(scores), indent=2))
+                print(json.dumps(
+                    leaderboard_export_rows(scores, accuracy_model=accuracy_model),
+                    indent=2,
+                ))
             elif getattr(args, "csv", False):
-                print(render_leaderboard_csv(scores), end="")
+                print(render_leaderboard_csv(scores, accuracy_model=accuracy_model), end="")
             else:
-                for row in render_leaderboard(scores):
+                for row in render_leaderboard(scores, accuracy_model=accuracy_model):
                     print(row)
             if args.summary_json:
                 with open(args.summary_json, "w", encoding="utf-8") as fh:
@@ -1623,6 +1629,13 @@ def main(argv: Optional[List[str]] = None) -> int:
              "accuracy %% desc), 'lead' (mean Δpeer desc — rewards beating peers over "
              "avoiding mistakes), or 'blunders' (fewest first); the other metrics then "
              "name remain as deterministic tie-breaks",
+    )
+    gr.add_argument(
+        "--accuracy-model", choices=("labels", "cploss"), default="labels",
+        help="with --round, add an extra accuracy column: 'labels' (default — only the "
+             "ok-or-better share column) or 'cploss' (also a continuous 0-100 "
+             "Lichess-style accuracy from mean centipawn loss). Display/export only — the "
+             "ranking is unchanged",
     )
     gr.add_argument(
         "--summary-json", metavar="OUT",

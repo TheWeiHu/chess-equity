@@ -410,6 +410,59 @@ def test_leaderboard_export_rows_schema_and_rank():
     assert [p["player"] for p in parsed] == [r["player"] for r in rows]
 
 
+def test_accuracy_from_cp_loss_curve():
+    from chess_equity.grading import accuracy_from_cp_loss
+
+    # No loss → ~perfect; monotonically non-increasing as the mean loss grows; clamped 0..100.
+    assert accuracy_from_cp_loss(0.0) == pytest.approx(100.0, abs=0.1)
+    prev = 101.0
+    for cp in (0.0, 25.0, 50.0, 100.0, 300.0, 1000.0):
+        acc = accuracy_from_cp_loss(cp)
+        assert 0.0 <= acc <= 100.0
+        assert acc <= prev + 1e-9  # non-increasing
+        prev = acc
+    # Sign of the loss doesn't matter — it's a magnitude.
+    assert accuracy_from_cp_loss(-80.0) == pytest.approx(accuracy_from_cp_loss(80.0))
+
+
+def test_cploss_accuracy_model_adds_column_without_changing_default_schema():
+    from chess_equity.grading import (
+        LEADERBOARD_COLUMNS,
+        LEADERBOARD_CSV_COLUMNS,
+        leaderboard_export_rows,
+        render_leaderboard,
+        render_leaderboard_csv,
+        round_leaderboard,
+    )
+
+    scores = round_leaderboard(_round_games())
+    # The fixture's baseline model produces a cp eval per move, so the cp-loss accuracy is
+    # populated (a 0..100 float) for the pooled players.
+    assert any(s.accuracy_cploss is not None for s in scores)
+    for s in scores:
+        assert s.accuracy_cploss is None or 0.0 <= s.accuracy_cploss <= 100.0
+
+    # Default ('labels') leaves every surface byte-identical to before.
+    assert all(
+        set(r) == set(LEADERBOARD_COLUMNS) | {"phases"}
+        for r in leaderboard_export_rows(scores)
+    )
+    default_header = render_leaderboard(scores)[0]
+    assert "acc_cp%" not in default_header
+    default_csv = render_leaderboard_csv(scores).splitlines()[0].split(",")
+    assert default_csv == LEADERBOARD_CSV_COLUMNS
+
+    # 'cploss' appends the extra column to text, JSON, and CSV.
+    cp_header = render_leaderboard(scores, accuracy_model="cploss")[0]
+    assert "acc_cp%" in cp_header
+    cp_rows = leaderboard_export_rows(scores, accuracy_model="cploss")
+    for r in cp_rows:
+        assert "accuracy_cploss" in r
+        assert r["accuracy_cploss"] is None or 0.0 <= r["accuracy_cploss"] <= 100.0
+    cp_csv_header = render_leaderboard_csv(scores, accuracy_model="cploss").splitlines()[0]
+    assert cp_csv_header.split(",") == LEADERBOARD_CSV_COLUMNS + ["accuracy_cploss"]
+
+
 def test_position_phase_heuristic():
     from chess_equity.grading import position_phase
 
