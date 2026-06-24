@@ -154,6 +154,33 @@ class MoveGrade:
         return asdict(self)
 
 
+# Eighth-block ramp (U+2581..U+2588), low → high, for the equity sparkline.
+SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
+
+
+def white_pov_equity(grade: MoveGrade) -> float:
+    """White-POV equity (0..100) after ``grade``'s move, flipping Black-mover POV."""
+    return grade.equity_after if grade.mover_white else 100.0 - grade.equity_after
+
+
+def equity_sparkline(grades: List[MoveGrade]) -> str:
+    """A one-line eighth-block sparkline of the per-ply White-POV equity series.
+
+    One block per graded ply (``len(result) == len(grades)``), each cell mapping the
+    move's White-POV equity over the full bar range [0, 100]% to one of the eight
+    ramp glyphs. Absolute scaling (not per-series min/max) so a genuinely winning
+    trajectory climbs toward █ and a flat game sits mid-height — the swing *shape* a
+    caster reads at a glance. Pure over already-computed grades; no model calls.
+    """
+    cells = []
+    n = len(SPARK_BLOCKS)
+    for g in grades:
+        frac = max(0.0, min(1.0, white_pov_equity(g) / 100.0))
+        idx = min(n - 1, int(frac * n))
+        cells.append(SPARK_BLOCKS[idx])
+    return "".join(cells)
+
+
 class EquityGrader:
     """Grades moves by Δequity using an :class:`EquityModel` + a peer policy."""
 
