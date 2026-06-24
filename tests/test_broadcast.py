@@ -705,6 +705,63 @@ def test_focus_decay_default_is_a_gentle_per_ply_factor():
     assert FocusDirector().decay == FOCUS_DECAY
 
 
+# Caster pin (task 0259): a pin holds focus for N note() ticks regardless of rival
+# drama, then auto-resumes drama-following; it also clears the moment the pinned
+# board's game ends.
+
+
+def test_focus_director_pin_holds_through_bigger_rival_drama():
+    """While pinned, no rival can steal the cut no matter how dramatic it gets."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)  # adopt board 0
+    assert d.pin(0, 2) is None  # pin the already-focused board: no cut emitted
+    # Two huge swings on board 1 land inside the 2-ply pin window: both suppressed.
+    assert d.note(1, 0.99) is None
+    assert d.note(1, 0.99) is None
+    assert d.focus == 0
+
+
+def test_focus_director_pin_to_another_board_emits_a_cut():
+    """Pinning a board other than the current focus moves the cut and returns it."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    assert d.pin(1, 3) == 1  # caster cuts to board 1 and pins it
+    assert d.focus == 1
+    assert d.pinned == 1
+
+
+def test_focus_director_pin_expires_then_drama_following_resumes():
+    """After the pin window elapses, normal margin logic resumes immediately."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 1)  # hold board 0 for exactly one tick
+    assert d.note(1, 0.99) is None  # tick 1: suppressed by the pin
+    assert d.pin_remaining == 0 and d.pinned is None  # pin has lifted
+    # Next dramatic move on board 1 now steals focus under the usual margin rule.
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_pin_cleared_on_result_of_pinned_board():
+    """A result for the pinned board clears the pin so focus can auto-resume."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 5)  # long pin on board 0
+    d.result(0)  # board 0's game ends -> pin lifts even though plies remained
+    assert d.pinned is None and d.pin_remaining == 0
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1  # drama-following resumes at once
+
+
+def test_focus_director_result_for_other_board_keeps_the_pin():
+    """A result for a *different* board must not disturb an active pin."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    d.pin(0, 5)
+    d.result(1)  # some other board ended; our pin is untouched
+    assert d.pinned == 0 and d.pin_remaining == 5
+    assert d.note(1, 0.99) is None  # still suppressed by the pin
+
+
 # A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
 # scholar's mate (a huge final-move swing the material baseline scores as drama). Tiny
 # illustrative fixture for the routing unit test only — NOT thesis evidence.
