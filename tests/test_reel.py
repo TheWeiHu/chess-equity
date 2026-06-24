@@ -16,6 +16,7 @@ from chess_equity.broadcast import MoveEvent
 from chess_equity.drama import score_event
 from chess_equity.reel import (
     _KIND_LABEL,
+    build_chapters,
     build_poster_svg,
     build_reel,
     build_srt,
@@ -527,3 +528,81 @@ def test_cli_reel_srt_alongside_out_dir(tmp_path):
     # With --out-dir and bare --srt, reel.srt lands next to reel.json/reel.md.
     assert (out / "reel.json").exists()
     assert (out / "reel.srt").exists()
+
+
+# --- VOD chapter markers (task 0237) -----------------------------------------
+
+_CHAPTER_RE = re.compile(r"^(\d{2}):(\d{2}):(\d{2}) (\w+): (\S+) \(([+-]\d+)\)$")
+
+
+def _chapter_seconds(stamp: str) -> int:
+    """Parse an ``HH:MM:SS`` chapter marker into whole seconds."""
+    h, m, s = (int(x) for x in stamp.split(":"))
+    return h * 3600 + m * 60 + s
+
+
+def test_build_chapters_starts_at_zero_and_is_monotonic():
+    reel = build_reel(_ONE_OF_EACH)
+    lines = build_chapters(reel).splitlines()
+    # One chapter marker per ranked moment, parsing to the documented format.
+    assert len(lines) == len(reel)
+    parsed = [_CHAPTER_RE.match(line) for line in lines]
+    assert all(parsed), [l for l, p in zip(lines, parsed) if p is None]
+    stamps = [_chapter_seconds(m.group(0).split(" ", 1)[0]) for m in parsed]
+    # YouTube requires the opening chapter at 00:00:00; stamps never go backwards.
+    assert stamps[0] == 0
+    assert stamps == sorted(stamps)
+
+
+def test_build_chapters_line_names_kind_san_and_signed_swing():
+    reel = build_reel(_ONE_OF_EACH)
+    lines = build_chapters(reel).splitlines()
+    for line, d in zip(lines, reel):
+        m = _CHAPTER_RE.match(line)
+        assert m.group(4) == d.kind
+        assert m.group(5) == d.san
+        assert m.group(6) == f"{d.delta_equity:+.0f}"
+
+
+def test_build_chapters_timeline_matches_the_clip_timeline():
+    # Chapters share the back-to-back clip timeline with the VTT/SRT exports: chapter i
+    # starts at the floored cumulative dwell time of every earlier clip.
+    reel = build_reel(_ONE_OF_EACH)
+    lines = build_chapters(reel).splitlines()
+    durations = clip_durations(reel)
+    expected_start = 0.0
+    for line, dur in zip(lines, durations):
+        stamp = line.split(" ", 1)[0]
+        assert _chapter_seconds(stamp) == int(expected_start)
+        expected_start += dur
+
+
+def test_build_chapters_empty_reel_is_empty():
+    assert build_chapters([]) == ""
+
+
+def test_cli_reel_writes_chapters(tmp_path):
+    from chess_equity.cli import main
+
+    # The committed sample's baseline swings are muted, so this only asserts the
+    # chapters artifact lands; format/timeline parity is covered by the unit tests
+    # over synthesized drama events.
+    chapters_path = tmp_path / "chapters.txt"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--chapters", str(chapters_path)]
+    )
+    assert rc == 0
+    assert chapters_path.exists()
+
+
+def test_cli_reel_chapters_alongside_out_dir(tmp_path):
+    from chess_equity.cli import main
+
+    out = tmp_path / "reel"
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--out-dir", str(out), "--chapters"]
+    )
+    assert rc == 0
+    # With --out-dir and bare --chapters, reel.chapters.txt lands next to reel.json.
+    assert (out / "reel.json").exists()
+    assert (out / "reel.chapters.txt").exists()
