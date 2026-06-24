@@ -50,6 +50,7 @@ import chess.pgn
 from chess_equity.adapters import EquityModel, ObjectiveEngine
 from chess_equity.clock import clock_adjusted_white_equity
 from chess_equity.data.schema import tc_bucket
+from chess_equity.grading import ACCURATE_LABELS
 
 # --------------------------------------------------------------------------- #
 # Event + move grading
@@ -78,6 +79,41 @@ def grade_delta(delta_equity: Optional[float]) -> Optional[str]:
         if delta_equity >= threshold:
             return label
     return "blunder"
+
+
+def _accuracy_pct(accurate: int, total: int) -> Optional[float]:
+    """Running ok-or-better accuracy %, or ``None`` before the side has a graded move.
+
+    ``None`` (not ``0.0``) until ``total > 0`` so the overlay can show "—" for a side
+    that has not moved yet rather than a misleading flat 0%.
+    """
+    return None if total <= 0 else round(100.0 * accurate / total, 1)
+
+
+def cumulative_accuracy(events: "Iterable[MoveEvent]") -> Dict[str, Optional[float]]:
+    """Per-side ok-or-better accuracy over a (finished) move-event stream.
+
+    The post-hoc counterpart to the live running figure the broadcast threads onto each
+    event: pools every graded move by its mover and reports the share graded
+    ok-or-better (:data:`~chess_equity.grading.ACCURATE_LABELS`), the same definition the
+    ``grade --round`` leaderboard uses. Returns ``{"white": pct|None, "black": pct|None}``
+    in 0..100. Pure reduction over fields the events already carry — no model calls — so
+    the live ``cumulative_accuracy_white``/``black`` on the final move of a game equals
+    this over the whole stream (pinned by the broadcast tests).
+    """
+    accurate = {True: 0, False: 0}  # mover_white -> ok-or-better count
+    total = {True: 0, False: 0}
+    for event in events:
+        if event.last_move_grade is None:
+            continue
+        mover_white = not event.white_to_move
+        total[mover_white] += 1
+        if event.last_move_grade in ACCURATE_LABELS:
+            accurate[mover_white] += 1
+    return {
+        "white": _accuracy_pct(accurate[True], total[True]),
+        "black": _accuracy_pct(accurate[False], total[False]),
+    }
 
 
 def live_caption(event: "MoveEvent") -> Optional[str]:
@@ -149,6 +185,13 @@ class MoveEvent:
     compute_ms: float
     cp: Optional[float] = None
     resync: bool = False
+    # Running per-side move accuracy *through this move*, in 0..100 (task 0245): the
+    # share of each side's moves so far graded ok-or-better, so the overlay can show
+    # "White 94% / Black 88%" live and update every ply. ``None`` for a side that has
+    # not moved yet. At a game's last move these equal :func:`cumulative_accuracy` over
+    # the whole stream. Both sides ride every event so the overlay needs no extra state.
+    cumulative_accuracy_white: Optional[float] = None
+    cumulative_accuracy_black: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -187,6 +230,17 @@ class MoveEvent:
                 "delta": None
                 if self.delta_equity is None
                 else self.delta_equity / 100.0,
+            }
+        # Running per-side accuracy (task 0245), in 0..100. Emitted as soon as either
+        # side has a graded move so the overlay's "White 94% / Black 88%" readout
+        # updates live; a side that has not moved yet stays ``None`` (overlay shows "—").
+        if (
+            self.cumulative_accuracy_white is not None
+            or self.cumulative_accuracy_black is not None
+        ):
+            event["accuracy"] = {
+                "white": self.cumulative_accuracy_white,
+                "black": self.cumulative_accuracy_black,
             }
         # Real drama classification (tasks 0020/0053): attach the chess_equity.drama
         # verdict so the overlay flares on the actual classifier (clutch / missed_win /
@@ -684,6 +738,12 @@ class GameTracker:
         # Only consulted when ``equity.cp is None``; models that carry cp are untouched.
         self.engine = engine
         self.emitted_ply = 0
+        # Running per-side ok-or-better tallies for the live accuracy readout (task 0245),
+        # keyed by mover_white -> [accurate, total]. Carried across append-only ingests;
+        # reset together with ``emitted_ply`` on a resync, since the moves they counted are
+        # re-emitted from scratch (so the figure is rebuilt, never double-counted).
+        self._acc_accurate = {True: 0, False: 0}
+        self._acc_total = {True: 0, False: 0}
         # The UCIs of every mainline move emitted so far, so a *correction* that
         # replaces an earlier move (not just a walk-back that shortens the PGN) is
         # caught: if the new mainline diverges from this prefix we resync. Rebuilt to
@@ -721,6 +781,8 @@ class GameTracker:
         resync = False
         if len(nodes) < self.emitted_ply or diverged:
             self.emitted_ply = 0
+            self._acc_accurate = {True: 0, False: 0}
+            self._acc_total = {True: 0, False: 0}
             resync = True
 
         white_elo, black_elo = self._elos()
@@ -785,6 +847,15 @@ class GameTracker:
             before = before_bar_white if mover_white else 100.0 - before_bar_white
             delta = after - before
 
+            # Fold this move into the mover's running accuracy tally before publishing,
+            # so the event carries the figure *through* this move (task 0245). Both sides'
+            # current accuracy ride every event; a side yet to move stays None.
+            grade = grade_delta(delta)
+            if grade is not None:
+                self._acc_total[mover_white] += 1
+                if grade in ACCURATE_LABELS:
+                    self._acc_accurate[mover_white] += 1
+
             events.append(
                 MoveEvent(
                     game_id=self.game_id,
@@ -799,11 +870,17 @@ class GameTracker:
                     black_elo=self.black_elo,
                     equity=bar_equity,
                     delta_equity=delta,
-                    last_move_grade=grade_delta(delta),
+                    last_move_grade=grade,
                     source=self.model.__class__.__name__,
                     compute_ms=compute_ms,
                     cp=cp,
                     resync=resync,
+                    cumulative_accuracy_white=_accuracy_pct(
+                        self._acc_accurate[True], self._acc_total[True]
+                    ),
+                    cumulative_accuracy_black=_accuracy_pct(
+                        self._acc_accurate[False], self._acc_total[False]
+                    ),
                 )
             )
             prev_equity_white = equity_white
