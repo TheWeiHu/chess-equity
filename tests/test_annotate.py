@@ -6,7 +6,12 @@ from pathlib import Path
 import chess
 import chess.pgn
 
-from chess_equity.annotate import annotate_game, annotate_pgn_file, white_pov_equity
+from chess_equity.annotate import (
+    annotate_game,
+    annotate_pgn_file,
+    drama_by_ply,
+    white_pov_equity,
+)
 from chess_equity.grading import EquityGrader
 from chess_equity.models import LichessBaselineModel
 
@@ -78,3 +83,44 @@ def test_annotate_pgn_file_round_trips_sample(tmp_path):
     first = next(iter(reparsed.mainline()))  # 1. e4
     assert "[%equity " in first.comment
     assert "[%grade " in first.comment
+
+
+def test_drama_by_ply_fires_clutch_on_the_mate():
+    """The mating move's huge White-POV swing is highlight-worthy even on the baseline."""
+    text = SAMPLE_PGN.read_text(encoding="utf-8")
+    drama = drama_by_ply(text, LichessBaselineModel(), 1500, 1480)
+    # Scholar's mate: only the final move (4. Qxf7#, ply 7) is dramatic.
+    assert drama.keys() == {7}
+    assert drama[7].kind == "clutch"
+
+
+def test_annotate_embeds_drama_tag_only_on_dramatic_moves(tmp_path):
+    """`[%drama <kind>]` lands on the mate; quiet moves carry no drama tag; [%eval]/[%clk] survive."""
+    out = tmp_path / "annotated.pgn"
+    annotate_pgn_file(str(SAMPLE_PGN), str(out), LichessBaselineModel(), 1500, 1480)
+
+    reparsed = _read_first_game(out.read_text(encoding="utf-8"))
+    nodes = list(reparsed.mainline())
+
+    # The mating move (last ply) gains a parseable [%drama clutch] tag...
+    mate = nodes[-1]
+    assert "[%drama clutch]" in mate.comment
+    # ...alongside the equity/grade tags, not replacing them.
+    assert "[%equity " in mate.comment and "[%grade " in mate.comment
+
+    # The quiet opening moves are unchanged — no drama tag, originals preserved.
+    first = nodes[0]  # 1. e4
+    assert "[%drama" not in first.comment
+    assert "[%eval 0.2]" in first.comment and "[%clk 0:03:00]" in first.comment
+
+    # Exactly one move in the game is dramatic.
+    assert sum("[%drama" in node.comment for node in nodes) == 1
+
+
+def test_annotate_game_without_drama_is_byte_identical():
+    """Omitting the drama map embeds no [%drama] tags (back-compat with task 0197)."""
+    game = annotate_game(
+        _read_first_game(SAMPLE_PGN.read_text(encoding="utf-8")),
+        LichessBaselineModel(), 1500, 1480,
+    )
+    assert "[%drama" not in str(game)
