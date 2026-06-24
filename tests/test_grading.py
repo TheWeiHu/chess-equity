@@ -225,7 +225,7 @@ def _round_games():
     """
     from pathlib import Path
 
-    from chess_equity.broadcast import _parse_elo, split_games
+    from chess_equity.grading import _parse_elo, split_games
 
     pgn = Path(__file__).resolve().parents[1] / "data" / "sample" / "round_games.pgn"
     text = pgn.read_text(encoding="utf-8")

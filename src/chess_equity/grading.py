@@ -34,6 +34,7 @@ flagship trap demo needs Maia (0005) on real data — but the synthetic test
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
@@ -820,3 +821,38 @@ def render_scoreline(line: GameScoreline) -> List[str]:
                 f"worst ({side}): {g.ply:3d}. {g.san} {g.label} (Δpeer {g.grade_peer:+.1f})"
             )
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Multi-game PGN helpers (used by `grade --round`'s leaderboard, task 0118).
+# Generic PGN-snapshot utilities; kept here (not in the streaming layer) so the
+# leaderboard has no broadcast dependency.
+# --------------------------------------------------------------------------- #
+def split_games(pgn_text: str) -> List[str]:
+    """Split a concatenated PGN snapshot into one PGN string per game.
+
+    Each PGN game begins with an ``[Event ...]`` tag at the start of a line, so we cut
+    on those boundaries. Robust to the blank-line / movetext variations a pooled PGN
+    produces.
+    """
+    starts = [m.start() for m in re.finditer(r"(?m)^\[Event ", pgn_text)]
+    if not starts:
+        return [pgn_text] if pgn_text.strip() else []
+    games: List[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(pgn_text)
+        chunk = pgn_text[start:end].strip()
+        if chunk:
+            games.append(chunk)
+    return games
+
+
+def _parse_elo(headers: "chess.pgn.Headers", key: str) -> Optional[int]:
+    """Read an Elo header, tolerating ``?`` / blank / non-numeric (common OTB)."""
+    raw = headers.get(key, "").strip()
+    if not raw or raw == "?":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None

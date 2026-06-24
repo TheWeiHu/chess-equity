@@ -6,9 +6,6 @@ Commands:
     chess-equity eval --pgn game.pgn --white-elo 1500 --black-elo 1500
     chess-equity score --pgn game.pgn              # one-game scorecard: score vs real result
     chess-equity grade --pgn game.pgn --white-elo 1500 --black-elo 1500
-    chess-equity broadcast --round <id>            # live Lichess broadcast round
-    chess-equity broadcast --pgn game.pgn          # replay a finished game as "live"
-    chess-equity highlights --pgn game.pgn         # auto-detect drama/clutch moments
     chess-equity personal --user <lichess-name>    # per-player phase profile + offsets
     chess-equity data build --pgn dump.pgn.zst --sample 50000 --out data/
     chess-equity validate --data data/dataset.csv --models baseline
@@ -24,21 +21,13 @@ import argparse
 import io
 import json
 import sys
-from typing import List, Optional, TextIO
+from typing import List, Optional
 
 import chess
 import chess.pgn
 
 from chess_equity.adapters import EquityModel
 from chess_equity.bar import render_eval
-from chess_equity.broadcast import (
-    BroadcastIngestor,
-    GameEvent,
-    LichessRoundFeed,
-    LocalPgnFeed,
-    MoveEvent,
-    UrlPgnFeed,
-)
 from chess_equity.grading import EquityGrader
 from chess_equity.models import LichessBaselineModel, placeholder_equity_warning
 from chess_equity.rollout import MaiaRolloutModel, estimate_to_equity
@@ -85,7 +74,7 @@ def _grade_round(model: EquityModel, path: str, white_elo: int, black_elo: int):
     missing/``?``. Players are named from the ``White``/``Black`` headers so the leaderboard
     can pool a player's moves across every board.
     """
-    from chess_equity.broadcast import _parse_elo, split_games
+    from chess_equity.grading import _parse_elo, split_games
 
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -116,16 +105,6 @@ def _grade_lines(grades) -> List[str]:
             f"Δpeer {g.grade_peer:+5.1f}  Δbest {g.grade_best:+5.1f}{cp}"
         )
     return lines
-
-
-def _event_line(event: MoveEvent) -> str:
-    """One JSONL ``position`` record in the overlay's schema (task 0019).
-
-    Emits :meth:`MoveEvent.to_overlay_event` (nested, White-POV equity in [0, 1]) so
-    the broadcast stream is directly consumable by overlay.js — paired with the
-    one-time ``game`` metadata event (player names) emitted via ``on_game``.
-    """
-    return json.dumps(event.to_overlay_event())
 
 
 def build_model(
@@ -370,13 +349,6 @@ def _run_grade(args: argparse.Namespace) -> int:
                 with open(args.leaderboard_md, "w", encoding="utf-8") as fh:
                     fh.write(render_leaderboard_md(scores))
                 print(f"wrote leaderboard markdown to {args.leaderboard_md}")
-        elif args.annotate_pgn:
-            from chess_equity.annotate import annotate_pgn_file
-
-            n = annotate_pgn_file(
-                args.pgn, args.annotate_pgn, model, args.white_elo, args.black_elo
-            )
-            print(f"wrote {n} annotated moves to {args.annotate_pgn}")
         else:
             from chess_equity.grading import (
                 equity_sparkline,
@@ -447,523 +419,6 @@ def _run_score(args: argparse.Namespace) -> int:
         with open(args.svg, "w", encoding="utf-8") as fh:
             fh.write(render_scorecard_svg(card, grades))
         print(f"wrote scorecard SVG to {args.svg}")
-    return 0
-
-
-def _build_broadcast_feed(args: argparse.Namespace):
-    """Construct the broadcast feed from --pgn / --round / --url.
-
-    A fresh feed each call so the SSE path can give every overlay connection its own
-    replay/stream (``LocalPgnFeed`` in particular is stateful — it advances per poll).
-    """
-    if args.pgn:
-        with open(args.pgn, encoding="utf-8") as fh:
-            return LocalPgnFeed(fh.read(), moves_per_poll=args.moves_per_poll)
-    if args.round:
-        return LichessRoundFeed(args.round, token=args.token)
-    if args.url:
-        return UrlPgnFeed(args.url)
-    raise ValueError("broadcast needs one of --pgn / --round / --url")
-
-
-def _overlay_static_dir() -> Optional[str]:
-    """The repo's ``overlay/`` dir if present (so --serve-sse is a one-command overlay).
-
-    Resolved by walking up from this module to the first ancestor holding an
-    ``overlay/index.html`` (the OBS browser source). Walking — rather than a fixed
-    ``parents[N]`` — keeps this correct across package-layout moves: the 0247
-    ``cli.py`` -> ``cli/`` package refactor added a directory level and silently broke
-    a hard-coded index, leaving ``http://localhost:PORT/?src=/sse`` 404ing on ``/``.
-    Returns ``None`` when running from an installed wheel without the overlay assets,
-    in which case only ``/sse`` is served.
-    """
-    from pathlib import Path
-
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "overlay"
-        if (candidate / "index.html").is_file():
-            return str(candidate)
-    return None
-
-
-def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
-    """Drive broadcast ingestion, writing one JSON event per line to ``out``.
-
-    With ``--serve-sse PORT`` the same overlay events are instead streamed over an
-    HTTP Server-Sent-Events endpoint the overlay can ``EventSource`` onto (task 0094),
-    collapsing the old capture-to-file → serve.py seam into one command.
-    """
-    model = _apply_profiles(model, args)
-
-    # Objective engine for the centipawn fallback when the model carries no cp (e.g.
-    # maia2 win-prob): keeps the overlay's classic ghost tick + human-edge divergence
-    # badge alive on a maia2 feed (task 0103). Only consulted for cp-less models, so
-    # warn=False — the model's own bar already warns when no engine is available.
-    from chess_equity.stockfish import resolve_objective_engine
-
-    cp_engine = resolve_objective_engine(depth=args.depth, warn=False)
-
-    # Surface a visible 'reconnecting' state when a live feed drops: the ingestor keeps
-    # retrying with bounded exponential backoff (resuming from the last seen move), and
-    # this prints the attempt + wait to stderr so the streamer knows the overlay is
-    # holding rather than dead (task 0175).
-    def log_reconnect(attempt: int, delay: float) -> None:
-        print(
-            f"# broadcast feed error; reconnecting in {delay:.0f}s (attempt {attempt})",
-            file=sys.stderr,
-        )
-
-    # A multi-board round (Titled Tuesday, blitz events) carries many simultaneous
-    # games; --board narrows the stream to one (by player-name substring or board
-    # index), defaulting to follow-all when unset (task 0182). The special value
-    # --board auto follows ALL boards but auto-cuts the overlay focus to the liveliest
-    # one via server-side drama scoring (task 0256), so it keeps the full follow-all
-    # stream (selector None) and flips on the auto-follow director instead. The
-    # --board auto:<player> form additionally biases that director toward a named
-    # player's boards (a soft manual+auto hybrid; tasks 0258/0262).
-    from chess_equity.broadcast import parse_auto_spec, parse_board_selector
-
-    board_spec = getattr(args, "board", None)
-    auto_follow, bias_player = parse_auto_spec(board_spec)
-    selector = None if auto_follow else parse_board_selector(board_spec)
-
-    # Human-vs-engine divergence caption callout threshold (task 0273); None on the flag
-    # means "use the module default" so callers that never pass it are unaffected.
-    from chess_equity.broadcast import DIVERGENCE_CAPTION_THRESHOLD
-
-    div_threshold = getattr(args, "divergence_caption_threshold", None)
-    if div_threshold is None:
-        div_threshold = DIVERGENCE_CAPTION_THRESHOLD
-
-    # --ledger: replay a finished local PGN into a flat per-move CSV for post-show stats
-    # (task 0204). A finite snapshot export, not a live stream, so it requires --pgn and
-    # short-circuits before the live serve/print paths.
-    if getattr(args, "ledger", None) is not None:
-        if not args.pgn:
-            print("# broadcast --ledger requires --pgn (no live feed)", file=sys.stderr)
-            return 2
-        from chess_equity.broadcast import write_ledger
-
-        ingestor = BroadcastIngestor(
-            _build_broadcast_feed(args),
-            model,
-            white_elo=args.white_elo,
-            black_elo=args.black_elo,
-            clock_aware=args.clock_aware,
-            engine=cp_engine,
-            select=selector,
-        )
-        with open(args.pgn, encoding="utf-8") as fh:
-            events = ingestor.ingest_snapshot(fh.read())
-        with open(args.ledger, "w", encoding="utf-8", newline="") as fh:
-            rows = write_ledger(events, fh)
-        print(f"wrote {rows} move rows to {args.ledger}", file=sys.stderr)
-        return 0
-
-    # --captions-vtt: replay a finished local PGN into a timestamped WebVTT subtitle
-    # track (one cue per graded caster line, task 0211). Like --ledger, a finite
-    # snapshot export, not a live stream, so it requires --pgn and short-circuits.
-    if getattr(args, "captions_vtt", None) is not None:
-        if not args.pgn:
-            print("# broadcast --captions-vtt requires --pgn (no live feed)", file=sys.stderr)
-            return 2
-        from chess_equity.broadcast import build_captions_vtt
-
-        ingestor = BroadcastIngestor(
-            _build_broadcast_feed(args),
-            model,
-            white_elo=args.white_elo,
-            black_elo=args.black_elo,
-            clock_aware=args.clock_aware,
-            engine=cp_engine,
-            select=selector,
-        )
-        with open(args.pgn, encoding="utf-8") as fh:
-            events = ingestor.ingest_snapshot(fh.read())
-        vtt = build_captions_vtt(
-            events, auto_follow=auto_follow, divergence_threshold=div_threshold
-        )
-        with open(args.captions_vtt, "w", encoding="utf-8") as fh:
-            fh.write(vtt)
-        cues = vtt.count(" --> ")
-        print(f"wrote {cues} caption cue(s) to {args.captions_vtt}", file=sys.stderr)
-        return 0
-
-    # --captions-srt: same finished-PGN replay as --captions-vtt, but writes the caster
-    # cues as an SRT (SubRip) subtitle track for non-web editors (task 0229). Reuses the
-    # exact same _caption_cues timeline, so the SRT is cue-for-cue identical to the VTT.
-    if getattr(args, "captions_srt", None) is not None:
-        if not args.pgn:
-            print("# broadcast --captions-srt requires --pgn (no live feed)", file=sys.stderr)
-            return 2
-        from chess_equity.broadcast import build_captions_srt
-
-        ingestor = BroadcastIngestor(
-            _build_broadcast_feed(args),
-            model,
-            white_elo=args.white_elo,
-            black_elo=args.black_elo,
-            clock_aware=args.clock_aware,
-            engine=cp_engine,
-            select=selector,
-        )
-        with open(args.pgn, encoding="utf-8") as fh:
-            events = ingestor.ingest_snapshot(fh.read())
-        srt = build_captions_srt(
-            events, auto_follow=auto_follow, divergence_threshold=div_threshold
-        )
-        with open(args.captions_srt, "w", encoding="utf-8") as fh:
-            fh.write(srt)
-        cues = srt.count(" --> ")
-        print(f"wrote {cues} caption cue(s) to {args.captions_srt}", file=sys.stderr)
-        return 0
-
-    if args.serve_sse is not None:
-        from chess_equity.broadcast import (
-            FocusStatus,
-            PinChannel,
-            overlay_events,
-            serve_sse,
-        )
-
-        # A live round (--round/--url) may be tuned into before its first move: keep
-        # polling (no idle stop) and send keep-alive heartbeats so the connection
-        # survives the quiet wait. A local --pgn replay is finite, so it still
-        # terminates on idle (max_idle_polls=1, no heartbeat).
-        is_live = bool(args.round or args.url)
-
-        # Caster pin INPUT channel (task 0261): under `--board auto`, expose `POST /pin`
-        # so a caster can hold focus on a board mid-stream. One shared channel feeds both
-        # the handler (writer) and every overlay_events generator (reader/director).
-        pin_channel = PinChannel() if auto_follow else None
-        # Caster status OUTPUT channel (task 0265): under `--board auto`, expose
-        # `GET /focus` so a caster control surface can read back which board is live and
-        # why. Shared between the handler (reader) and the overlay_events director (writer).
-        focus_status = FocusStatus() if auto_follow else None
-
-        def make_events():
-            ingestor = BroadcastIngestor(
-                _build_broadcast_feed(args),
-                model,
-                white_elo=args.white_elo,
-                black_elo=args.black_elo,
-                clock_aware=args.clock_aware,
-                engine=cp_engine,
-                select=selector,
-            )
-            return overlay_events(
-                ingestor,
-                auto_follow=auto_follow,
-                bias_player=bias_player,
-                pin_channel=pin_channel,
-                focus_status=focus_status,
-                interval=args.interval,
-                max_polls=args.max_polls,
-                max_idle_polls=None if is_live else 1,
-                heartbeat=is_live,
-                on_reconnect=log_reconnect,
-            )
-
-        serve_sse(
-            make_events,
-            port=args.serve_sse,
-            directory=_overlay_static_dir(),
-            pin_channel=pin_channel,
-            focus_status=focus_status,
-            log=lambda msg: print(msg, file=sys.stderr),
-        )
-        return 0
-
-    feed = _build_broadcast_feed(args)
-    ingestor = BroadcastIngestor(
-        feed,
-        model,
-        white_elo=args.white_elo,
-        black_elo=args.black_elo,
-        clock_aware=args.clock_aware,
-        engine=cp_engine,
-        select=selector,
-    )
-
-    # --captions: a human caster sentence per graded move (TTS/chat-ready) instead of
-    # the machine JSONL stream (task 0190). The live counterpart to the offline reel.
-    captions = getattr(args, "captions", False)
-
-    # --board auto (task 0256): drive the JSONL stream through the overlay bridge so its
-    # server-side `focus` cut events ride alongside the position events the overlay reads.
-    # The live `--captions` stream is plain text (no routing metadata), so auto-follow is a
-    # no-op there; the offline `--captions-srt/--captions-vtt` export DOES thread each cut's
-    # director cue into the subtitle track (task 0263, handled in the export blocks above).
-    if auto_follow and not captions:
-        from chess_equity.broadcast import HEARTBEAT, overlay_events
-
-        is_live = bool(args.round or args.url)
-        for ev in overlay_events(
-            ingestor,
-            auto_follow=True,
-            bias_player=bias_player,
-            interval=args.interval,
-            max_polls=args.max_polls,
-            max_idle_polls=None if is_live else 1,
-            on_reconnect=log_reconnect,
-        ):
-            if ev is HEARTBEAT:
-                continue
-            out.write(json.dumps(ev) + "\n")
-            out.flush()
-        stats = ingestor.stats
-        print(
-            f"# {stats.events} events over {stats.polls} polls "
-            f"({stats.errors} feed errors, {stats.reconnects} reconnect(s), "
-            f"max backoff {stats.max_backoff_s:.0f}s), "
-            f"max equity compute {stats.max_compute_ms:.1f} ms",
-            file=sys.stderr,
-        )
-        return 0
-
-    from chess_equity.broadcast import CaptionDeduper
-
-    caption_deduper = CaptionDeduper()
-
-    def emit(event: MoveEvent) -> None:
-        if captions:
-            from chess_equity.broadcast import live_caption
-
-            # Suppress identical back-to-back caster lines (e.g. White O-O then Black O-O
-            # with the same grade/swing) so the stream never reads as a stuck overlay
-            # (task 0274). None (ungraded) passes through cleanly.
-            line = caption_deduper.feed(
-                live_caption(event, divergence_threshold=div_threshold)
-            )
-            if line is not None:
-                out.write(line + "\n")
-                out.flush()
-            return
-        out.write(_event_line(event) + "\n")
-        out.flush()
-
-    # Emit the overlay "game" metadata event (player names + ratings) once per game,
-    # before its moves, so the overlay name-plates are populated (task 0047). In
-    # --captions mode announce the pairing as a plain caster intro line instead.
-    def emit_game(game: GameEvent) -> None:
-        if captions:
-            white = game.white_name or "White"
-            black = game.black_name or "Black"
-            we = f" ({game.white_elo})" if game.white_elo else ""
-            be = f" ({game.black_elo})" if game.black_elo else ""
-            out.write(f"🎙 {white}{we} vs {black}{be}\n")
-            out.flush()
-            return
-        out.write(json.dumps(game.to_overlay()) + "\n")
-        out.flush()
-
-    ingestor.on_game = emit_game
-
-    # A live feed runs until interrupted, so keep retrying a dropped feed forever
-    # (max_idle_polls=None, --max-polls caps it); a finite --pgn replay still terminates
-    # on idle (max_idle_polls=1). interval=0 for replays keeps tests/CI instant.
-    is_live = bool(args.round or args.url)
-    stats = ingestor.run(
-        emit,
-        interval=args.interval,
-        max_polls=args.max_polls,
-        max_idle_polls=None if is_live else 1,
-        on_reconnect=log_reconnect,
-    )
-    print(
-        f"# {stats.events} events over {stats.polls} polls "
-        f"({stats.errors} feed errors, {stats.reconnects} reconnect(s), "
-        f"max backoff {stats.max_backoff_s:.0f}s), "
-        f"max equity compute {stats.max_compute_ms:.1f} ms",
-        file=sys.stderr,
-    )
-    return 0
-
-
-def _run_highlights(args: argparse.Namespace, model: EquityModel) -> int:
-    """Detect drama/clutch moments in a game and print the highlight reel (task 0020)."""
-    from chess_equity.drama import DramaEvent, detect, highlights
-
-    with open(args.pgn, encoding="utf-8") as fh:
-        pgn_text = fh.read()
-    ingestor = BroadcastIngestor(
-        feed=LocalPgnFeed(pgn_text),  # the feed is unused; events come from the snapshot
-        model=model,
-        white_elo=args.white_elo,
-        black_elo=args.black_elo,
-    )
-    events = ingestor.ingest_snapshot(pgn_text)
-
-    if args.json:
-        reel = highlights(events, top=args.top)
-        print(json.dumps([d.to_dict() for d in reel], indent=2))
-        return 0
-
-    in_order = detect(events)
-    if not in_order:
-        print("# no drama detected (a quiet game, or muted swings on the baseline model)")
-        return 0
-    print(f"# {len(in_order)} drama moment(s):")
-    for d in in_order:
-        print(f"{d.ply:3d}. [{d.kind:10s} {d.magnitude:.2f}] {d.headline}")
-    reel: List[DramaEvent] = highlights(events, top=args.top)
-    print(f"\n# top {len(reel)} highlight(s) by magnitude:")
-    for d in reel:
-        print(f"  {d.magnitude:.2f}  {d.kind:10s} ply {d.ply}: {d.headline}")
-    return 0
-
-
-def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
-    """Export a ranked auto-highlight reel as JSON + markdown (task 0168).
-
-    Replays a committed PGN through the broadcast pipeline, ranks the drama, and
-    writes ``reel.json`` + ``reel.md`` to ``--out-dir`` (or prints markdown to stdout).
-    """
-    import os
-
-    from chess_equity import reel as reel_mod
-
-    with open(args.pgn, encoding="utf-8") as fh:
-        pgn_text = fh.read()
-    ingestor = BroadcastIngestor(
-        feed=LocalPgnFeed(pgn_text),  # the feed is unused; events come from the snapshot
-        model=model,
-        white_elo=args.white_elo,
-        black_elo=args.black_elo,
-    )
-    events = ingestor.ingest_snapshot(pgn_text)
-
-    # --min-magnitude FLOOR (task 0240): drop trivial swings before ranking. Build the
-    # full ranked reel first, filter below the 0..1 floor (logging how many were cut so
-    # nothing is silently truncated), then apply --top to the qualified pool.
-    reel = reel_mod.build_reel(events)
-    floor = getattr(args, "min_magnitude", None)
-    if floor is not None and not (0.0 <= floor <= 1.0):
-        print(
-            f"error: --min-magnitude must be in [0, 1] (got {floor:g})", file=sys.stderr
-        )
-        return 1
-    if floor is not None:
-        reel, dropped = reel_mod.drop_below_magnitude(reel, floor)
-        if dropped:
-            print(
-                f"--min-magnitude {floor:g}: dropped {dropped} moment(s) below the floor",
-                file=sys.stderr,
-            )
-    if args.top is not None:
-        reel = reel[: args.top]
-
-    # Human-vs-engine DIVERGENCE category (task 0272): a SEPARATE ranked list — the
-    # moves where the rating-aware bar most disagrees with the engine (cp-implied) bar.
-    # Computed from the raw events (drama events drop cp), independent of the drama
-    # ranking + the --min-magnitude floor (a quiet move can be a huge divergence). It
-    # rides alongside the drama reel in the json + markdown artifacts.
-    divergence = reel_mod.detect_divergence(events, top=args.top)
-
-    # --round (task 0198): a cross-game ROUND recap. The pooling is already done — a
-    # multi-game PGN tags every event with its game_id and the drama detector is
-    # stateless, so `reel` above already ranks moments across all boards. --round adds
-    # the source labels (board # + pairing per moment) and a round-framed title so the
-    # caster sees which board each pooled swing came from.
-    title = args.title
-    sources = None
-    if getattr(args, "round_recap", False):
-        sources = reel_mod.game_sources(pgn_text)
-        if title == "Highlight reel":  # default unchanged by the user → frame as a round
-            title = "Round recap"
-
-    # --html PATH writes ONE self-contained HTML clip player (opens offline). It can
-    # stand alone (print to stdout when PATH is "-") or sit alongside --out-dir's
-    # json+md. Either flag may be used on its own.
-    if args.html is not None and args.out_dir is None:
-        html_doc = reel_mod.render_html(reel, title=title, sources=sources)
-        if args.html == "-":
-            print(html_doc, end="")
-        else:
-            with open(args.html, "w", encoding="utf-8") as fh:
-                fh.write(html_doc)
-            print(f"wrote {len(reel)} moment(s): {args.html}", file=sys.stderr)
-        return 0
-
-    # --srt PATH writes the narration as a standalone SRT subtitle file (or stdout
-    # when PATH is "-"). Like --html, it can stand alone or sit alongside --out-dir.
-    if args.srt is not None and args.out_dir is None:
-        srt_doc = reel_mod.build_srt(reel)
-        if args.srt == "-":
-            print(srt_doc, end="")
-        else:
-            with open(args.srt, "w", encoding="utf-8") as fh:
-                fh.write(srt_doc)
-            print(f"wrote {len(reel)} moment(s): {args.srt}", file=sys.stderr)
-        return 0
-
-    # --chapters PATH writes the reel as VOD chapter markers (HH:MM:SS Title lines a
-    # caster pastes into a YouTube/Twitch description). Like --srt it can stand alone
-    # (stdout on "-") or sit alongside --out-dir's json+md.
-    if args.chapters is not None and args.out_dir is None:
-        chapters_doc = reel_mod.build_chapters(reel)
-        if args.chapters == "-":
-            print(chapters_doc, end="")
-        else:
-            with open(args.chapters, "w", encoding="utf-8") as fh:
-                fh.write(chapters_doc)
-            print(f"wrote {len(reel)} moment(s): {args.chapters}", file=sys.stderr)
-        return 0
-
-    # --posters DIR writes one static SVG poster per ranked moment (a shareable social
-    # card). Like --html/--srt it can stand alone or sit alongside --out-dir's json+md.
-    if args.posters is not None and args.out_dir is None:
-        paths = reel_mod.write_posters(reel, args.posters, sources=sources)
-        print(f"wrote {len(paths)} poster(s): {args.posters}", file=sys.stderr)
-        return 0
-
-    if args.out_dir is None:
-        print(
-            reel_mod.render_markdown(
-                reel, title=title, sources=sources, divergence=divergence
-            )
-        )
-        return 0
-
-    os.makedirs(args.out_dir, exist_ok=True)
-    json_path = os.path.join(args.out_dir, "reel.json")
-    md_path = os.path.join(args.out_dir, "reel.md")
-    written = [json_path, md_path]
-    with open(json_path, "w", encoding="utf-8") as fh:
-        fh.write(
-            reel_mod.render_json(
-                reel, title=title, sources=sources, divergence=divergence
-            )
-            + "\n"
-        )
-    with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(
-            reel_mod.render_markdown(
-                reel, title=title, sources=sources, divergence=divergence
-            )
-        )
-    if args.html is not None:
-        html_path = args.html if args.html != "-" else os.path.join(args.out_dir, "reel.html")
-        with open(html_path, "w", encoding="utf-8") as fh:
-            fh.write(reel_mod.render_html(reel, title=title, sources=sources))
-        written.append(html_path)
-    if args.srt is not None:
-        srt_path = args.srt if args.srt != "-" else os.path.join(args.out_dir, "reel.srt")
-        with open(srt_path, "w", encoding="utf-8") as fh:
-            fh.write(reel_mod.build_srt(reel))
-        written.append(srt_path)
-    if args.chapters is not None:
-        chapters_path = (
-            args.chapters if args.chapters != "-"
-            else os.path.join(args.out_dir, "reel.chapters.txt")
-        )
-        with open(chapters_path, "w", encoding="utf-8") as fh:
-            fh.write(reel_mod.build_chapters(reel))
-        written.append(chapters_path)
-    if args.posters is not None:
-        poster_dir = args.posters
-        written.extend(reel_mod.write_posters(reel, poster_dir, sources=sources))
-    print(f"wrote {len(reel)} moment(s): {', '.join(written)}", file=sys.stderr)
     return 0
 
 
@@ -1774,17 +1229,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="chess-equity", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    import chess_equity.cli.broadcast as _broadcast_cmd
     import chess_equity.cli.data as _data_cmd
     import chess_equity.cli.divergence as _divergence_cmd
     import chess_equity.cli.doctor as _doctor_cmd
     import chess_equity.cli.eval as _eval_cmd
     import chess_equity.cli.grade as _grade_cmd
     import chess_equity.cli.headline as _headline_cmd
-    import chess_equity.cli.highlights as _highlights_cmd
     import chess_equity.cli.personal as _personal_cmd
     import chess_equity.cli.precompute as _precompute_cmd
-    import chess_equity.cli.reel as _reel_cmd
     import chess_equity.cli.score as _score_cmd
     import chess_equity.cli.train as _train_cmd
     import chess_equity.cli.train_net as _train_net_cmd
@@ -1795,9 +1247,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     _eval_cmd.add_parser(sub)
     _grade_cmd.add_parser(sub)
     _score_cmd.add_parser(sub)
-    _broadcast_cmd.add_parser(sub)
-    _highlights_cmd.add_parser(sub)
-    _reel_cmd.add_parser(sub)
     _data_cmd.add_parser(sub)
     _validate_cmd.add_parser(sub)
     _precompute_cmd.add_parser(sub)
@@ -1816,24 +1265,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_grade(args)
     if args.command == "score":
         return _run_score(args)
-    if args.command == "broadcast":
-        try:
-            return _run_broadcast(args, build_model(args.model, depth=args.depth), sys.stdout)
-        except (ValueError, OSError, RuntimeError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-    if args.command == "highlights":
-        try:
-            return _run_highlights(args, build_model(args.model, depth=args.depth))
-        except (ValueError, OSError, RuntimeError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-    if args.command == "reel":
-        try:
-            return _run_reel(args, build_model(args.model, depth=args.depth))
-        except (ValueError, OSError, RuntimeError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
     if args.command == "data":
         return _run_data(args)
     if args.command == "validate":
@@ -1851,30 +1282,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "precompute":
         return _run_precompute(args)
     if args.command == "doctor":
-        from chess_equity.doctor import (
-            doctor,
-            probe_broadcast,
-            probe_evidence,
-            probe_model,
-            probe_overlay,
-            probe_serve_sse,
-        )
+        from chess_equity.doctor import doctor, probe_evidence, probe_model
 
-        broadcast_probe = None
-        if args.broadcast:
-            from chess_equity.broadcast import feed_from_spec
-
-            feed = feed_from_spec(args.broadcast, token=args.token)
-            broadcast_probe = lambda: probe_broadcast(feed)  # noqa: E731
-        overlay_probe = probe_overlay if args.overlay else None
-        serve_sse_probe = probe_serve_sse if args.serve_sse else None
         evidence_probe = probe_evidence if args.evidence else None
         model_probe = (lambda: probe_model(args.model)) if args.model else None  # noqa: E731
         return doctor(
             engines=args.engine,
-            broadcast_probe=broadcast_probe,
-            overlay_probe=overlay_probe,
-            serve_sse_probe=serve_sse_probe,
             evidence_probe=evidence_probe,
             model_probe=model_probe,
         )

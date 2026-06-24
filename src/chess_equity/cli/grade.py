@@ -17,11 +17,6 @@ def add_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
         help="Stockfish baseline search depth (also the maia-search ply budget)",
     )
     gr.add_argument(
-        "--annotate-pgn", metavar="OUT",
-        help="instead of printing, write an equity-annotated PGN to OUT "
-             "({[%%equity 0..1]} White-POV + grade label/NAG, preserving [%%eval]/[%%clk])",
-    )
-    gr.add_argument(
         "--round", action="store_true",
         help="pool a multi-game broadcast PGN and print an accuracy leaderboard ranking "
              "every player (accuracy %%, blunder/mistake counts, mean Δequity) across all "
