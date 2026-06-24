@@ -12,6 +12,8 @@ import dataclasses
 import json
 import re
 
+import pytest
+
 from chess_equity.broadcast import MoveEvent
 from chess_equity.drama import score_event
 from chess_equity.reel import (
@@ -25,16 +27,20 @@ from chess_equity.reel import (
     caption,
     caption_payload,
     clip_durations,
+    detect_divergence,
+    divergence_payload,
     drop_below_magnitude,
     rank,
     reel_payload,
     render_captions,
+    render_divergence_markdown,
     render_html,
     render_json,
     render_markdown,
     social_caption,
     write_posters,
 )
+from chess_equity.types import lichess_win_percent
 
 # Neutral base event (White just moved; quiet). Mirror test_drama's fixture.
 _BASE = MoveEvent(
@@ -86,6 +92,83 @@ def test_reel_ranked_by_magnitude_desc():
 def test_each_trigger_type_surfaces_in_reel():
     reel = build_reel(_ONE_OF_EACH)
     assert set(by_kind(reel)) == {"clutch", "missed_win", "escape", "scramble"}
+
+
+# --- Human-vs-engine divergence category (task 0272) -------------------------
+#
+# Divergence ranks moves by |equity − cp_win| (cp_win = the rating-blind Lichess Win%
+# of the White-POV cp). cp=0 ⇒ cp_win=50, so a move with equity=80% diverges 30 pts.
+# These fixtures set cp explicitly; the base _BASE has no cp (skipped by design).
+
+# A QUIET move (Δequity≈0 ⇒ no drama) that nonetheless diverges hugely from the engine:
+# the human bar reads 82% White while the engine (cp=0) reads 50% — a 32-pt gap.
+_QUIET_BUT_DIVERGENT = ev(ply=12, equity=82.0, delta_equity=1.0, cp=0.0)
+
+
+def test_detect_divergence_ranks_by_abs_gap_desc():
+    events = [
+        ev(ply=2, equity=55.0, cp=0.0),    # gap |55−50| = 5
+        ev(ply=4, equity=90.0, cp=0.0),    # gap |90−50| = 40  ← biggest
+        ev(ply=6, equity=20.0, cp=300.0),  # cp_win≈75 ⇒ gap ≈55  ← actually biggest
+    ]
+    moments = detect_divergence(events)
+    gaps = [m.divergence for m in moments]
+    assert gaps == sorted(gaps, reverse=True)
+    # The engine-disagreement leader: human says Black-favored (20%) while the engine
+    # (cp=+300) says White is winning (~75%).
+    assert moments[0].ply == 6
+    assert moments[0].divergence == pytest.approx(abs(20.0 - lichess_win_percent(300.0)))
+
+
+def test_detect_divergence_skips_moves_without_cp():
+    # _BASE carries no cp (a cp-less / mate feed) → no engine bar to diverge from.
+    assert detect_divergence([ev(ply=2, equity=99.0)]) == []
+
+
+def test_detect_divergence_surfaces_quiet_high_divergence_move():
+    # The move never registers as drama (Δequity≈0) but tops the divergence list — the
+    # whole point of a SEPARATE category.
+    assert build_reel([_QUIET_BUT_DIVERGENT]) == []  # no drama
+    moments = detect_divergence([_QUIET_BUT_DIVERGENT])
+    assert len(moments) == 1
+    assert moments[0].divergence == pytest.approx(32.0)
+    assert moments[0].signed_gap == pytest.approx(32.0)  # human bar above engine
+
+
+def test_detect_divergence_top_caps_the_list():
+    events = [ev(ply=p, equity=50.0 + p, cp=0.0) for p in range(1, 6)]
+    assert len(detect_divergence(events, top=2)) == 2
+
+
+def test_divergence_payload_shape_and_caption():
+    payload = divergence_payload(detect_divergence([_QUIET_BUT_DIVERGENT]))
+    assert payload["count"] == 1
+    moment = payload["moments"][0]
+    assert moment["cp_win"] == pytest.approx(50.0)
+    assert "human bar 82% vs engine 50%" in moment["caption"]
+
+
+def test_reel_payload_embeds_divergence_block_when_given():
+    reel = build_reel(_ONE_OF_EACH)
+    divergence = detect_divergence([_QUIET_BUT_DIVERGENT])
+    payload = reel_payload(reel, divergence=divergence)
+    assert payload["divergence"]["count"] == 1
+    # Omitted entirely when not requested (drama-only contract unchanged).
+    assert "divergence" not in reel_payload(reel)
+
+
+def test_render_markdown_appends_divergence_section():
+    reel = build_reel(_ONE_OF_EACH)
+    md = render_markdown(reel, divergence=detect_divergence([_QUIET_BUT_DIVERGENT]))
+    assert "## Human-vs-engine divergence" in md
+    # Not present when divergence is not requested.
+    assert "Human-vs-engine divergence" not in render_markdown(reel)
+
+
+def test_render_divergence_markdown_graceful_on_empty():
+    md = render_divergence_markdown([])
+    assert md.startswith("# Human-vs-engine divergence")
+    assert "No human-vs-engine divergence" in md
 
 
 def test_rank_breaks_ties_by_kind_priority_then_ply():
