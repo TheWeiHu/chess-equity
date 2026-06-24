@@ -172,6 +172,56 @@ centipawn-loss grade is capped at 0). `broadcast` emits one JSON event per move 
 feeds and the OBS overlay (`overlay/`) — point it at a live Lichess broadcast round and
 into OBS with the [streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs).
 
+## Live broadcast workflow
+
+The streaming wedge ties the pieces above into one chain a caster can drive: take a live
+(or replayed) feed, rank the players, narrate every move, and paint the equity bar in OBS.
+Each command below is copy-paste runnable against `data/sample/` (swap in
+`--round <lichess-broadcast-round-id>` or `--url <pgn-url>` for a real feed).
+
+**1 — Pick a feed.** `broadcast` reads a live Lichess broadcast round (`--round`), any
+public PGN URL (`--url`), or a local PGN replayed move-by-move as if live (`--pgn`):
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --interval 0   # per-move JSON events
+```
+
+**2 — Rank the table with `grade --round`.** Pool a multi-game broadcast PGN into one
+accuracy leaderboard (columns: `acc% / moves / blun / mist / meanΔ / worst`). Pick the
+primary key with `--sort {accuracy,lead,blunders}`; emit `--json` or `--csv` for an overlay:
+
+```bash
+uv run chess-equity grade --pgn data/sample/round_games.pgn --round --sort accuracy
+```
+
+```
+ #  player          acc%  moves  blun  mist   meanΔ  worst
+---------------------------------------------------------------------
+ 1  alice          100.0      8     0     0   +16.5  e4 +3.0
+ 2  carol          100.0      4     0     0    +5.8  d4 +3.2
+ 3  bob             66.7      3     0     0    +0.6  Nf6 -8.8
+```
+
+**3 — Generate caster captions.** `--captions` prints one caster sentence per graded move;
+`--captions-vtt`/`--captions-srt` write a timestamped subtitle track (cue times come from
+the PGN's `[%clk]` tags, falling back to even spacing) you can drop onto a VOD:
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --captions
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --captions-vtt cast.vtt
+```
+
+**4 — Drive the OBS overlay.** Stream the same per-move events as Server-Sent-Events and
+point the transparent `overlay/` browser-source at the port:
+
+```bash
+uv run chess-equity broadcast --pgn data/sample/sample_games.pgn --serve-sse 8788
+```
+
+Then add the overlay as an OBS browser-source — see the
+[streamer quickstart](overlay/README.md#streamer-quickstart--a-live-lichess-broadcast-round--obs)
+for the live-round wiring and `overlay/config.html` to build the source URL.
+
 ## Web demo
 
 Run it locally (see [Deployment](#deployment) — this project ships **no hosted
