@@ -179,6 +179,15 @@ The streaming wedge ties the pieces above into one chain a caster can drive: tak
 Each command below is copy-paste runnable against `data/sample/` (swap in
 `--round <lichess-broadcast-round-id>` or `--url <pgn-url>` for a real feed).
 
+**Try it in one command (clone → live bar).** From a fresh checkout, this replays the
+bundled sample game into the transparent `overlay/` browser source and prints the URL to
+open in a browser or add to OBS — no flags, no network:
+
+```bash
+scripts/live_demo.sh                 # serve the live overlay, print the URL
+scripts/live_demo.sh --check         # offline smoke: assert a non-empty event stream
+```
+
 **1 — Pick a feed.** `broadcast` reads a live Lichess broadcast round (`--round`), any
 public PGN URL (`--url`), or a local PGN replayed move-by-move as if live (`--pgn`):
 
