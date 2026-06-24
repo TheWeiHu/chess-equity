@@ -1,5 +1,11 @@
 # Validation report — data/sample/dataset.csv
 
+> ⚠️ **SMOKE TEST, NOT EVIDENCE.** Generated from the 15-row `data/sample/dataset.csv`
+> fixture to exercise the validation gate end-to-end offline. The metrics are meaningless
+> at n=15 (every gate row FAILs / its CI straddles zero); this report is **illustrative,
+> not evidence**. Real thesis evidence lives in the `*_real.md` reports built from a real
+> Lichess dump — see `reports/SUMMARY.md` and the data policy in `CLAUDE.md`.
+
 Metric = predicting White expected-score (P(win)+0.5·P(draw)) vs actual result.
 **Lower is better** for all three (log-loss, Brier, ECE).
 

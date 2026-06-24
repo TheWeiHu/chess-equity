@@ -87,6 +87,13 @@ def drama_by_ply(
     if not games:
         return {}
     first = games[0]
+    # A headers-only / moveless game carries no plies, so there is no drama to detect —
+    # and LocalPgnFeed rejects a moveless PGN. Short-circuit before building the (here
+    # unused) feed so annotating such a game degrades to "no drama tags" instead of
+    # raising.
+    parsed = chess.pgn.read_game(io.StringIO(first))
+    if parsed is None or not any(parsed.mainline_moves()):
+        return {}
     ingestor = BroadcastIngestor(
         feed=LocalPgnFeed(first),  # the feed is unused; events come from the snapshot
         model=model,

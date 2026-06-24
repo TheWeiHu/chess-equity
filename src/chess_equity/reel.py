@@ -129,6 +129,17 @@ def _source_text(d: _Sourced, sources: Optional[Dict[str, GameSource]]) -> str:
     return f"game {d.game_id}"
 
 
+def _scrub_scheme(text: str) -> str:
+    """Drop any URL scheme so the self-contained offline HTML embeds no fetchable link.
+
+    A single-game moment's source label falls back to the raw ``Site`` header, which for
+    a Lichess PGN is a full ``https://lichess.org/…`` URL. The clip player must open
+    offline with nothing fetchable, so the HTML shows the locator without its scheme
+    (``lichess.org/…``). Markdown/JSON exports keep the full URL (a useful clickable link).
+    """
+    return text.replace("https://", "").replace("http://", "")
+
+
 def _mover_name(d: _Sourced, sources: Optional[Dict[str, GameSource]]) -> str:
     """The mover's display name — the actual player in a round recap, else the side.
 
@@ -642,7 +653,7 @@ def _moment_card_html(
     swing = (
         f"{d.delta_equity:+.0f} pts → {d.equity:.0f}% (White POV)"
     )
-    loc = f"{_source_text(d, sources)}, ply {d.ply}"
+    loc = f"{_scrub_scheme(_source_text(d, sources))}, ply {d.ply}"
     return (
         '<article class="moment">'
         f'<div class="rank">#{index}</div>'

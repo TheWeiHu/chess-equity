@@ -825,36 +825,6 @@ class GameEvent:
         return event
 
 
-# Terminal PGN ``Result`` values — the canonical broadcast end-signal. ``*`` (ongoing)
-# and anything else are not game-over.
-_TERMINAL_RESULTS = frozenset({"1-0", "0-1", "1/2-1/2"})
-
-
-@dataclass(frozen=True)
-class ResultEvent:
-    """Game-over signal in the overlay's ``"result"`` schema (task 0189).
-
-    Emitted once, the first time a game in a multi-board round reaches a terminal PGN
-    ``Result`` (one of :data:`_TERMINAL_RESULTS`), so the overlay's board router can
-    advance focus off a finished board to a still-live one instead of stranding a
-    caster on an ended game. Routing metadata only — never rendered, like the ``boards``
-    roster event. Single-game feeds carry no ``board`` and emit no result event.
-    """
-
-    game_id: str
-    board: int
-    result: str
-
-    def to_overlay(self) -> Dict[str, object]:
-        """Render as the overlay's ``{type: "result", board, game_id, result}`` event."""
-        return {
-            "type": "result",
-            "game_id": self.game_id,
-            "board": self.board,
-            "result": self.result,
-        }
-
-
 # --------------------------------------------------------------------------- #
 # Clock / rating parsing from PGN
 # --------------------------------------------------------------------------- #
@@ -1856,16 +1826,21 @@ class FocusDirector:
             return 0.0
         return self.recent.get(board, 0.0) + self.bias.get(board, 0.0)
 
-    def _drama_cut_reason(self, board: int, magnitude: float) -> str:
+    def _drama_cut_reason(self, board: int) -> str:
         """Build the director cue for a drama-driven cut TO ``board`` (task 0260).
 
-        Reuses the magnitudes already in :attr:`recent` for the comparison: the new
-        board's fresh ``magnitude`` against the *decayed* score of the board we're
-        cutting away from, so the cue reads e.g. ``"cut to Bd3: +0.9 swing vs +0.4"``.
-        Caption-ready — voiced/subtitled as-is by the captions path.
+        Reports the *same* bias-adjusted standings the cut decision compared
+        (:meth:`_standing` = decayed recency + any soft player bias), so the cue's numbers
+        always justify the cut — even under ``--board auto:<player>``, where a bias bonus
+        can carry a board over the margin. The cue reads e.g.
+        ``"cut to Bd3: +0.9 swing vs +0.4"``; with bias the favored board's number includes
+        its bonus, matching the ``_standing(board) - _standing(focus) >= margin`` test in
+        :meth:`note`. Caption-ready — voiced/subtitled as-is by the captions path.
         """
-        prev = self.recent.get(self.focus, 0.0) if self.focus is not None else 0.0
-        return f"cut to {self.board_label(board)}: {magnitude:+.1f} swing vs {prev:+.1f}"
+        return (
+            f"cut to {self.board_label(board)}: "
+            f"{self._standing(board):+.1f} swing vs {self._standing(self.focus):+.1f}"
+        )
 
     def pin(self, board: int, plies: int) -> Optional[int]:
         """Caster directive: hold focus on ``board`` for ``plies`` :meth:`note` ticks,
@@ -1902,7 +1877,7 @@ class FocusDirector:
         :attr:`decay` first, then ``board``'s score is refreshed to ``magnitude`` — so
         the focus comparison weighs a rival against the *decayed* (recent) score of the
         current focus, not its all-time peak. Any caster :attr:`bias` bonus is added to
-        both sides of that comparison via :meth:`_score`."""
+        both sides of that comparison via :meth:`_standing`."""
         for b in self.recent:
             self.recent[b] *= self.decay
         self.recent[board] = magnitude
@@ -1924,7 +1899,7 @@ class FocusDirector:
             # and a biased rival steals on ties/small margins (task 0262).
             # Build the cue BEFORE moving focus so it compares against the board we're
             # leaving (task 0260).
-            self.last_reason = self._drama_cut_reason(board, magnitude)
+            self.last_reason = self._drama_cut_reason(board)
             self.focus = board
             return board
         return None
