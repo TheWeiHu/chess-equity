@@ -453,13 +453,21 @@ def _build_broadcast_feed(args: argparse.Namespace):
 def _overlay_static_dir() -> Optional[str]:
     """The repo's ``overlay/`` dir if present (so --serve-sse is a one-command overlay).
 
-    Resolved relative to this package's repo checkout; ``None`` when running from an
-    installed wheel without the overlay assets, in which case only ``/sse`` is served.
+    Resolved by walking up from this module to the first ancestor holding an
+    ``overlay/index.html`` (the OBS browser source). Walking — rather than a fixed
+    ``parents[N]`` — keeps this correct across package-layout moves: the 0247
+    ``cli.py`` -> ``cli/`` package refactor added a directory level and silently broke
+    a hard-coded index, leaving ``http://localhost:PORT/?src=/sse`` 404ing on ``/``.
+    Returns ``None`` when running from an installed wheel without the overlay assets,
+    in which case only ``/sse`` is served.
     """
     from pathlib import Path
 
-    candidate = Path(__file__).resolve().parents[2] / "overlay"
-    return str(candidate) if candidate.is_dir() else None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "overlay"
+        if (candidate / "index.html").is_file():
+            return str(candidate)
+    return None
 
 
 def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) -> int:
