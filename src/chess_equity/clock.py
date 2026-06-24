@@ -55,6 +55,32 @@ _TC_FLAG_MULTIPLIER = {
 }
 
 
+# Clock-band edges (seconds remaining) for the coverage diagnostic and the
+# ``validate --slice clock`` grouping (task 0249). Each ``(edge, label)`` claims the
+# rows whose side-to-move clock is below ``edge``; anything above the last edge is
+# ``">3m"`` and a ``None`` clock (no ``[%clk]``) is ``"none"``. Coarse on purpose — the
+# point is to see *where* a candidate dump's clock coverage lands, not to fit anything.
+_CLOCK_BAND_EDGES = ((10.0, "<10s"), (30.0, "10-30s"), (60.0, "30-60s"), (180.0, "1-3m"))
+
+# Canonical display order for the bands (clock-blind first, then ascending time).
+CLOCK_BANDS = ("none", "<10s", "10-30s", "30-60s", "1-3m", ">3m")
+
+
+def clock_band(clock_remaining: Optional[float]) -> str:
+    """Bucket a side-to-move clock (seconds) into a coarse band label.
+
+    ``None`` (the game carried no ``[%clk]`` tags) -> ``"none"``; otherwise the first
+    :data:`_CLOCK_BAND_EDGES` band it falls under, or ``">3m"`` above them all. The band
+    vocabulary the coverage diagnostic and ``validate --slice clock`` group by (task 0249).
+    """
+    if clock_remaining is None:
+        return "none"
+    for edge, label in _CLOCK_BAND_EDGES:
+        if clock_remaining < edge:
+            return label
+    return ">3m"
+
+
 def time_pressure(clock_remaining: Optional[float]) -> float:
     """Scramble severity in [0, 1] for the side to move from their clock seconds.
 
