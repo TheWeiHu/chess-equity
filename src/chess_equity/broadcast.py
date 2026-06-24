@@ -1683,8 +1683,39 @@ def sse_frame(event: Dict[str, object]) -> str:
 
 # Light hysteresis: a rival board must out-drama the current focus by this much (on the
 # 0..1 drama-magnitude scale) before it can steal the cut, so a hair-bigger blip on a
-# quiet board doesn't thrash the focus every ply. Manual+auto blending is still deferred.
+# quiet board doesn't thrash the focus every ply.
 FOCUS_MARGIN = 0.15
+
+# Additive score bonus given to a board a caster has biased the director toward via
+# `--board auto:<player>` (task 0258). Set equal to FOCUS_MARGIN so the bias is exactly
+# strong enough to win ties and any sub-margin contest, yet a rival still steals focus on
+# a *much* bigger swing: a biased held board needs a rival to beat it by margin + bonus
+# (= 2x the margin), while a biased rival steals on any non-negative edge (margin - bonus
+# = 0). One knob, symmetric both directions. The bonus is added to the (already decayed,
+# task 0257) recency score, so a biased board still fades if it goes quiet — bias is a
+# standing thumb on the scale, not an immunity to the recency window.
+FOCUS_BIAS_BONUS = FOCUS_MARGIN
+
+
+def parse_focus_bias(spec: Optional[str]) -> tuple[bool, Optional[str]]:
+    """Split a ``--board`` spec into ``(auto_follow, focus_bias_player)``.
+
+    ``auto`` -> follow all boards, no bias (the plain task 0256 behaviour). ``auto:<player>``
+    -> still follow all, but BIAS the drama director toward boards featuring ``<player>``
+    (case-insensitive substring) so a caster keeps a favorite in view while a bigger swing
+    elsewhere can still steal the cut (task 0258). Any non-auto spec -> ``(False, None)``;
+    the caller hard-filters it via :func:`parse_board_selector` as before.
+    """
+    if not isinstance(spec, str):
+        return (False, None)
+    s = spec.strip()
+    low = s.lower()
+    if low == "auto":
+        return (True, None)
+    if low.startswith("auto:"):
+        bias = s[len("auto:") :].strip()
+        return (True, bias or None)
+    return (False, None)
 
 # Geometric recency decay applied to every board's standing score on each ``note()``
 # tick (task 0257). A board's drama fades by this factor per ply it stays quiet, so
@@ -1713,6 +1744,13 @@ class FocusDirector:
     its router to board 0, so an opening focus event would be redundant. Thereafter a
     rival steals focus only when its swing out-dramas the current focus's most-recent
     swing by :data:`FOCUS_MARGIN` (light anti-thrash hysteresis).
+
+    ``bias`` is an optional ``board -> float`` callable adding a standing score bonus to
+    favored boards (task 0258): a caster passing ``--board auto:<player>`` keeps that
+    player's boards in view (they win ties and small-margin contests) without hard-
+    filtering the rest, so a much bigger swing elsewhere still steals the cut. The bonus
+    is applied symmetrically to both the rival and the held focus in every comparison, on
+    top of each board's decayed recency score.
 
     Pure + state-only (no model, no IO) so it unit-tests directly. :meth:`note` returns
     the board index when the focus CHANGES (so the caller emits one ``focus`` event),
@@ -1826,7 +1864,8 @@ class FocusDirector:
         Each call is one ply tick: every board's recency score is decayed by
         :attr:`decay` first, then ``board``'s score is refreshed to ``magnitude`` — so
         the focus comparison weighs a rival against the *decayed* (recent) score of the
-        current focus, not its all-time peak."""
+        current focus, not its all-time peak. Any caster :attr:`bias` bonus is added to
+        both sides of that comparison via :meth:`_score`."""
         for b in self.recent:
             self.recent[b] *= self.decay
         self.recent[board] = magnitude
@@ -2068,6 +2107,10 @@ def overlay_events(
 
     # `--board auto` (task 0256): track each board's recent drama and emit a `focus`
     # routing event the moment the most-dramatic board changes, so the overlay auto-cuts.
+    # `--board auto:<player>` (tasks 0258/0262): additionally bias the director toward
+    # boards featuring that player — registered per-board in `on_game` above via
+    # `director.set_bias(...)` as each matching board is announced — so a caster's favorite
+    # holds focus through ties without hard-filtering the rest of the round.
     director = FocusDirector() if auto_follow else None
 
     def _apply_pins() -> "Iterator[Dict[str, object]]":

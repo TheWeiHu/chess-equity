@@ -512,7 +512,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     # one via server-side drama scoring (task 0256), so it keeps the full follow-all
     # stream (selector None) and flips on the auto-follow director instead. The
     # --board auto:<player> form additionally biases that director toward a named
-    # player's boards (a soft hybrid; task 0262).
+    # player's boards (a soft manual+auto hybrid; tasks 0258/0262).
     from chess_equity.broadcast import parse_auto_spec, parse_board_selector
 
     board_spec = getattr(args, "board", None)

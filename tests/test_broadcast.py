@@ -9,6 +9,7 @@ import pytest
 
 from chess_equity.broadcast import (
     FOCUS_BIAS,
+    FOCUS_BIAS_BONUS,
     FOCUS_DECAY,
     FOCUS_MARGIN,
     BroadcastFeed,
@@ -24,6 +25,7 @@ from chess_equity.broadcast import (
     game_event,
     grade_delta,
     overlay_events,
+    parse_focus_bias,
     split_games,
 )
 from chess_equity.adapters import EquityModel
@@ -725,14 +727,28 @@ def test_focus_decay_default_is_a_gentle_per_ply_factor():
     assert FocusDirector().decay == FOCUS_DECAY
 
 
-# Player bias (task 0262): `--board auto:<player>` softly biases the cut toward a named
-# player's boards via an additive standing bonus, so a biased board wins ties/small
+# Player bias (tasks 0258/0262): `--board auto:<player>` softly biases the cut toward a
+# named player's boards via an additive standing bonus, so a biased board wins ties/small
 # margins while a rival must out-drama it by margin+bias to steal the cut.
 
 
 def test_focus_bias_default_equals_the_margin():
     """The shipped bias is the margin, so a favoured board steals on a mere tie."""
     assert FOCUS_BIAS == FOCUS_MARGIN
+    assert FOCUS_BIAS_BONUS == FOCUS_MARGIN
+
+
+def test_parse_focus_bias_splits_auto_and_player():
+    """`auto` -> follow-all no bias; `auto:<player>` -> follow-all biased to that name;
+    anything else -> not auto (hard-filtered by the board selector instead)."""
+    assert parse_focus_bias("auto") == (True, None)
+    assert parse_focus_bias("AUTO") == (True, None)
+    assert parse_focus_bias("auto:Carlsen") == (True, "Carlsen")
+    assert parse_focus_bias("auto: Nakamura ") == (True, "Nakamura")
+    assert parse_focus_bias("auto:") == (True, None)  # empty bias degrades to plain auto
+    assert parse_focus_bias("Carlsen") == (False, None)
+    assert parse_focus_bias("3") == (False, None)
+    assert parse_focus_bias(None) == (False, None)
 
 
 def test_focus_director_bias_wins_a_tie():
@@ -885,6 +901,60 @@ def test_auto_follow_focus_event_carries_the_director_cue():
     reason = focuses[-1].get("reason")
     assert isinstance(reason, str) and reason, "focus event must carry a reason string"
     assert "Bd2" in reason  # cut to the dramatic board (0-based index 1 -> "Bd2")
+
+
+# More player-bias coverage (tasks 0258/0262), adapted to the dict-bias FocusDirector API.
+
+
+def test_focus_director_bias_yields_to_a_much_bigger_swing():
+    """The bias is a thumb on the scale, not a hard filter: a rival board with a swing
+    big enough to clear margin + bonus still steals focus off the favored board.
+    ``decay=1.0`` keeps the held score steady so the threshold is exactly margin+bonus."""
+    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=1.0)
+    d.note(0, 0.5)  # adopt + bias the focused board 0
+    # A sub-(margin+bonus) rival can't steal from the favored board...
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS - 0.01) is None
+    assert d.focus == 0
+    # ...but a swing clearing margin + bonus does.
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS + 0.01) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_bias_still_fades_when_the_favorite_goes_quiet():
+    """Bias is added on top of the DECAYED recency score, so a favored board that stops
+    playing still loses the cut to a steadily-active rival (recency + bias compose)."""
+    # Strong decay so the stale favorite erodes within a few ticks.
+    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=0.5)
+    d.note(0, 0.9)  # board 0 (the favorite) peaks, then goes silent
+    stole = None
+    for _ in range(6):
+        # Board 1 plays steady moderate drama; its score holds while board 0's decays.
+        stole = d.note(1, 0.5)
+        if stole is not None:
+            break
+    assert stole == 1, "even a biased board must yield once its drama decays away"
+    assert d.focus == 1
+
+
+def test_focus_director_bias_routes_by_player_in_overlay():
+    """End-to-end: `--board auto:Hero` biases the director toward Hero's board, so the
+    favorite still cuts in via the overlay bridge (board 1's White is 'Hero')."""
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor,
+            auto_follow=True,
+            bias_player="Hero",
+            interval=0.0,
+            sleep=lambda _: None,
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the biased dramatic board must still trigger a focus cut"
+    assert focuses[-1]["board"] == 1
 
 
 # A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
