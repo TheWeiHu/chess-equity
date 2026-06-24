@@ -697,11 +697,20 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         )
         return 0
 
+    from chess_equity.broadcast import CaptionDeduper
+
+    caption_deduper = CaptionDeduper()
+
     def emit(event: MoveEvent) -> None:
         if captions:
             from chess_equity.broadcast import live_caption
 
-            line = live_caption(event, divergence_threshold=div_threshold)
+            # Suppress identical back-to-back caster lines (e.g. White O-O then Black O-O
+            # with the same grade/swing) so the stream never reads as a stuck overlay
+            # (task 0274). None (ungraded) passes through cleanly.
+            line = caption_deduper.feed(
+                live_caption(event, divergence_threshold=div_threshold)
+            )
             if line is not None:
                 out.write(line + "\n")
                 out.flush()
