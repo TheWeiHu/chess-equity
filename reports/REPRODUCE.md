@@ -53,18 +53,6 @@ chess-equity validate    --data eval_2016-05/dataset.csv --models baseline,wdl-a
     --wdl-a-artifact wdl_a_2013-01.json --eval-month 2016-05 --bootstrap 1000 --seed 0 --gate
 ```
 
-### Cross-dump replication — `validation_real_2016-05.md`  [torch-free]
-Dump `lichess_db_standard_rated_2016-05`, n=100000 sample (held-out 20300 / 325 games),
-`--with-fen`, seed 0:
-```
-chess-equity data build  --pgn ~/.cache/chess-equity/dumps/lichess_db_standard_rated_2016-05.pgn.zst \
-    --sample 100000 --with-fen --out build_2016-05
-chess-equity validate    --data build_2016-05/dataset.parquet --models baseline,wdl-a \
-    --gate --bootstrap 1000 --holdout 0.2 --seed 0 --eval-month 2016-05 --out reports/validation_real_2016-05.md
-```
-`maia2` skipped (no torch on this box). Caveat: `wdl-a` is in-distribution here
-(`fit_month`=2016-05; the leakage guard fires), so read it as a consistency check.
-
 ### Properly-powered high-rating gate — `validation_real_2016-05_high.md`  [torch-free]
 Dump `lichess_db_standard_rated_2016-05`, filtered to **2000+ only**, n_high=49269 (held-out
 10134 / 148 games), seed 0. A helper builds the 300k mixed sample and filters to the

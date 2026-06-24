@@ -44,7 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 REPORTS_DIR = REPO_ROOT / "reports"
 SUMMARY = REPORTS_DIR / "SUMMARY.md"
 
-# Real-data evidence reports follow ``*_real*.md`` (note ``validation_real_2016-05.md`` and
+# Real-data evidence reports follow ``*_real*.md`` (note ``validation_real_2016-05_high.md`` and
 # friends do NOT end in ``_real.md``). ``*_sample.md`` are illustrative-only and excluded.
 REPORT_GLOB = "*_real*.md"
 

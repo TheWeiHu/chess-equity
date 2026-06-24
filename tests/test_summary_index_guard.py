@@ -34,7 +34,7 @@ REPORTS_DIR = REPO_ROOT / "reports"
 SUMMARY = REPORTS_DIR / "SUMMARY.md"
 
 # The committed real-data gate reports are exactly the `*real*.md` files (the cross-dump
-# ones — validation_real_2016-05.md, _high.md, _xdump_refit.md — do NOT end in `_real.md`,
+# ones — validation_real_2016-05_high.md, validation_real_xdump_refit.md — do NOT end in `_real.md`,
 # so a `*_real.md` glob would miss them). The `*_sample.md` artifacts are illustrative
 # smoke, intentionally excluded from the index, and don't match `*real*.md`.
 REAL_GLOB = "*real*.md"
@@ -116,9 +116,9 @@ def test_summary_covers_exactly_the_real_reports() -> None:
         f"real reports on disk with no SUMMARY.md row (index is stale): "
         f"{sorted(missing_from_index)}"
     )
-    # Every indexed row must point at a file that exists on disk. The index also lists a
-    # few non-`*real*.md` companion rows (e.g. clock_dump_plan.md — HEAD-metadata only, no
-    # dump), so check link resolution against the actual reports dir, not just the real set.
+    # Every indexed row must point at a file that exists on disk. The index may also list
+    # non-`*real*.md` companion rows (HEAD-metadata-only locators with no dump), so check
+    # link resolution against the actual reports dir, not just the real set.
     stale_rows = {fname for fname in indexed if not (REPORTS_DIR / fname).exists()}
     assert not stale_rows, (
         f"SUMMARY.md rows pointing at files that don't exist (renamed/removed?): "

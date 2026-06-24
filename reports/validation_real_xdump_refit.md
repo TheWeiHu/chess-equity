@@ -22,10 +22,10 @@ chess-equity validate    --data eval_2016-05/dataset.csv --models baseline,wdl-a
 so no within-dump holdout split is needed; the cross-dump gap *is* the held-out boundary). `maia2` is
 **skipped** — no `torch` on this box (the committed 2013-01 report carries the maia2 column).
 
-**Why this report exists (de-coupling the leakage the 0160 follow-up flagged).** The cross-dump gate
-[`reports/validation_real_2016-05.md`](validation_real_2016-05.md) PASSes on the larger, well-powered
-2016-05 dump, but `wdl-a`'s `fit_month` *was* `2016-05` there, so its column was **in-distribution** —
-the leakage guard (task 0112) fired and the wdl-a numbers measured memorization, not held-out skill
+**Why this report exists (de-coupling the leakage the 0160 follow-up flagged).** A naive cross-dump gate
+on the larger, well-powered 2016-05 dump PASSes, but if `wdl-a`'s `fit_month` is *also* `2016-05` its
+column is **in-distribution** —
+the leakage guard (task 0112) fires and the wdl-a numbers measure memorization, not held-out skill
 (only the model-free `baseline` and the bigger high-rating `n` were independent). This report removes
 that confound by **refitting `wdl-a` on a different month (2013-01)** so the well-powered 2016-05 dump
 becomes a clean held-out test *for wdl-a itself*. No leakage banner appears below — `fit_month=2013-01`
@@ -39,9 +39,9 @@ adequately powered and equity wins each: **2000-2199** (n=12167, Δ +0.1746, CI 
 **2200-2399** (n=5239, Δ +0.3451, CI clears zero). Equity wins on **17/17** adequately-powered slices.
 This is the held-out, high-rating-powered proof the 0160 follow-up called for.
 
-> ℹ️ **This is genuine held-out evidence.** Unlike `reports/validation_real_2016-05.md`, `wdl-a`'s
-> training month (`2013-01`) differs from the eval month (`2016-05`), so the leakage guard stays
-> silent and the PASS below reflects held-out skill, not memorization.
+> ℹ️ **This is genuine held-out evidence.** Here `wdl-a`'s training month (`2013-01`) differs from the
+> eval month (`2016-05`), so the leakage guard stays silent and the PASS below reflects held-out skill,
+> not memorization.
 
 ---
 
