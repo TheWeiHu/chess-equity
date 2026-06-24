@@ -181,6 +181,73 @@ def equity_sparkline(grades: List[MoveGrade]) -> str:
     return "".join(cells)
 
 
+def equity_trajectory_svg(
+    grades: List[MoveGrade],
+    *,
+    width: int = 480,
+    height: int = 140,
+) -> str:
+    """A self-contained SVG win-equity trajectory chart for a graded game.
+
+    The graphical sibling of :func:`equity_sparkline`: per-ply White-POV win-equity
+    drawn as a filled area + polyline over the game, with a 50% midline so a caster
+    sees at a glance who's ahead and where the swings are. One polyline point per
+    graded ply (``len(points) == len(grades)``), x left→right over the game, y mapped
+    over the full [0, 100]% bar range (top = White winning). Renderable as a static
+    asset or an OBS browser-source widget. Pure string generation over already-computed
+    grades: no torch, no data, no XML library, no model calls.
+    """
+    if not grades:
+        raise ValueError("equity_trajectory_svg needs at least one graded ply")
+
+    pad = 12
+    plot_x = pad
+    plot_y = 26
+    plot_w = width - 2 * pad
+    plot_h = height - plot_y - 22  # leave room for the caption strip below
+
+    def _x(i: int) -> float:
+        # Spread points across the plot; a single ply sits at the left edge.
+        if len(grades) == 1:
+            return round(plot_x, 2)
+        return round(plot_x + plot_w * i / (len(grades) - 1), 2)
+
+    def _y(equity_white: float) -> float:
+        frac = max(0.0, min(1.0, equity_white / 100.0))
+        return round(plot_y + plot_h * (1.0 - frac), 2)  # high equity → top
+
+    pts = [(_x(i), _y(white_pov_equity(g))) for i, g in enumerate(grades)]
+    poly = " ".join(f"{x},{y}" for x, y in pts)
+    # Area = the polyline closed down to the baseline and back.
+    area = f"{poly} {pts[-1][0]},{plot_y + plot_h} {pts[0][0]},{plot_y + plot_h}"
+    mid_y = _y(50.0)
+    final_pct = white_pov_equity(grades[-1])
+    favour = "White" if final_pct >= 50.0 else "Black"
+
+    aria = (
+        f"Win-equity trajectory over {len(grades)} plies; "
+        f"final White {final_pct:.1f}% ({favour} ahead)"
+    )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-label="{aria}">\n'
+        f'  <title>{aria}</title>\n'
+        f'  <rect width="{width}" height="{height}" fill="#1b1b1b"/>\n'
+        f'  <text x="{pad}" y="18" font-family="sans-serif" font-size="13" '
+        f'font-weight="bold" fill="#f0f0f0">Win-equity trajectory</text>\n'
+        f'  <text x="{width - pad}" y="18" font-family="sans-serif" font-size="12" '
+        f'fill="#9a9a9a" text-anchor="end">White {final_pct:.1f}% ({favour})</text>\n'
+        f'  <polygon points="{area}" fill="#3a6ea5" fill-opacity="0.35"/>\n'
+        f'  <line x1="{plot_x}" y1="{mid_y}" x2="{plot_x + plot_w}" y2="{mid_y}" '
+        f'stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>\n'
+        f'  <polyline points="{poly}" fill="none" stroke="#7fb2e5" stroke-width="2" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>\n'
+        f'  <text x="{width - pad}" y="{mid_y - 3}" font-family="sans-serif" font-size="9" '
+        f'fill="#6a6a6a" text-anchor="end">50%</text>\n'
+        f'</svg>\n'
+    )
+
+
 class EquityGrader:
     """Grades moves by Δequity using an :class:`EquityModel` + a peer policy."""
 

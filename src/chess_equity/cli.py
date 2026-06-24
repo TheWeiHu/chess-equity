@@ -356,6 +356,7 @@ def _run_grade(args: argparse.Namespace) -> int:
         else:
             from chess_equity.grading import (
                 equity_sparkline,
+                equity_trajectory_svg,
                 render_scoreline,
                 scoreline,
             )
@@ -368,6 +369,12 @@ def _run_grade(args: argparse.Namespace) -> int:
             if getattr(args, "sparkline", False) and grades:
                 print()
                 print(equity_sparkline(grades))
+            # Graphical SVG trajectory (task 0242): the sparkline's overlay/VOD sibling,
+            # a per-ply White-POV area/line chart with a 50% midline — pure over grades.
+            if getattr(args, "trajectory_svg", None) and grades:
+                with open(args.trajectory_svg, "w", encoding="utf-8") as fh:
+                    fh.write(equity_trajectory_svg(grades))
+                print(f"wrote equity-trajectory SVG to {args.trajectory_svg}")
             # Per-side caster scoreline (task 0200): a one-glance accuracy-style summary
             # aggregated only from the per-move grades — no extra model calls.
             line = scoreline(grades)
@@ -1694,6 +1701,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--sparkline", action="store_true",
         help="also print a one-line eighth-block sparkline of the per-ply White-POV "
              "equity series (one block per graded ply) — the swing shape at a glance",
+    )
+    gr.add_argument(
+        "--trajectory-svg", metavar="OUT",
+        help="write a standalone SVG win-equity trajectory chart (per-ply White-POV "
+             "area/line with a 50%% midline) to OUT — an overlay/VOD asset, the "
+             "graphical sibling of --sparkline",
     )
     add_model_arg(gr)
 

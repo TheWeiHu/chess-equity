@@ -514,3 +514,52 @@ def test_sparkline_is_white_pov_for_black_movers():
     # A Black mover sitting on equity_after=90 (Black winning) is White-POV ~10 → low block.
     spark = equity_sparkline([_grade(90.0, mover_white=False)])
     assert spark == SPARK_BLOCKS[0]
+
+
+# --------------------------------------------------------------------------- #
+# Graphical equity-trajectory SVG (task 0242)
+# --------------------------------------------------------------------------- #
+
+
+def test_trajectory_svg_has_one_polyline_point_per_graded_ply():
+    import re
+
+    from chess_equity.grading import equity_trajectory_svg
+
+    pgn = "1. e4 e5 2. Nf3 Nc6 *"
+    game = chess.pgn.read_game(io.StringIO(pgn))
+    grades = EquityGrader(LichessBaselineModel()).grade_game(game, 1500, 1500)
+    svg = equity_trajectory_svg(grades)
+    # Standalone SVG document.
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+    # The data polyline has exactly one "x,y" point per graded ply.
+    poly = re.search(r'<polyline points="([^"]*)"', svg)
+    assert poly is not None
+    points = poly.group(1).split()
+    assert len(points) == len(grades) == 4
+    for p in points:
+        x, _, y = p.partition(",")
+        float(x), float(y)  # well-formed coordinates
+
+
+def test_trajectory_svg_draws_the_50_percent_midline():
+    from chess_equity.grading import equity_trajectory_svg
+
+    svg = equity_trajectory_svg([_grade(50.0)])
+    # The midline is a dashed horizontal <line>, labelled 50%.
+    assert "stroke-dasharray" in svg
+    assert ">50%<" in svg
+    # A 50% equity point sits exactly on the midline y.
+    import re
+
+    line = re.search(r'<line x1="[^"]*" y1="([0-9.]+)" x2="[^"]*" y2="([0-9.]+)"', svg)
+    assert line is not None and line.group(1) == line.group(2)
+
+
+def test_trajectory_svg_rejects_empty_series():
+    import pytest
+
+    from chess_equity.grading import equity_trajectory_svg
+
+    with pytest.raises(ValueError):
+        equity_trajectory_svg([])
