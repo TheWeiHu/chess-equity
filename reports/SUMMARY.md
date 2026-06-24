@@ -28,6 +28,7 @@ PASS/FAIL gate.
 | [failure_modes_real.md](failure_modes_real.md) — failure modes on binned real outcomes | 2013-01 | 12,000 | **info** — measured cp×rating cell comparison (baseline vs wdl-a vs measured); no gate |
 | [divergence_real.md](divergence_real.md) — equity vs Stockfish disagreement | 2013-01 | 12,000 | **info** — product-visible disagreement only; reads no outcomes, so no gate |
 | [drama_thresholds_real.md](drama_thresholds_real.md) — drama trigger thresholds | 2016-05 | 295,140 transitions / 4,860 games | **info** — calibrates Δequity thresholds on the real swing distribution; no gate |
+| [clock_coverage_real.md](clock_coverage_real.md) — `[%clk]` coverage audit of cached dumps | 2013-01 + 2016-05 | 34,308 / 200,000 | **info** — both cached dumps carry `[%clk]` on **0%** of rows; neither is usable for the clock dimension — a 2017-04+ dump must be downloaded (tasks 0153/0250/0269) |
 
 ## Reading the table
 
