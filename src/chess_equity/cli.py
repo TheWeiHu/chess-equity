@@ -495,10 +495,12 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     # --board auto follows ALL boards but auto-cuts the overlay focus to the liveliest
     # one via server-side drama scoring (task 0256), so it keeps the full follow-all
     # stream (selector None) and flips on the auto-follow director instead.
-    from chess_equity.broadcast import parse_board_selector
+    # --board auto:<player> additionally biases that auto-director toward a favorite
+    # player's boards (manual+auto hybrid, task 0258) without hard-filtering the rest.
+    from chess_equity.broadcast import parse_board_selector, parse_focus_bias
 
     board_spec = getattr(args, "board", None)
-    auto_follow = isinstance(board_spec, str) and board_spec.strip().lower() == "auto"
+    auto_follow, focus_bias = parse_focus_bias(board_spec)
     selector = None if auto_follow else parse_board_selector(board_spec)
 
     # --ledger: replay a finished local PGN into a flat per-move CSV for post-show stats
@@ -602,6 +604,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             return overlay_events(
                 ingestor,
                 auto_follow=auto_follow,
+                focus_bias=focus_bias,
                 interval=args.interval,
                 max_polls=args.max_polls,
                 max_idle_polls=None if is_live else 1,
@@ -642,6 +645,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         for ev in overlay_events(
             ingestor,
             auto_follow=True,
+            focus_bias=focus_bias,
             interval=args.interval,
             max_polls=args.max_polls,
             max_idle_polls=None if is_live else 1,
@@ -1859,11 +1863,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     bc.add_argument(
         "--board",
         default=None,
-        metavar="PLAYER|INDEX|auto",
+        metavar="PLAYER|INDEX|auto[:PLAYER]",
         help="follow one board of a multi-game round: a case-insensitive player-name "
         "substring, or a 0-based board index, or 'auto' to auto-cut the overlay focus to "
-        "whichever board has the highest recent drama (task 0256). Default: follow every "
-        "board (task 0182).",
+        "whichever board has the highest recent drama (task 0256). 'auto:PLAYER' biases "
+        "that auto-director toward a favorite player's boards while still cutting to "
+        "bigger drama elsewhere (task 0258). Default: follow every board (task 0182).",
     )
     bc.add_argument(
         "--clock-aware",

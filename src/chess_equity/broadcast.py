@@ -1426,8 +1426,39 @@ def sse_frame(event: Dict[str, object]) -> str:
 
 # Light hysteresis: a rival board must out-drama the current focus by this much (on the
 # 0..1 drama-magnitude scale) before it can steal the cut, so a hair-bigger blip on a
-# quiet board doesn't thrash the focus every ply. Manual+auto blending is still deferred.
+# quiet board doesn't thrash the focus every ply.
 FOCUS_MARGIN = 0.15
+
+# Additive score bonus given to a board a caster has biased the director toward via
+# `--board auto:<player>` (task 0258). Set equal to FOCUS_MARGIN so the bias is exactly
+# strong enough to win ties and any sub-margin contest, yet a rival still steals focus on
+# a *much* bigger swing: a biased held board needs a rival to beat it by margin + bonus
+# (= 2x the margin), while a biased rival steals on any non-negative edge (margin - bonus
+# = 0). One knob, symmetric both directions. The bonus is added to the (already decayed,
+# task 0257) recency score, so a biased board still fades if it goes quiet — bias is a
+# standing thumb on the scale, not an immunity to the recency window.
+FOCUS_BIAS_BONUS = FOCUS_MARGIN
+
+
+def parse_focus_bias(spec: Optional[str]) -> tuple[bool, Optional[str]]:
+    """Split a ``--board`` spec into ``(auto_follow, focus_bias_player)``.
+
+    ``auto`` -> follow all boards, no bias (the plain task 0256 behaviour). ``auto:<player>``
+    -> still follow all, but BIAS the drama director toward boards featuring ``<player>``
+    (case-insensitive substring) so a caster keeps a favorite in view while a bigger swing
+    elsewhere can still steal the cut (task 0258). Any non-auto spec -> ``(False, None)``;
+    the caller hard-filters it via :func:`parse_board_selector` as before.
+    """
+    if not isinstance(spec, str):
+        return (False, None)
+    s = spec.strip()
+    low = s.lower()
+    if low == "auto":
+        return (True, None)
+    if low.startswith("auto:"):
+        bias = s[len("auto:") :].strip()
+        return (True, bias or None)
+    return (False, None)
 
 # Geometric recency decay applied to every board's standing score on each ``note()``
 # tick (task 0257). A board's drama fades by this factor per ply it stays quiet, so
@@ -1449,6 +1480,13 @@ class FocusDirector:
     rival steals focus only when its swing out-dramas the current focus's most-recent
     swing by :data:`FOCUS_MARGIN` (light anti-thrash hysteresis).
 
+    ``bias`` is an optional ``board -> float`` callable adding a standing score bonus to
+    favored boards (task 0258): a caster passing ``--board auto:<player>`` keeps that
+    player's boards in view (they win ties and small-margin contests) without hard-
+    filtering the rest, so a much bigger swing elsewhere still steals the cut. The bonus
+    is applied symmetrically to both the rival and the held focus in every comparison, on
+    top of each board's decayed recency score.
+
     Pure + state-only (no model, no IO) so it unit-tests directly. :meth:`note` returns
     the board index when the focus CHANGES (so the caller emits one ``focus`` event),
     else ``None``.
@@ -1462,12 +1500,21 @@ class FocusDirector:
     """
 
     def __init__(
-        self, margin: float = FOCUS_MARGIN, decay: float = FOCUS_DECAY
+        self,
+        margin: float = FOCUS_MARGIN,
+        decay: float = FOCUS_DECAY,
+        bias: Optional[Callable[[int], float]] = None,
     ) -> None:
         self.margin = margin
         self.decay = decay
+        self.bias = bias
         self.focus: Optional[int] = None
         self.recent: Dict[int, float] = {}
+
+    def _score(self, board: int) -> float:
+        """A board's standing score: its decayed recency drama plus any caster bias bonus."""
+        base = self.recent.get(board, 0.0)
+        return base + (self.bias(board) if self.bias is not None else 0.0)
 
     def note(self, board: int, magnitude: float) -> Optional[int]:
         """Record ``board``'s latest drama ``magnitude``; return the new focus board if
@@ -1476,7 +1523,8 @@ class FocusDirector:
         Each call is one ply tick: every board's recency score is decayed by
         :attr:`decay` first, then ``board``'s score is refreshed to ``magnitude`` — so
         the focus comparison weighs a rival against the *decayed* (recent) score of the
-        current focus, not its all-time peak."""
+        current focus, not its all-time peak. Any caster :attr:`bias` bonus is added to
+        both sides of that comparison via :meth:`_score`."""
         for b in self.recent:
             self.recent[b] *= self.decay
         self.recent[board] = magnitude
@@ -1485,14 +1533,18 @@ class FocusDirector:
             return None
         if board == self.focus:
             return None
-        if magnitude - self.recent.get(self.focus, 0.0) >= self.margin:
+        if self._score(board) - self._score(self.focus) >= self.margin:
             self.focus = board
             return board
         return None
 
 
 def overlay_events(
-    ingestor: "BroadcastIngestor", *, auto_follow: bool = False, **stream_kwargs
+    ingestor: "BroadcastIngestor",
+    *,
+    auto_follow: bool = False,
+    focus_bias: Optional[str] = None,
+    **stream_kwargs,
 ) -> Iterator[object]:
     """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
 
@@ -1540,7 +1592,29 @@ def overlay_events(
 
     # `--board auto` (task 0256): track each board's recent drama and emit a `focus`
     # routing event the moment the most-dramatic board changes, so the overlay auto-cuts.
-    director = FocusDirector() if auto_follow else None
+    # `--board auto:<player>` (task 0258): additionally bias the director toward boards
+    # featuring that player (substring, case-insensitive) by reading their names off the
+    # live roster, so a caster's favorite holds focus through ties without hard-filtering.
+    def _focus_bonus(board_idx: int) -> float:
+        if not focus_bias:
+            return 0.0
+        needle = focus_bias.casefold()
+        for entry in roster:
+            if entry.get("index") != board_idx:
+                continue
+            players = entry.get("players")
+            players = players if isinstance(players, dict) else {}
+            for side in ("white", "black"):
+                side_info = players.get(side)
+                name = side_info.get("name") if isinstance(side_info, dict) else None
+                if isinstance(name, str) and needle in name.casefold():
+                    return FOCUS_BIAS_BONUS
+            return 0.0
+        return 0.0
+
+    director = (
+        FocusDirector(bias=_focus_bonus if focus_bias else None) if auto_follow else None
+    )
 
     ingestor.on_game = on_game
     ingestor.on_result = on_result
