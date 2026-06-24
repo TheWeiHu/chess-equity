@@ -731,6 +731,19 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
             print(f"wrote {len(reel)} moment(s): {args.srt}", file=sys.stderr)
         return 0
 
+    # --chapters PATH writes the reel as VOD chapter markers (HH:MM:SS Title lines a
+    # caster pastes into a YouTube/Twitch description). Like --srt it can stand alone
+    # (stdout on "-") or sit alongside --out-dir's json+md.
+    if args.chapters is not None and args.out_dir is None:
+        chapters_doc = reel_mod.build_chapters(reel)
+        if args.chapters == "-":
+            print(chapters_doc, end="")
+        else:
+            with open(args.chapters, "w", encoding="utf-8") as fh:
+                fh.write(chapters_doc)
+            print(f"wrote {len(reel)} moment(s): {args.chapters}", file=sys.stderr)
+        return 0
+
     # --posters DIR writes one static SVG poster per ranked moment (a shareable social
     # card). Like --html/--srt it can stand alone or sit alongside --out-dir's json+md.
     if args.posters is not None and args.out_dir is None:
@@ -760,6 +773,14 @@ def _run_reel(args: argparse.Namespace, model: EquityModel) -> int:
         with open(srt_path, "w", encoding="utf-8") as fh:
             fh.write(reel_mod.build_srt(reel))
         written.append(srt_path)
+    if args.chapters is not None:
+        chapters_path = (
+            args.chapters if args.chapters != "-"
+            else os.path.join(args.out_dir, "reel.chapters.txt")
+        )
+        with open(chapters_path, "w", encoding="utf-8") as fh:
+            fh.write(reel_mod.build_chapters(reel))
+        written.append(chapters_path)
     if args.posters is not None:
         poster_dir = args.posters
         written.extend(reel_mod.write_posters(reel, poster_dir, sources=sources))
@@ -1815,6 +1836,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "emit the narration as an SRT subtitle file (for Premiere/Resolve/CapCut) "
             "to PATH (or stdout if PATH omitted; reel.srt in --out-dir if both given)"
+        ),
+    )
+    rl.add_argument(
+        "--chapters",
+        nargs="?",
+        const="-",
+        default=None,
+        metavar="PATH",
+        help=(
+            "emit VOD chapter markers (HH:MM:SS Title lines for a YouTube/Twitch "
+            "description) to PATH (or stdout if PATH omitted; reel.chapters.txt in "
+            "--out-dir if both given)"
         ),
     )
     rl.add_argument(

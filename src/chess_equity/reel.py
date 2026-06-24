@@ -526,6 +526,51 @@ def build_srt(reel: List[DramaEvent]) -> str:
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
+# --- VOD chapter markers (task 0237) -----------------------------------------
+#
+# YouTube/Twitch VODs let a caster paste "HH:MM:SS Title" lines into the video
+# description to seed a chapter list the viewer can jump between. The reel is
+# already a ranked clip timeline (each moment dwells for its caption duration,
+# clips back-to-back — see :func:`build_webvtt`), so a chapter export is the same
+# cumulative timeline rendered as bare ``HH:MM:SS`` markers instead of cue ranges.
+# The first chapter is pinned to ``00:00:00`` (YouTube requires the opening
+# chapter to start at zero), and each line names the drama kind, the move, and the
+# signed equity swing so the description reads as a self-describing jump list.
+
+
+def _chapter_timestamp(seconds: float) -> str:
+    """Format a second offset as a bare ``HH:MM:SS`` VOD chapter marker (no ms).
+
+    VOD chapter lists (YouTube/Twitch) key off whole-second ``HH:MM:SS`` stamps, so
+    this drops the millisecond field :func:`_vtt_timestamp` carries. Offsets are
+    floored to the second the marker lands on (a chapter jumps to the start of its clip).
+    """
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def build_chapters(reel: List[DramaEvent]) -> str:
+    """Render the reel as VOD chapter markers — one ``HH:MM:SS Title`` line per moment.
+
+    Reuses the same clip timeline as :func:`build_webvtt`/:func:`build_srt`: clips play
+    back-to-back, each dwelling for its caption duration (:func:`clip_durations`), so
+    chapter *i* starts at the summed duration of every earlier clip. The first chapter is
+    pinned to ``00:00:00`` (YouTube requires the opening chapter at zero) and the stamps
+    increase monotonically. Each line reads ``HH:MM:SS <kind>: <san> (<signed swing>)`` —
+    e.g. ``00:00:00 missed_win: Rd1 (-20)`` — so a caster pastes the block straight into a
+    VOD description. An empty reel (a quiet game) yields an empty string.
+    """
+    lines: List[str] = []
+    start = 0.0
+    for d in reel:
+        swing = f"{d.delta_equity:+.0f}"
+        lines.append(f"{_chapter_timestamp(start)} {d.kind}: {d.san} ({swing})")
+        start += _caption_duration(d.magnitude)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def _webvtt_track_html(reel: List[DramaEvent]) -> str:
     """A <video> clip timeline carrying the reel's narration as an inline WebVTT track.
 
