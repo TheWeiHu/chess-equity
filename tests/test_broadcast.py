@@ -8,6 +8,7 @@ import chess
 import pytest
 
 from chess_equity.broadcast import (
+    FOCUS_BIAS,
     FOCUS_DECAY,
     FOCUS_MARGIN,
     BroadcastFeed,
@@ -386,6 +387,23 @@ def test_parse_board_selector_modes():
     assert parse_board_selector("Carlsen") == BoardSelector(player="Carlsen")
 
 
+def test_parse_auto_spec_modes():
+    """`--board auto[:player]` is recognised as the auto-follow form; everything else
+    (incl. a fixed one-board follow) is not (tasks 0256 / 0262)."""
+    from chess_equity.broadcast import parse_auto_spec
+
+    assert parse_auto_spec("auto") == (True, None)
+    assert parse_auto_spec("AUTO") == (True, None)  # keyword is case-insensitive
+    assert parse_auto_spec("  auto  ") == (True, None)
+    assert parse_auto_spec("auto:Carlsen") == (True, "Carlsen")  # name keeps its case
+    assert parse_auto_spec("auto: ding ") == (True, "ding")
+    assert parse_auto_spec("auto:") == (True, None)  # blank name degrades to plain auto
+    # Not an auto spec — the caller falls back to parse_board_selector.
+    assert parse_auto_spec(None) == (False, None)
+    assert parse_auto_spec("Carlsen") == (False, None)
+    assert parse_auto_spec("1") == (False, None)
+
+
 def test_ingestor_follows_one_board_by_player():
     from chess_equity.broadcast import parse_board_selector
 
@@ -706,6 +724,61 @@ def test_focus_decay_default_is_a_gentle_per_ply_factor():
     assert FocusDirector().decay == FOCUS_DECAY
 
 
+# Player bias (task 0262): `--board auto:<player>` softly biases the cut toward a named
+# player's boards via an additive standing bonus, so a biased board wins ties/small
+# margins while a rival must out-drama it by margin+bias to steal the cut.
+
+
+def test_focus_bias_default_equals_the_margin():
+    """The shipped bias is the margin, so a favoured board steals on a mere tie."""
+    assert FOCUS_BIAS == FOCUS_MARGIN
+
+
+def test_focus_director_bias_wins_a_tie():
+    """A biased rival steals the cut the moment it merely MATCHES the focus's drama —
+    unbiased an exact tie can never out-drama the focus by the margin."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={1: FOCUS_BIAS})
+    d.note(0, 0.5)  # adopt board 0 (unbiased)
+    # Board 1 ties board 0's 0.5 drama: standing 0.5 + bias(0.15) = 0.65 vs 0.5 -> cut.
+    assert d.note(1, 0.5) == 1
+    assert d.focus == 1
+
+
+def test_focus_director_bias_wins_a_small_margin_unbiased_would_not_cut():
+    """A biased board with only a hair of lead (well under the margin) steals — the same
+    swing on an unbiased board leaves the focus put."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={1: FOCUS_BIAS})
+    d.note(0, 0.5)
+    assert d.note(1, 0.55) == 1  # 0.55 + 0.15 - 0.5 = 0.20 >= margin -> cut
+    # Contrast: no bias, the same 0.05 lead is under the margin, so no cut.
+    d2 = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d2.note(0, 0.5)
+    assert d2.note(1, 0.55) is None
+    assert d2.focus == 0
+
+
+def test_focus_director_bias_focus_held_until_rival_exceeds_margin_plus_bias():
+    """A biased FOCUS board holds the cut until a rival out-dramas it by margin+bias —
+    a bigger margin than the plain hysteresis, but still beatable (it's a bias, not a
+    pin). The boundary swing steals; one hair under it does not."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0, bias={0: FOCUS_BIAS})
+    d.note(0, 0.5)  # board 0 is biased AND focus; effective standing 0.5 + 0.15 = 0.65
+    # A rival needs to clear 0.65 by the margin -> reach 0.80 (= 0.5 + margin + bias).
+    assert d.note(1, 0.79) is None  # just under: 0.79 - 0.65 = 0.14 < margin
+    assert d.focus == 0
+    assert d.note(1, 0.80) == 1  # at the threshold: 0.80 - 0.65 = 0.15 -> steal
+    assert d.focus == 1
+
+
+def test_focus_director_set_bias_registers_and_zero_is_a_noop():
+    """`set_bias` records a per-board bonus; a zero bonus registers no preference."""
+    d = FocusDirector()
+    d.set_bias(2)  # defaults to FOCUS_BIAS
+    assert d.bias == {2: FOCUS_BIAS}
+    d.set_bias(3, 0.0)  # no-op
+    assert 3 not in d.bias
+
+
 # Caster pin (task 0259): a pin holds focus for N note() ticks regardless of rival
 # drama, then auto-resumes drama-following; it also clears the moment the pinned
 # board's game ends.
@@ -831,14 +904,19 @@ def _two_board_round_with_drama():
     return GAME_PGN + "\n" + drama
 
 
-def _auto_overlay_events_for(snapshot):
-    """Drive a snapshot through the overlay bridge with `--board auto` on."""
+def _auto_overlay_events_for(snapshot, bias_player=None):
+    """Drive a snapshot through the overlay bridge with `--board auto` on (optionally
+    softly biased toward ``bias_player``'s boards, task 0262)."""
     feed = _OneShotFeed(snapshot)
     ingestor = BroadcastIngestor(feed, _model())
     return [
         e
         for e in overlay_events(
-            ingestor, auto_follow=True, interval=0.0, sleep=lambda _: None
+            ingestor,
+            auto_follow=True,
+            bias_player=bias_player,
+            interval=0.0,
+            sleep=lambda _: None,
         )
         if isinstance(e, dict)
     ]
@@ -859,6 +937,40 @@ def test_auto_follow_off_emits_no_focus_events():
     """Without `--board auto` the bridge emits no focus events (the default follow-all)."""
     events = _overlay_events_for(_two_board_round_with_drama())
     assert not any(e.get("type") == "focus" for e in events)
+
+
+def test_auto_bias_registers_bias_for_the_named_players_board(monkeypatch):
+    """`--board auto:<player>` wires a standing bias onto exactly the board(s) featuring
+    that player — matched on either side's name-plate as the round is announced (task
+    0262); a non-matching name registers nothing."""
+    import chess_equity.broadcast as bx
+
+    calls = []
+    orig = bx.FocusDirector.set_bias
+
+    def spy(self, board, bonus=bx.FOCUS_BIAS):
+        calls.append(board)
+        return orig(self, board, bonus)
+
+    monkeypatch.setattr(bx.FocusDirector, "set_bias", spy)
+    # _two_board_round: board 0 = Carlsen/Nakamura, board 1 = Ding/Firouzja.
+    _auto_overlay_events_for(_two_board_round(), bias_player="ding")
+    assert calls == [1], "only board 1 features Ding"
+
+    calls.clear()
+    _auto_overlay_events_for(_two_board_round(), bias_player="nobody")
+    assert calls == [], "no board features 'nobody' -> no bias registered"
+
+
+def test_auto_bias_still_yields_to_a_big_rival_swing():
+    """The bias is soft, not a hard pin: biasing toward the QUIET board's player does not
+    keep the cut there — board 1's scholar's-mate swing is big enough to steal anyway."""
+    events = _auto_overlay_events_for(
+        _two_board_round_with_drama(), bias_player="Carlsen"  # the quiet board 0's player
+    )
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a big-enough rival swing must still cut away despite the bias"
+    assert focuses[-1]["board"] == 1
 
 
 # --------------------------------------------------------------------------- #
