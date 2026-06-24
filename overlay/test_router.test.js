@@ -273,6 +273,37 @@ check("advancing onto a board that finished earlier skips to a still-live one", 
   assert.strictEqual(r.selected(), 2, "auto-advance lands on the next LIVE board, not a dead one");
 });
 
+// ---- server-side drama auto-follow (task 0256): `focus` routing events -------
+//
+// With `broadcast --board auto`, the SERVER runs the drama director and emits a
+// `{type:"focus", board, game_id}` event when the most-dramatic board changes. The
+// router just follows that cut (it doesn't re-score), unless the caster has pinned a
+// board — a manual pick always wins over the auto-follow.
+
+check("a focus event cuts the followed board to the server's choice", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT); // board 0 auto-selected
+  assert.strictEqual(r.selected(), 0);
+  r.learn({ type: "focus", board: 1, game_id: "g1" });
+  assert.strictEqual(r.selected(), 1, "the server's focus cut moves the followed board");
+  assert.ok(r.accepts(posBoard1), "the now-focused board's events route");
+  assert.ok(!r.accepts(posBoard0), "the unfocused board's events are dropped");
+});
+
+check("a focus event is routing metadata — never rendered", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  assert.ok(!r.accepts({ type: "focus", board: 1, game_id: "g1" }), "focus is never drawn");
+});
+
+check("a manual pin overrides the server's focus cut", () => {
+  const r = O.makeBoardRouter();
+  r.learn(BOARDS_EVENT);
+  r.select(0); // caster pins board 0
+  r.learn({ type: "focus", board: 1, game_id: "g1" });
+  assert.strictEqual(r.selected(), 0, "a pinned board ignores auto-follow focus cuts");
+});
+
 if (failures) {
   console.error(failures + " failure(s)");
   process.exit(1);

@@ -113,6 +113,15 @@ python3 overlay/serve.py                 # http://localhost:8777/
 headers are often blank or `?`); `--model maia2` swaps the placeholder baseline for the
 real rating-conditioned bar once its weights are installed (see `DEPENDENCIES.md`).
 
+> **Auto-follow the drama (`--board auto`, task 0256).** A multi-board round
+> (`--board <player|index>` follows one) can instead be set to `--board auto`: the
+> ingestor follows *every* board but auto-cuts the overlay focus to whichever game has
+> the highest recent drama (clutch / missed-win / escape / scramble), emitting a `focus`
+> event when the lead board changes — "show the caster the most exciting game right now".
+> Light hysteresis keeps it from thrashing every ply; a manual pick in the selector still
+> pins and overrides it. This is the server-side counterpart to the client `?autofollow=1`
+> director — use one.
+
 > **One-command live bridge (task 0094).** `chess-equity broadcast --round <id>
 > --serve-sse 8777` streams the round straight into the overlay as Server-Sent-Events:
 > it serves the overlay's static files **and** an `/sse` endpoint on the one port, so
@@ -262,6 +271,18 @@ values are **seconds remaining**.
   "board": 0,
   "game_id": "abcd1234",
   "result": "1-0"                            // "1-0" | "0-1" | "1/2-1/2"
+}
+
+// focus cut — emitted by the SERVER-side drama auto-director when `broadcast --board
+// auto` is on (task 0256): the producer tracks each board's recent drama and sends this
+// the moment the liveliest board changes, so the overlay auto-cuts to it. Routing
+// metadata (never rendered); the overlay follows it unless the caster has pinned a board
+// (a manual pick always wins). Multi-game rounds only. This is the server-driven
+// counterpart to the client `?autofollow=1` director above — use one or the other.
+{
+  "type": "focus",
+  "board": 1,
+  "game_id": "drama002"
 }
 ```
 

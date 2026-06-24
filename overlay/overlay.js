@@ -460,8 +460,10 @@
       },
       // Update the roster from a routing event. A "boards" event carries the full
       // roster; a "game" event with a numeric `board` adds one board; a "result" event
-      // marks a board's game as ended. Auto-selects the first board so a fresh overlay
-      // isn't blank before the caster chooses, and auto-advances off a finished board.
+      // marks a board's game as ended; a "focus" event (server-side `--board auto`
+      // drama director, task 0256) cuts to a board unless the caster has pinned one.
+      // Auto-selects the first board so a fresh overlay isn't blank before the caster
+      // chooses, and auto-advances off a finished board.
       learn: function (evt) {
         if (!evt) return;
         if (evt.type === "boards" && Array.isArray(evt.boards)) {
@@ -470,17 +472,27 @@
           if (!has(evt.board)) boards.push({ index: evt.board, players: evt.players });
         } else if (evt.type === "result" && typeof evt.board === "number") {
           finished[evt.board] = true;
+        } else if (evt.type === "focus" && typeof evt.board === "number") {
+          // The server already ran the drama director; just follow its cut. A manual
+          // pin wins — the caster's pick is never yanked by the auto-follow.
+          if (!pinned) {
+            selected = evt.board;
+            lockRemaining = 0;
+            challenger = null;
+            challengeStreak = 0;
+          }
         }
         if (selected === null && boards.length) selected = boards[0].index;
         // Advance after every learn: a result for the followed board moves us now; a
         // later live board appearing while we're stranded on a finished one moves us then.
         autoAdvance();
       },
-      // Should this event be rendered, given the current selection? "boards" and
-      // "result" events are routing metadata (never rendered). Events with no `board`
+      // Should this event be rendered, given the current selection? "boards", "result"
+      // and "focus" events are routing metadata (never rendered). Events with no `board`
       // (single-game feed) always pass. When a board is selected, only its events pass.
       accepts: function (evt) {
-        if (!evt || evt.type === "boards" || evt.type === "result") return false;
+        if (!evt || evt.type === "boards" || evt.type === "result" || evt.type === "focus")
+          return false;
         if (typeof evt.board !== "number") return true;
         if (selected === null) return true;
         return evt.board === selected;

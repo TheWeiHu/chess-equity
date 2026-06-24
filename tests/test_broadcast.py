@@ -8,9 +8,11 @@ import chess
 import pytest
 
 from chess_equity.broadcast import (
+    FOCUS_MARGIN,
     BroadcastFeed,
     BroadcastIngestor,
     FeedError,
+    FocusDirector,
     GameEvent,
     GameTracker,
     LocalPgnFeed,
@@ -625,6 +627,93 @@ def test_ingestor_fires_on_result_once_per_finished_board():
     assert len(results) == 1, "result announced once, not re-fired on every poll"
     assert isinstance(results[0], ResultEvent)
     assert results[0].board == 0 and results[0].result == "1-0"
+
+
+# --------------------------------------------------------------------------- #
+# Drama auto-follow — `broadcast --board auto` server-side focus (task 0256)
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_director_adopts_first_board_silently():
+    """The first board seen is adopted without a focus event — the overlay router
+    already defaults to board 0, so an opening cut would be redundant."""
+    d = FocusDirector()
+    assert d.note(0, 0.0) is None
+    assert d.focus == 0
+
+
+def test_focus_director_follows_the_more_dramatic_board():
+    """A rival board that out-dramas the focus by the margin steals the cut."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)  # adopt board 0 silently
+    assert d.note(0, 0.0) is None  # quiet move on the focused board: no cut
+    assert d.note(1, FOCUS_MARGIN + 0.1) == 1  # board 1 erupts -> cut to it
+    assert d.focus == 1
+
+
+def test_focus_director_hysteresis_ignores_tiny_swings():
+    """A blip below the margin can't thrash the focus off the followed board."""
+    d = FocusDirector(margin=FOCUS_MARGIN)
+    d.note(0, 0.0)
+    # Board 1 is barely more dramatic than board 0 (under the margin) — no cut.
+    assert d.note(1, FOCUS_MARGIN - 0.01) is None
+    assert d.focus == 0
+
+
+def test_focus_director_no_cut_on_the_focused_board():
+    """Repeated drama on the already-followed board never re-emits a focus event."""
+    d = FocusDirector()
+    d.note(0, 0.0)
+    assert d.note(0, 0.9) is None  # huge swing, but we're already on board 0
+    assert d.focus == 0
+
+
+# A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
+# scholar's mate (a huge final-move swing the material baseline scores as drama). Tiny
+# illustrative fixture for the routing unit test only — NOT thesis evidence.
+def _two_board_round_with_drama():
+    drama = """[Event "Test Broadcast"]
+[Site "https://lichess.org/dramagame"]
+[White "Hero"]
+[Black "Victim"]
+[Round "1"]
+[WhiteElo "1500"]
+[BlackElo "1500"]
+[Result "1-0"]
+
+1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
+"""
+    return GAME_PGN + "\n" + drama
+
+
+def _auto_overlay_events_for(snapshot):
+    """Drive a snapshot through the overlay bridge with `--board auto` on."""
+    feed = _OneShotFeed(snapshot)
+    ingestor = BroadcastIngestor(feed, _model())
+    return [
+        e
+        for e in overlay_events(
+            ingestor, auto_follow=True, interval=0.0, sleep=lambda _: None
+        )
+        if isinstance(e, dict)
+    ]
+
+
+def test_auto_follow_emits_focus_cut_to_the_dramatic_board():
+    """`--board auto` emits a `focus` event cutting to the board with the biggest recent
+    swing (the scholar's-mate board), routed to its game_id."""
+    events = _auto_overlay_events_for(_two_board_round_with_drama())
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "a dramatic board must trigger a focus cut"
+    last = focuses[-1]
+    assert last["board"] == 1, "focus should land on the dramatic board (index 1)"
+    assert last["game_id"] == "https://lichess.org/dramagame"
+
+
+def test_auto_follow_off_emits_no_focus_events():
+    """Without `--board auto` the bridge emits no focus events (the default follow-all)."""
+    events = _overlay_events_for(_two_board_round_with_drama())
+    assert not any(e.get("type") == "focus" for e in events)
 
 
 # --------------------------------------------------------------------------- #
