@@ -29,6 +29,7 @@ PASS/FAIL gate.
 | [divergence_real.md](divergence_real.md) — equity vs Stockfish disagreement | 2013-01 | 12,000 | **info** — product-visible disagreement only; reads no outcomes, so no gate |
 | [drama_thresholds_real.md](drama_thresholds_real.md) — drama trigger thresholds | 2016-05 | 295,140 transitions / 4,860 games | **info** — calibrates Δequity thresholds on the real swing distribution; no gate |
 | [clock_coverage_real.md](clock_coverage_real.md) — `[%clk]` coverage audit of cached dumps | 2013-01 + 2016-05 | 34,308 / 200,000 | **info** — both cached dumps carry `[%clk]` on **0%** of rows; neither is usable for the clock dimension — a 2017-04+ dump must be downloaded (tasks 0153/0250/0269) |
+| [clock_calibration_real.md](clock_calibration_real.md) — per-time-control time-forfeit multiplier calibration | 2016-05 | 6,225,957 games | **info** — measures real time-forfeit rate by time control (bullet 54.1% → classical 14.4%) to set `_TC_FLAG_MULTIPLIER`; clock-band knobs still blocked on a `[%clk]` dump; no gate |
 | [clock_dump_plan.md](clock_dump_plan.md) — smallest fetchable `[%clk]`-bearing dump (locator) | n/a (HEAD metadata only) | n/a | **info** — names **2017-04** (3.24 GiB) as the earliest/smallest clock-bearing slice + the `data build --month 2017-04` one-liner; one human approval unblocks 0153/0173/0174/0250/0269 |
 
 ## Reading the table

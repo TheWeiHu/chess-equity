@@ -110,12 +110,16 @@ def test_summary_covers_exactly_the_real_reports() -> None:
     on_disk = _real_report_files()
     indexed = {fname for fname, _, _ in _summary_rows()}
 
+    # Every committed real-data report must be indexed.
     missing_from_index = on_disk - indexed
     assert not missing_from_index, (
         f"real reports on disk with no SUMMARY.md row (index is stale): "
         f"{sorted(missing_from_index)}"
     )
-    stale_rows = indexed - on_disk
+    # Every indexed row must point at a file that exists on disk. The index also lists a
+    # few non-`*real*.md` companion rows (e.g. clock_dump_plan.md — HEAD-metadata only, no
+    # dump), so check link resolution against the actual reports dir, not just the real set.
+    stale_rows = {fname for fname in indexed if not (REPORTS_DIR / fname).exists()}
     assert not stale_rows, (
         f"SUMMARY.md rows pointing at files that don't exist (renamed/removed?): "
         f"{sorted(stale_rows)}"
