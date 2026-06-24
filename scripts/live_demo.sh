@@ -48,8 +48,16 @@ fi
 # --check: the offline smoke path the test drives. Run the *finite* JSONL replay (no
 # --serve-sse, --interval 0 so it terminates instantly) and assert it produced a
 # non-empty overlay event stream — at least one `position` event in the overlay schema.
+#
+# This path is HERMETIC by design: it pins the CLI to THIS script's own source tree
+# (PYTHONPATH=$ROOT/src) instead of resolve_cli's PATH lookup. The nightshift fleet runs
+# many git worktrees behind one shared PATH, so a global `chess-equity` entry point is an
+# editable install pointing at *whichever* worktree last ran `pip install -e` — replaying
+# a sibling branch's code that may emit zero overlay events and turn the gate red
+# (task 0252). The user-facing serve path below still uses resolve_cli for a friendly
+# clone-to-live experience; only the CI smoke must be reproducible regardless of PATH.
 if [ "${1:-}" = "--check" ]; then
-  out="$($CLI broadcast --pgn "$PGN" --interval 0 2>/dev/null)"
+  out="$(PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m chess_equity.cli broadcast --pgn "$PGN" --interval 0 2>/dev/null)"
   positions="$(printf '%s\n' "$out" | grep -c '"type": *"position"' || true)"
   if [ "${positions:-0}" -lt 1 ]; then
     echo "FAIL: live_demo produced no overlay position events" >&2
