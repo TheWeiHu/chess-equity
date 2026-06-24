@@ -689,6 +689,12 @@
     setFlagRisk("[data-white-flagrisk]", fr.white);
     setFlagRisk("[data-black-flagrisk]", fr.black);
 
+    // Out-of-distribution high-rating marker (task 0255): when BOTH players clear Maia-2's
+    // coarse `>2000` rating bucket the bar can't tell 2200 from 2800, so mark it
+    // lower-confidence (the server decides via chess_equity.broadcast.is_rating_ood). A
+    // missing field (older feed) degrades to no marker.
+    setRatingOod(evt.rating_ood);
+
     // Per-move Δequity grade pill.
     if (evt.grade && evt.grade.label) showGrade(evt.grade);
 
@@ -721,6 +727,22 @@
   function setFlagRisk(sel, side) {
     const el = q(sel);
     if (el) el.hidden = !flagRiskAlert(side);
+  }
+
+  // Out-of-distribution high-rating read (task 0255): the server emits a plain
+  // `rating_ood` boolean (chess_equity.broadcast.is_rating_ood — both ratings over the
+  // coarse `>2000` Maia-2 bucket). Strict boolean, so a missing/non-true value never
+  // marks the bar. Pure helper so the contract is exercised against the real overlay.js.
+  function ratingOod(flag) {
+    return flag === true;
+  }
+  function setRatingOod(flag) {
+    const on = ratingOod(flag);
+    // Hatch the bar (CSS `.bar.ood`) and reveal the small `?` mark + tooltip.
+    const bar = q(".bar");
+    if (bar) bar.classList.toggle("ood", on);
+    const el = q("[data-rating-ood]");
+    if (el) el.hidden = !on;
   }
 
   function showGrade(grade) {
@@ -987,6 +1009,7 @@
     formatClock: formatClock,
     timePressure: timePressure,
     flagRiskAlert: flagRiskAlert,
+    ratingOod: ratingOod,
     overrideRating: overrideRating,
     fmtDelta: fmtDelta,
     dramaSwing: dramaSwing,

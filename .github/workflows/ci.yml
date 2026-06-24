@@ -74,3 +74,9 @@ jobs:
       # default palette adds no class (task 0254).
       - name: Run overlay palette JS tests
         run: node overlay/test_palette.test.js
+      # The out-of-distribution high-rating marker (overlay/overlay.js ratingOod) is gated
+      # by a dependency-free node test: the bar marks lower-confidence iff the server-emitted
+      # `rating_ood` boolean is strictly true (both players over the coarse >2000 Maia-2
+      # bucket), and a missing field degrades to no marker (task 0255).
+      - name: Run overlay rating-OOD JS tests
+        run: node overlay/test_rating_ood.test.js
