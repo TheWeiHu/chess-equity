@@ -15,8 +15,10 @@ from __future__ import annotations
 from math import isclose
 
 from chess_equity.clock import (
+    FLAG_RISK_ALERT_THRESHOLD,
     clock_adjusted_white_equity,
     flag_risk,
+    is_flag_risk_alert,
     time_pressure,
 )
 from chess_equity.data.schema import PositionRow
@@ -113,6 +115,31 @@ def test_clock_aware_predictor_improves_low_clock_calibration():
     aware = brier_score([baseline_cp_clock(r) for r in rows], [r.result for r in rows])
     # The clock-aware bar is pulled toward the real 50/50 -> demonstrably better.
     assert aware < blind
+
+
+# --- flag-risk alert threshold (task 0243) -------------------------------------
+
+def test_flag_risk_alert_threshold_lights_on_real_scramble():
+    # A bullet side with ~4s flags often: flag_risk well over the alert threshold.
+    scramble = flag_risk(4.0, "bullet")
+    assert scramble >= FLAG_RISK_ALERT_THRESHOLD
+    assert is_flag_risk_alert(scramble) is True
+
+
+def test_flag_risk_alert_off_for_comfortable_clock():
+    # Minutes to spare -> risk ~0, well under the threshold -> no alert.
+    comfortable = flag_risk(300.0, "bullet")
+    assert comfortable < FLAG_RISK_ALERT_THRESHOLD
+    assert is_flag_risk_alert(comfortable) is False
+
+
+def test_flag_risk_alert_is_clock_blind_safe_and_threshold_tunable():
+    # None (clock-blind side) never alerts; the threshold is an overridable knob.
+    assert is_flag_risk_alert(None) is False
+    assert is_flag_risk_alert(0.5, threshold=0.6) is False
+    assert is_flag_risk_alert(0.5, threshold=0.4) is True
+    # Boundary: exactly at the threshold trips (>=, not >).
+    assert is_flag_risk_alert(FLAG_RISK_ALERT_THRESHOLD) is True
 
 
 def test_clock_aware_predictor_registered_and_harness_slices_by_clock():

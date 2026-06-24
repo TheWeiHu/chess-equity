@@ -63,3 +63,8 @@ jobs:
       # renders rows in strict rank order, sliced to top-N (task 0231).
       - name: Run overlay standings JS tests
         run: node overlay/test_standings.test.js
+      # The flag-risk alert badge (overlay/overlay.js flagRiskAlert) is gated by a
+      # dependency-free node test: a side's 🚩 badge lights iff the server-emitted
+      # flag_risk block flags that side, and clock-blind sides never alert (task 0243).
+      - name: Run overlay flag-risk JS tests
+        run: node overlay/test_flagrisk.test.js

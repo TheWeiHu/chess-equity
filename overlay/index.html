@@ -42,6 +42,10 @@
       <span class="name" data-white-name>White</span>
       <span class="rating" data-white-rating></span>
       <span class="clock" data-white-clock></span>
+      <!-- Flag-risk alert (task 0243): a 🚩 badge that lights when the MODEL's per-side
+           flag_risk (chess_equity.clock.flag_risk) crosses its alert threshold — real
+           time trouble, distinct from the raw-seconds low-clock nameplate tint (0105). -->
+      <span class="flag-risk" data-white-flagrisk title="time trouble — high flag risk" hidden>🚩</span>
     </div>
 
     <div class="bar-stack">
@@ -103,6 +107,7 @@
       <span class="name" data-black-name>Black</span>
       <span class="rating" data-black-rating></span>
       <span class="clock" data-black-clock></span>
+      <span class="flag-risk" data-black-flagrisk title="time trouble — high flag risk" hidden>🚩</span>
     </div>
 
     <!-- Legend key (task 0201): an optional, compact one-line key so a first-time

@@ -49,7 +49,7 @@ GAME_PGN = """[Event "Contract Test"]
 # gracefully, per overlay/README.md): late-arriving player metadata and the
 # optional caster-mode drama payload. Everything else the overlay reads on a
 # position event must be emitted by the producer.
-OPTIONAL_POSITION_READS = {"players", "drama"}
+OPTIONAL_POSITION_READS = {"players", "drama", "flag_risk"}
 
 
 def drive_events():
