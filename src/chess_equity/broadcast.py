@@ -1505,6 +1505,27 @@ class FocusDirector:
         self.recent: Dict[int, float] = {}
         self.pinned: Optional[int] = None  # board a caster has pinned, else None
         self.pin_remaining: int = 0  # note() ticks the pin still holds
+        # Human-readable cue explaining the most recent cut (task 0260), e.g.
+        # "cut to Bd3: +0.9 swing vs +0.4". Set every time focus changes (drama or pin),
+        # caption-ready so the caller can thread it onto the `focus` event for the overlay
+        # and the --captions-srt/vtt voice/subtitle track. ``None`` until the first cut.
+        self.last_reason: Optional[str] = None
+
+    @staticmethod
+    def board_label(board: int) -> str:
+        """Caster-facing 1-based board name for the 0-based ``board`` index ("Bd1")."""
+        return f"Bd{board + 1}"
+
+    def _drama_cut_reason(self, board: int, magnitude: float) -> str:
+        """Build the director cue for a drama-driven cut TO ``board`` (task 0260).
+
+        Reuses the magnitudes already in :attr:`recent` for the comparison: the new
+        board's fresh ``magnitude`` against the *decayed* score of the board we're
+        cutting away from, so the cue reads e.g. ``"cut to Bd3: +0.9 swing vs +0.4"``.
+        Caption-ready — voiced/subtitled as-is by the captions path.
+        """
+        prev = self.recent.get(self.focus, 0.0) if self.focus is not None else 0.0
+        return f"cut to {self.board_label(board)}: {magnitude:+.1f} swing vs {prev:+.1f}"
 
     def pin(self, board: int, plies: int) -> Optional[int]:
         """Caster directive: hold focus on ``board`` for ``plies`` :meth:`note` ticks,
@@ -1517,6 +1538,7 @@ class FocusDirector:
         self.pinned = board
         self.pin_remaining = max(0, int(plies))
         if self.focus != board:
+            self.last_reason = f"caster pin: hold {self.board_label(board)}"
             self.focus = board
             return board
         return None
@@ -1556,6 +1578,9 @@ class FocusDirector:
         if board == self.focus:
             return None
         if magnitude - self.recent.get(self.focus, 0.0) >= self.margin:
+            # Build the cue BEFORE moving focus so it compares against the board we're
+            # leaving (task 0260).
+            self.last_reason = self._drama_cut_reason(board, magnitude)
             self.focus = board
             return board
         return None
@@ -1634,7 +1659,14 @@ def overlay_events(
             mag = drama.get("magnitude", 0.0) if isinstance(drama, dict) else 0.0
             changed = director.note(board, mag or 0.0)
             if changed is not None:
-                yield {"type": "focus", "board": changed, "game_id": move_event.game_id}
+                # Carry the director cue (task 0260) so the overlay/caster knows WHY the
+                # cut fired; it's caption-ready for the --captions-srt/vtt voice track.
+                yield {
+                    "type": "focus",
+                    "board": changed,
+                    "game_id": move_event.game_id,
+                    "reason": director.last_reason,
+                }
         yield event
     while queued:
         yield queued.pop(0)
