@@ -327,6 +327,7 @@ def _run_grade(args: argparse.Namespace) -> int:
                 leaderboard_export_rows,
                 render_leaderboard,
                 render_leaderboard_csv,
+                render_leaderboard_md,
                 round_leaderboard,
             )
 
@@ -346,6 +347,13 @@ def _run_grade(args: argparse.Namespace) -> int:
                 with open(args.summary_json, "w", encoding="utf-8") as fh:
                     json.dump({"players": [s.to_dict() for s in scores]}, fh, indent=2)
                 print(f"wrote leaderboard JSON to {args.summary_json}")
+            # --leaderboard-md (task 0244): a paste-ready markdown recap table written to
+            # a file, independent of the stdout format (text/--json/--csv). Like
+            # --summary-json/--trajectory-svg, it's an extra asset, not a stdout switch.
+            if getattr(args, "leaderboard_md", None):
+                with open(args.leaderboard_md, "w", encoding="utf-8") as fh:
+                    fh.write(render_leaderboard_md(scores))
+                print(f"wrote leaderboard markdown to {args.leaderboard_md}")
         elif args.annotate_pgn:
             from chess_equity.annotate import annotate_pgn_file
 
@@ -1696,6 +1704,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--csv", action="store_true",
         help="with --round, print the leaderboard to stdout as CSV with the same columns "
              "as --json (suppresses the text table)",
+    )
+    gr.add_argument(
+        "--leaderboard-md", metavar="OUT",
+        help="with --round, also write a GitHub/Discord-flavored markdown leaderboard "
+             "table (rank, player, accuracy, lead, blunders, worst move; ordered by "
+             "--sort) to OUT — a paste-ready caster recap, independent of the stdout "
+             "format",
     )
     gr.add_argument(
         "--sparkline", action="store_true",
