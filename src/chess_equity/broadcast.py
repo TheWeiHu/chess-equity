@@ -37,6 +37,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -1533,8 +1534,42 @@ class FocusDirector:
         return None
 
 
+class PinChannel:
+    """Caster -> live director conduit for ``broadcast --board auto`` (task 0261).
+
+    The pin INPUT channel. :class:`FocusDirector` (task 0259) can *hold* focus on a
+    board, but the director lives inside the per-connection :func:`overlay_events`
+    generator, so a caster has no way to deliver a pin to a running stream. This is a
+    small thread-safe mailbox: the SSE server's HTTP handler thread :meth:`submit`s pin
+    directives, and the generator thread :meth:`drain`s them each tick and applies them
+    to its live director.
+
+    A directive is ``(board, plies)``; a ``board`` of ``None`` is an explicit unpin
+    (drama-following resumes on the next tick). Directives are delivered FIFO.
+    """
+
+    def __init__(self) -> None:
+        self._pending: List[Tuple[Optional[int], int]] = []
+        self._lock = threading.Lock()
+
+    def submit(self, board: Optional[int], plies: int = 0) -> None:
+        """Queue a pin directive. ``board=None`` queues an unpin (resume drama)."""
+        with self._lock:
+            self._pending.append((board if board is None else int(board), int(plies)))
+
+    def drain(self) -> "List[Tuple[Optional[int], int]]":
+        """Pop and return every queued directive (FIFO), leaving the channel empty."""
+        with self._lock:
+            out, self._pending = self._pending, []
+        return out
+
+
 def overlay_events(
-    ingestor: "BroadcastIngestor", *, auto_follow: bool = False, **stream_kwargs
+    ingestor: "BroadcastIngestor",
+    *,
+    auto_follow: bool = False,
+    pin_channel: "Optional[PinChannel]" = None,
+    **stream_kwargs,
 ) -> Iterator[object]:
     """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
 
@@ -1558,11 +1593,13 @@ def overlay_events(
     # single-game feed never carries a board index, so no roster/selector appears.
     roster: List[Dict[str, object]] = []
     board_of: Dict[str, int] = {}
+    game_of_board: Dict[int, str] = {}  # reverse map, so a channel pin can stamp game_id
 
     def on_game(game: "GameEvent") -> None:
         ev = game.to_overlay()
         if game.board is not None:
             board_of[game.game_id] = game.board
+            game_of_board[game.board] = game.game_id
             roster.append(
                 {
                     "index": game.board,
@@ -1587,9 +1624,28 @@ def overlay_events(
     # routing event the moment the most-dramatic board changes, so the overlay auto-cuts.
     director = FocusDirector() if auto_follow else None
 
+    def _apply_pins() -> "Iterator[Dict[str, object]]":
+        # Drain caster pin directives delivered out-of-band (task 0261) and apply them
+        # to the live director, yielding a `focus` cut whenever a pin moves the cut. Runs
+        # every tick (incl. idle heartbeats) so a pin lands promptly during a quiet wait.
+        if director is None or pin_channel is None:
+            return
+        for pin_board, pin_plies in pin_channel.drain():
+            if pin_board is None:
+                director.clear_pin()
+                continue
+            cut = director.pin(pin_board, pin_plies)
+            if cut is not None:
+                ev: Dict[str, object] = {"type": "focus", "board": cut}
+                gid = game_of_board.get(cut)
+                if gid is not None:
+                    ev["game_id"] = gid
+                yield ev
+
     ingestor.on_game = on_game
     ingestor.on_result = on_result
     for move_event in ingestor.stream(**stream_kwargs):
+        yield from _apply_pins()
         if move_event is None:  # idle-poll heartbeat tick from stream()
             yield HEARTBEAT
             continue
@@ -1612,7 +1668,11 @@ def overlay_events(
         yield queued.pop(0)
 
 
-def _sse_handler(event_source: Callable[[], Iterator[object]], directory: Optional[str]):
+def _sse_handler(
+    event_source: Callable[[], Iterator[object]],
+    directory: Optional[str],
+    pin_channel: "Optional[PinChannel]" = None,
+):
     """Build a request handler that serves ``/sse`` as a live event stream.
 
     ``event_source`` is a zero-arg factory returning a *fresh* iterator of overlay
@@ -1620,6 +1680,11 @@ def _sse_handler(event_source: Callable[[], Iterator[object]], directory: Option
     When ``directory`` is set the handler also serves the overlay's static files, so
     ``http://host:port/?src=/sse`` is a one-command overlay; otherwise only ``/sse``
     is served.
+
+    When ``pin_channel`` is set the handler also accepts ``POST /pin`` with a JSON body
+    ``{"board": N, "plies": M}`` (the caster pin INPUT channel, task 0261): the directive
+    is queued on the channel and the live :func:`overlay_events` generator drains it onto
+    its director. A missing/``null`` ``board`` is an unpin (resume drama-following).
     """
 
     class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -1636,6 +1701,26 @@ def _sse_handler(event_source: Callable[[], Iterator[object]], directory: Option
                 self.send_error(404, "only /sse is served")
                 return None
             return super().do_GET()
+
+        def do_POST(self):  # noqa: N802 (stdlib API)
+            if self.path.split("?")[0] != "/pin" or pin_channel is None:
+                self.send_error(404, "only POST /pin is accepted")
+                return None
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(raw or b"{}")
+                board = data.get("board")
+                plies = int(data.get("plies", 0) or 0)
+                board = None if board is None else int(board)
+            except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                self.send_error(400, "pin expects JSON {board, plies}")
+                return None
+            pin_channel.submit(board, plies)
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return None
 
         def _stream_sse(self) -> None:
             # One stream per connection; close the socket when it ends (a finite replay
@@ -1671,10 +1756,14 @@ def make_sse_server(
     port: int = 0,
     host: str = "127.0.0.1",
     directory: Optional[str] = None,
+    pin_channel: "Optional[PinChannel]" = None,
 ) -> "http.server.ThreadingHTTPServer":
     """Build (but don't start) a threaded SSE server. ``port=0`` lets the OS pick one
-    (the bound port is then ``server.server_address[1]`` — handy for tests)."""
-    return http.server.ThreadingHTTPServer((host, port), _sse_handler(event_source, directory))
+    (the bound port is then ``server.server_address[1]`` — handy for tests). Pass
+    ``pin_channel`` to also accept ``POST /pin`` caster directives (task 0261)."""
+    return http.server.ThreadingHTTPServer(
+        (host, port), _sse_handler(event_source, directory, pin_channel)
+    )
 
 
 def serve_sse(
@@ -1683,14 +1772,19 @@ def serve_sse(
     port: int,
     host: str = "127.0.0.1",
     directory: Optional[str] = None,
+    pin_channel: "Optional[PinChannel]" = None,
     log: Callable[[str], None] = print,
 ) -> None:
     """Serve overlay events as SSE on ``host:port`` until interrupted (Ctrl-C)."""
-    httpd = make_sse_server(event_source, port=port, host=host, directory=directory)
+    httpd = make_sse_server(
+        event_source, port=port, host=host, directory=directory, pin_channel=pin_channel
+    )
     bound = httpd.server_address[1]
     log(f"chess-equity SSE bridge: http://localhost:{bound}/sse")
     if directory is not None:
         log(f"  one-command overlay : http://localhost:{bound}/?src=/sse")
+    if pin_channel is not None:
+        log(f"  caster pin endpoint : POST http://localhost:{bound}/pin {{board, plies}}")
     log("Ctrl-C to stop.")
     try:
         httpd.serve_forever()

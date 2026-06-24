@@ -581,13 +581,18 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         return 0
 
     if args.serve_sse is not None:
-        from chess_equity.broadcast import overlay_events, serve_sse
+        from chess_equity.broadcast import PinChannel, overlay_events, serve_sse
 
         # A live round (--round/--url) may be tuned into before its first move: keep
         # polling (no idle stop) and send keep-alive heartbeats so the connection
         # survives the quiet wait. A local --pgn replay is finite, so it still
         # terminates on idle (max_idle_polls=1, no heartbeat).
         is_live = bool(args.round or args.url)
+
+        # Caster pin INPUT channel (task 0261): under `--board auto`, expose `POST /pin`
+        # so a caster can hold focus on a board mid-stream. One shared channel feeds both
+        # the handler (writer) and every overlay_events generator (reader/director).
+        pin_channel = PinChannel() if auto_follow else None
 
         def make_events():
             ingestor = BroadcastIngestor(
@@ -602,6 +607,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             return overlay_events(
                 ingestor,
                 auto_follow=auto_follow,
+                pin_channel=pin_channel,
                 interval=args.interval,
                 max_polls=args.max_polls,
                 max_idle_polls=None if is_live else 1,
@@ -613,6 +619,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             make_events,
             port=args.serve_sse,
             directory=_overlay_static_dir(),
+            pin_channel=pin_channel,
             log=lambda msg: print(msg, file=sys.stderr),
         )
         return 0
