@@ -1426,9 +1426,16 @@ def sse_frame(event: Dict[str, object]) -> str:
 
 # Light hysteresis: a rival board must out-drama the current focus by this much (on the
 # 0..1 drama-magnitude scale) before it can steal the cut, so a hair-bigger blip on a
-# quiet board doesn't thrash the focus every ply. This single constant is the whole MVP
-# knob; manual+auto blending and a decaying recency window are deferred (task 0256).
+# quiet board doesn't thrash the focus every ply. Manual+auto blending is still deferred.
 FOCUS_MARGIN = 0.15
+
+# Geometric recency decay applied to every board's standing score on each ``note()``
+# tick (task 0257). A board's drama fades by this factor per ply it stays quiet, so
+# "recent" actually means recent: a board whose peak was its *final* move loses that
+# score over the next few plies instead of holding focus forever. 0.85/ply gives a
+# ~4-ply (≈2-move) half-life — gentle enough not to thrash, fast enough that a stale
+# peak yields to a currently-active rival.
+FOCUS_DECAY = 0.85
 
 
 class FocusDirector:
@@ -1446,19 +1453,32 @@ class FocusDirector:
     the board index when the focus CHANGES (so the caller emits one ``focus`` event),
     else ``None``.
 
-    Known MVP edge: a board whose drama peak was its *final* move keeps that magnitude as
-    its standing score (it emits no quieter follow-up to decay it). Advancing focus off a
-    finished board is the overlay router's job, driven by the ``result`` event (task 0189).
+    Recency window (task 0257): every board's standing score decays by ``decay`` on each
+    :meth:`note` tick before the current board's fresh magnitude is recorded, so a board
+    that goes quiet fades out of contention rather than holding focus on a historical
+    peak. A board whose drama peak was its *final* move loses that score over the next
+    few plies and yields to a currently-active rival. (Advancing focus off a *finished*
+    board is still the overlay router's job, driven by the ``result`` event, task 0189.)
     """
 
-    def __init__(self, margin: float = FOCUS_MARGIN) -> None:
+    def __init__(
+        self, margin: float = FOCUS_MARGIN, decay: float = FOCUS_DECAY
+    ) -> None:
         self.margin = margin
+        self.decay = decay
         self.focus: Optional[int] = None
         self.recent: Dict[int, float] = {}
 
     def note(self, board: int, magnitude: float) -> Optional[int]:
         """Record ``board``'s latest drama ``magnitude``; return the new focus board if
-        the cut changes (the current ``board`` stole focus), else ``None``."""
+        the cut changes (the current ``board`` stole focus), else ``None``.
+
+        Each call is one ply tick: every board's recency score is decayed by
+        :attr:`decay` first, then ``board``'s score is refreshed to ``magnitude`` — so
+        the focus comparison weighs a rival against the *decayed* (recent) score of the
+        current focus, not its all-time peak."""
+        for b in self.recent:
+            self.recent[b] *= self.decay
         self.recent[board] = magnitude
         if self.focus is None:
             self.focus = board  # adopt the first board silently
