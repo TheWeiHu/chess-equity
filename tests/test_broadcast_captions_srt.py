@@ -22,11 +22,13 @@ engine-free :class:`LichessBaselineModel` so captions are independent of Stockfi
 import re
 
 from chess_equity.broadcast import (
+    _drama_callout,
     build_captions_srt,
     build_captions_vtt,
     live_caption,
 )
 from chess_equity.cli import main
+from chess_equity.drama import score_event
 
 from test_broadcast_captions_vtt import (  # reuse the sibling test's fixtures
     SAMPLE_PGN,
@@ -71,8 +73,12 @@ def test_build_captions_srt_one_numbered_cue_per_graded_move():
         starts.append(start)
         payload = lines[2]
         san, cap = sans[idx - 1], captions[idx - 1]
-        assert payload == cap, (payload, cap)
-        assert payload.startswith(f"{san} — "), payload
+        # A dramatic move (the closing Qxf7# clutch) is prefixed with its emoji+label
+        # drama callout; undramatic cues are the bare caster caption.
+        d = score_event(events[idx - 1])
+        expected = f"{_drama_callout(d.kind)} — {cap}" if d is not None else cap
+        assert payload == expected, (payload, expected)
+        assert f"{san} — " in payload, payload
 
     # Starts strictly increase, keyed by [%clk] deltas (same as the VTT track): 3s and 6s
     # opening fallbacks, then White's 180→178 lands the third cue at 8s, not a flat 9s.

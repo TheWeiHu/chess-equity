@@ -89,11 +89,18 @@ def test_build_captions_vtt_one_clock_keyed_cue_per_graded_move():
     # One cue per graded move; each move past the opening grades on the baseline.
     assert len(cue_lines) == len(sans) == len(captions)
 
-    # Cue payloads are the caster captions, in order, each naming its move.
+    # Cue payloads are the caster captions, in order, each naming its move. A move that
+    # fired a drama event (here the closing Qxf7# clutch) is prefixed with that kind's
+    # emoji+label callout (reusing the reel's _KIND_LABEL); undramatic cues are unchanged.
+    from chess_equity.broadcast import _drama_callout
+    from chess_equity.drama import score_event
+
     payloads = [lines[lines.index(c) + 1] for c in cue_lines]
-    for san, cap, payload in zip(sans, captions, payloads):
-        assert payload == cap, (payload, cap)
-        assert payload.startswith(f"{san} — "), payload
+    for san, e, cap, payload in zip(sans, events, captions, payloads):
+        d = score_event(e)
+        expected = f"{_drama_callout(d.kind)} — {cap}" if d is not None else cap
+        assert payload == expected, (payload, expected)
+        assert f"{san} — " in payload, payload
 
     # Each cue is well-formed (end > start) and starts strictly increase — the moves
     # play out over the recording's timeline, never overlapping or going backwards.

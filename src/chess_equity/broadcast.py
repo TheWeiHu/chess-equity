@@ -376,6 +376,18 @@ def _caption_cues(
     return cues
 
 
+def _drama_callout(kind: str) -> str:
+    """Emoji + caster label for a drama ``kind`` (e.g. ``"🎯 Clutch"``).
+
+    Reuses the reel's shared ``_KIND_LABEL`` map (``chess_equity.reel``) so the caption
+    track and the reel's lower-thirds never label the same drama kind differently.
+    """
+    from chess_equity.reel import _KIND_LABEL
+
+    emoji, label = _KIND_LABEL.get(kind, ("", kind))
+    return f"{emoji} {label}".strip()
+
+
 def _game_caption_cues(
     events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
 ) -> List[Tuple[float, float, str]]:
@@ -388,7 +400,19 @@ def _game_caption_cues(
     degrades to even move-index spacing. Cue starts are forced strictly increasing and
     each cue ends where the next begins (the last holds for ``cue_seconds``), keeping the
     output valid even when two clock readings collide.
+
+    A move that fired a drama event (clutch / missed win / escape / scramble) gets its cue
+    text **prefixed** with that kind's emoji+label callout (the reel's ``_KIND_LABEL``), so
+    a dramatic cue reads e.g. ``"🎯 Clutch — Qxf7# — brilliant, +48% …"`` and a caster/
+    viewer can scan the drama kind at a glance. Drama is keyed by ply (via the same
+    :func:`chess_equity.drama.detect` source :func:`chess_equity.annotate.drama_by_ply`
+    uses) so it never drifts from the move it labels; undramatic cues are unchanged.
     """
+    from chess_equity.drama import detect
+
+    events = list(events)
+    drama_by_ply = {d.ply: d for d in detect(events)}
+
     prev_white: Optional[float] = None
     prev_black: Optional[float] = None
     elapsed = 0.0
@@ -412,6 +436,9 @@ def _game_caption_cues(
         text = live_caption(event)
         if text is None:
             continue
+        drama = drama_by_ply.get(event.ply)
+        if drama is not None:
+            text = f"{_drama_callout(drama.kind)} — {text}"
         # Force strictly increasing starts so identical/empty clock deltas never yield
         # a zero-length or out-of-order cue.
         start = max(elapsed, last_start + min_step)
