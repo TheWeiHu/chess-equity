@@ -190,6 +190,41 @@ html, body {
   to   { transform: translateY(0)   scale(1);   opacity: 1; }
 }
 
+/* Drama toast (task 0241): a transient, labelled flash for a SERVER-classified drama
+   event (clutch / missed-win / escape / scramble). Centered above the bar so it reads
+   as the headline moment, then auto-hides as quiet moves decay it. Per-kind colors:
+   green for a gain the player earned (clutch/escape), amber/red for a slip (missed-win),
+   blue for a clock scramble. Distinct from the caster-mode drama-flare (top-right). */
+.drama-toast {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 16px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #06210f;
+  background: var(--accent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
+  animation: toast-in 0.4s ease;
+  pointer-events: none;
+}
+.drama-toast.kind-clutch  { background: #4ade80; color: #06210f; }
+.drama-toast.kind-escape  { background: #38bdf8; color: #04212e; }
+.drama-toast.kind-missed_win {
+  background: #f87171; color: #2a0606;
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.7);
+}
+.drama-toast.kind-scramble { background: #facc15; color: #2a1f02; }
+.drama-toast[hidden] { display: none; }
+@keyframes toast-in {
+  from { transform: translate(-50%, 8px) scale(0.7); opacity: 0; }
+  to   { transform: translateX(-50%) scale(1);    opacity: 1; }
+}
+
 /* Human-edge badge (task 0048): persistent while the practical equity bar and the
    classic centipawn bar disagree on the position — the project's wedge made visible.
    Sits below the bar (left) so it doesn't collide with the drama flare (top-right). */
