@@ -65,7 +65,6 @@ def test_cache_counts_hits_and_misses():
     cached.evaluate(chess.STARTING_FEN, 1500, 1500)  # hit
     assert counter.calls == 1
     assert cached.misses == 1 and cached.hits == 2
-    assert cached.hit_rate() == pytest.approx(2 / 3)
 
 
 def test_cache_keys_on_ratings():
@@ -74,10 +73,6 @@ def test_cache_keys_on_ratings():
     cached.evaluate(chess.STARTING_FEN, 1500, 1500)
     cached.evaluate(chess.STARTING_FEN, 2000, 1500)  # different ratings -> miss
     assert counter.calls == 2
-
-
-def test_hit_rate_zero_when_unused():
-    assert CachingEquityModel(CountingModel()).hit_rate() == 0.0
 
 
 # --- persistence ---------------------------------------------------------------

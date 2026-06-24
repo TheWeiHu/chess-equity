@@ -18,33 +18,6 @@ def add_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
         "`--engine stockfish` on a binary-only runner with no torch/Maia-2.",
     )
     dr.add_argument(
-        "--broadcast",
-        "--feed",
-        dest="broadcast",
-        metavar="SPEC",
-        default=None,
-        help="also run a go-live preflight on a broadcast feed before air: a Lichess "
-        "round id, a PGN URL, or a local .pgn file. Verifies the feed is reachable "
-        "and emitting at least one parseable move (no torch/engine needed).",
-    )
-    dr.add_argument(
-        "--token", default=None, help="Lichess API token for --broadcast round feeds (optional)"
-    )
-    dr.add_argument(
-        "--overlay",
-        action="store_true",
-        help="also run a go-live preflight on the streaming overlay bundle: its "
-        "HTML/JS assets parse and the bundled replay + live overlay events conform to "
-        "the documented event schema (no torch/engine/network needed).",
-    )
-    dr.add_argument(
-        "--serve-sse",
-        action="store_true",
-        help="also run a go-live preflight on the live SSE wiring OBS points at: bind "
-        "`broadcast --serve-sse` on an ephemeral port over a local PGN replay and confirm "
-        "`/sse` is reachable and emits >=1 overlay event (no torch/engine/network needed).",
-    )
-    dr.add_argument(
         "--evidence",
         action="store_true",
         help="also verify the committed real-data gate reports listed in "

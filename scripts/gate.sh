@@ -18,7 +18,7 @@ echo "== pytest (tests + baseline + overlay + web) =="
 # alias — that only exists in interactive shells, so scripts must use python3.x.
 PY="$(command -v python3.11 || command -v python3)"
 echo "   interpreter: $("$PY" -V 2>&1)"
-"$PY" -m pytest tests baseline overlay web -q
+"$PY" -m pytest tests baseline web -q
 
 # Dependency-free Node test suites. GLOBBED on purpose: a new overlay/*.test.js (or
 # web/test_*.js) added by a task is gated automatically, so CI and this gate never drift

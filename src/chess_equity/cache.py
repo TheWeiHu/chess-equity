@@ -91,10 +91,6 @@ class CachingEquityModel(EquityModel):
     def total(self) -> int:
         return self.hits + self.misses
 
-    def hit_rate(self) -> float:
-        """Fraction of lookups served from cache, in [0, 1] (0 when nothing asked)."""
-        return self.hits / self.total if self.total else 0.0
-
     # --- persistence (JSON: diff-friendly, no pickle) -------------------------
 
     def _flush(self) -> None:

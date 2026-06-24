@@ -31,7 +31,7 @@ import chess.pgn  # noqa: E402
 
 from chess_equity.adapters import ObjectiveEngine  # noqa: E402
 from chess_equity.models import MaterialEngine  # noqa: E402
-from chess_equity.broadcast import MoveEvent  # noqa: E402
+from chess_equity.drama import MoveEvent  # noqa: E402
 from chess_equity.drama import score_event  # noqa: E402
 
 # Standard ladder mixed in with the players' real ratings so the slider has a few

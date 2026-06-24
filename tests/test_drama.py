@@ -9,7 +9,7 @@ import dataclasses
 
 import pytest
 
-from chess_equity.broadcast import MoveEvent
+from chess_equity.drama import MoveEvent
 from chess_equity.drama import (
     CLUTCH_DELTA,
     SLIP_DELTA,

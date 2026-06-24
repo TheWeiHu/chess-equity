@@ -44,7 +44,50 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, List, Optional
 
-from chess_equity.broadcast import MoveEvent
+@dataclass(frozen=True)
+class MoveEvent:
+    """One published move: position, clocks, ratings, and equity.
+
+    ``equity`` is the White-POV bar in [0, 100]% (stable as turns alternate, like the
+    eval bar). ``delta_equity`` is the change from the *mover's* POV in percentage
+    points — positive means the move improved the mover's practical chances, the
+    whole point of the reframe. Clocks are remaining seconds, or ``None`` if the PGN
+    carried no ``[%clk]`` tag. ``cp`` is the objective engine's classic centipawn
+    eval **from White's POV** (so it lines up with ``equity``), or ``None`` when the
+    model exposes no objective cp (e.g. a pure win-prob model, or a mate).
+    """
+
+    game_id: str
+    ply: int
+    san: str
+    uci: str
+    fen: str
+    white_to_move: bool
+    white_clock: Optional[float]
+    black_clock: Optional[float]
+    white_elo: Optional[int]
+    black_elo: Optional[int]
+    equity: float
+    delta_equity: Optional[float]
+    last_move_grade: Optional[str]
+    source: str
+    compute_ms: float
+    cp: Optional[float] = None
+    resync: bool = False
+    # Running per-side move accuracy *through this move*, in 0..100 (task 0245): the
+    # share of each side's moves so far graded ok-or-better. ``None`` for a side that
+    # has not moved yet.
+    cumulative_accuracy_white: Optional[float] = None
+    cumulative_accuracy_black: Optional[float] = None
+    # Per-side flag risk in [0, MAX_FLAG_RISK=0.6] (task 0243): each side's modelled
+    # P(loses on time) from its own remaining clock + the game's time control, via
+    # :func:`chess_equity.clock.flag_risk`. ``None`` for a clock-blind side (no ``[%clk]``).
+    flag_risk_white: Optional[float] = None
+    flag_risk_black: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
 
 # --------------------------------------------------------------------------- #
 # Tunable thresholds (equity in percentage points; clock in seconds)

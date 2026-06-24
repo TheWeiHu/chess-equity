@@ -250,7 +250,7 @@ def _biggest_swing(grades: Sequence["MoveGrade"], card: Scorecard):
     swing is the mover's practical change vs the position before the move; the headline
     swing is the biggest such magnitude regardless of whether it crosses a drama bar.
     """
-    from chess_equity.broadcast import MoveEvent
+    from chess_equity.drama import MoveEvent
     from chess_equity.drama import score_event
     from chess_equity.grading import white_pov_equity
 
