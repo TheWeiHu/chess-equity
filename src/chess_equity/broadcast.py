@@ -1737,6 +1737,80 @@ class FocusDirector:
         return None
 
 
+# Post-round director-cut recap (task 0265): a caster pastes this markdown table into a
+# Discord/Twitter recap to show WHERE/WHY the auto-director moved focus across a round.
+# Mirrors grading.render_leaderboard_md's shape (header + `---` separator + one row each,
+# trailing newline, `|` escaped) so the two caster-facing markdown exports read alike.
+FOCUS_RECAP_MD_HEADERS = ["#", "Ply", "Board", "Reason"]
+
+
+def focus_recap_md(events: "Iterable[Dict[str, object]]") -> str:
+    """Reduce an overlay event stream into a markdown recap of the director's cuts.
+
+    Walks the overlay events :func:`overlay_events` emits and collects one row per
+    ``focus`` event (the auto-director's cuts, tasks 0256–0262): cut number, the ply the
+    cut landed on, the caster-facing board label, and the director's ``reason`` cue —
+    which already encodes the swing (task 0260, e.g. ``"cut to Bd3: +0.9 swing vs +0.4"``
+    or ``"caster pin: hold Bd3"``), so nothing is recomputed.
+
+    A ``focus`` event carries no ``ply`` of its own, but it is emitted immediately BEFORE
+    the ``position`` event of the move that triggered the cut, so this attributes each cut
+    to the **next** ``position`` event's ply (falling back to the last ply seen, then to
+    ``"—"`` for a pin that landed on an idle tick before any move). Pure formatting — no
+    model, no IO — so it unit-tests over a fixture list of overlay-shaped dicts.
+
+    An empty stream (or one with no cuts) yields the header-only table, so the output is
+    always a paste-able markdown table.
+    """
+
+    def esc(text: str) -> str:
+        return text.replace("|", "\\|")
+
+    materialized = list(events)
+    # Precompute, for every index, the ply of the next `position` event at-or-after it, so
+    # a focus cut maps to the move it precedes in a single forward pass.
+    next_ply: List[Optional[int]] = [None] * len(materialized)
+    upcoming: Optional[int] = None
+    for i in range(len(materialized) - 1, -1, -1):
+        ev = materialized[i]
+        if isinstance(ev, dict) and ev.get("type") == "position":
+            ply = ev.get("ply")
+            upcoming = ply if isinstance(ply, int) else upcoming
+        next_ply[i] = upcoming
+
+    lines = [
+        "| " + " | ".join(FOCUS_RECAP_MD_HEADERS) + " |",
+        "| " + " | ".join("---" for _ in FOCUS_RECAP_MD_HEADERS) + " |",
+    ]
+    cut = 0
+    last_ply: Optional[int] = None
+    for i, ev in enumerate(materialized):
+        if not isinstance(ev, dict):
+            continue  # HEARTBEAT sentinels and the like carry no focus
+        if ev.get("type") == "position":
+            ply = ev.get("ply")
+            if isinstance(ply, int):
+                last_ply = ply
+            continue
+        if ev.get("type") != "focus":
+            continue
+        cut += 1
+        ply = next_ply[i]
+        if ply is None:
+            ply = last_ply
+        board = ev.get("board")
+        label = FocusDirector.board_label(board) if isinstance(board, int) else "?"
+        reason = ev.get("reason")
+        cells = [
+            str(cut),
+            "—" if ply is None else str(ply),
+            label,
+            esc(reason) if isinstance(reason, str) else "",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
 class PinChannel:
     """Caster -> live director conduit for ``broadcast --board auto`` (task 0261).
 
