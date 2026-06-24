@@ -119,6 +119,17 @@ def _write_partitioned(
     return count
 
 
+def _observe_rows(rows: Iterable[PositionRow], stats) -> Iterator[PositionRow]:
+    """Pass rows through unchanged while tallying clock coverage (task 0249).
+
+    Wraps the streaming row iterator so ``data build`` measures the fraction carrying
+    ``[%clk]`` in its single pass — the dump is never re-read to compute coverage.
+    """
+    for row in rows:
+        stats.observe(row.clock_remaining)
+        yield row
+
+
 def build_dataset(
     pgn_path: str,
     out_dir: str,
@@ -129,6 +140,7 @@ def build_dataset(
     include_fen: bool = False,
     partition: bool = False,
     source_month: Optional[str] = None,
+    clock_coverage=None,
 ) -> Path:
     """Parse ``pgn_path`` into ``out_dir/<name>.<fmt>`` and return the written path.
 
@@ -146,6 +158,11 @@ def build_dataset(
     source-month sidecar next to the output (see :mod:`chess_equity.data.source_month`)
     so the validation leakage guard can tell which month a dataset is from without the
     operator re-supplying it. ``None`` leaves the dataset unstamped.
+
+    ``clock_coverage`` is an optional :class:`~chess_equity.clock_coverage.ClockCoverage`
+    accumulator (task 0249): when given, every written row's side-to-move clock is tallied
+    into it during the single streaming pass, so the caller can report the fraction of
+    rows carrying ``[%clk]`` without re-reading the dump.
     """
     if fmt not in ("csv", "parquet"):
         raise ValueError(f"unknown format {fmt!r} (expected 'csv' or 'parquet')")
@@ -154,6 +171,8 @@ def build_dataset(
     cols = schema_columns(include_fen=include_fen)
     with open_pgn(pgn_path) as handle:
         rows = iter_rows(handle, limit=sample, include_fen=include_fen)
+        if clock_coverage is not None:
+            rows = _observe_rows(rows, clock_coverage)
         if partition:
             target = out_path / name
             target.mkdir(parents=True, exist_ok=True)

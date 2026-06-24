@@ -902,6 +902,12 @@ def _run_data(args: argparse.Namespace) -> int:
             return 1
         print(f"\nfetched {dump}", file=sys.stderr)
         pgn = str(dump)
+    # Clock-coverage diagnostic (task 0249): tally the fraction of rows carrying
+    # [%clk] in the single streaming write pass, so a candidate dump can be vetted
+    # for clock coverage before the expensive attended validation run.
+    from chess_equity.clock_coverage import ClockCoverage, format_coverage
+
+    coverage = ClockCoverage()
     try:
         out = build_dataset(
             pgn,
@@ -913,11 +919,13 @@ def _run_data(args: argparse.Namespace) -> int:
             # Stamp the source month when the dump came from --month, so the leakage
             # guard can read it back from the sidecar (task 0127).
             source_month=args.month,
+            clock_coverage=coverage,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"wrote {out}")
+    print(format_coverage(coverage))
     return 0
 
 
@@ -943,6 +951,32 @@ def _run_validate(args: argparse.Namespace) -> int:
 
     # Lazy import: keeps the eval path free of the data loader.
     from chess_equity.data.build import load_rows
+
+    # Clock-coverage diagnostic (task 0249): a cheap, model-free slice that reports the
+    # built dataset's [%clk] coverage and per-clock_band distribution over clock-bearing
+    # rows. Runs before any predictor is built — vetting a candidate dump for clock
+    # coverage shouldn't pay for model scoring or a holdout split.
+    if getattr(args, "slice", None) == "clock":
+        from chess_equity.clock_coverage import coverage_of, format_coverage
+
+        try:
+            rows = load_rows(args.data)
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not rows:
+            print(f"error: no rows in {args.data}", file=sys.stderr)
+            return 1
+        cov = coverage_of(rows)
+        report = format_coverage(cov, clock_bearing_only=True)
+        if args.out:
+            from pathlib import Path
+
+            Path(args.out).write_text(report + "\n", encoding="utf-8")
+            print(f"wrote {args.out}")
+        else:
+            print(report)
+        return 0
     from chess_equity.validate.harness import (
         PREDICTORS,
         build_predictors,
@@ -1991,6 +2025,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="baseline",
         help="comma-separated predictors: baseline, baseline+clock, or the board model "
         "maia2 (needs a --with-fen dataset, and `pip install maia2` for real numbers)",
+    )
+    val.add_argument(
+        "--slice",
+        choices=("clock",),
+        help="run a focused diagnostic instead of the full gate (task 0249): "
+        "`clock` prints the dataset's [%%clk] coverage and a per-clock_band breakdown "
+        "over clock-bearing rows only — cheap, model-free vetting of a candidate dump's "
+        "clock coverage before the expensive attended validation run",
     )
     val.add_argument("--out", help="write the Markdown report here (default: stdout)")
     val.add_argument(
