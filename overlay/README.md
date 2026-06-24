@@ -184,6 +184,11 @@ Static, fixture-driven — no live model.
   blitz scramble), read straight off the feed's `flag_risk.<side>.alert`. Distinct from
   the raw-seconds clock tint above: this is the modelled P(loses on time), not just a low
   number. Omitted entirely on clock-blind feeds, so the badge simply never shows.
+- An **out-of-distribution high-rating marker** (task 0255): when BOTH players are above
+  Maia-2's coarse `>2000` rating bucket (the feed's `rating_ood` boolean), the bar can't
+  tell 2200 from 2800, so it hatches faintly and shows a small `?` (tooltip "rating bucket
+  coarse above 2000") — an honesty cue that ties a documented model limit to the UI. Off
+  whenever a rating is unknown or either side is in-distribution.
 - The last move's **Δequity grade** pill (task 0008) — flares green when a player
   finds better than their level expects, red on a blunder.
 - A dashed **centipawn ghost tick** showing where the classic engine bar would
@@ -249,7 +254,9 @@ values are **seconds remaining**.
   "drama": { "kind": "scramble", "magnitude": 0.55,    // optional — caster-mode drama (task 0020)
              "headline": "Time scramble — Black (1.6s) swings the bar -22 pts" },
   "flag_risk": { "white": { "risk": 0.02, "alert": false },   // optional — per-side time-trouble alert (task 0243)
-                 "black": { "risk": 0.51, "alert": true } }   // `alert` lights the 🚩 badge; omitted on clock-blind feeds
+                 "black": { "risk": 0.51, "alert": true } },  // `alert` lights the 🚩 badge; omitted on clock-blind feeds
+  "rating_ood": true                        // optional — both players over the coarse `>2000` Maia-2 bucket (task 0255):
+                                            // hatches the bar + shows a `?` mark (lower-confidence). Absent/false = in-distribution
 }
 
 // board roster — only for a multi-game broadcast round (task 0185). Emitted (and

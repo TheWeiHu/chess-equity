@@ -85,6 +85,29 @@ def grade_delta(delta_equity: Optional[float]) -> Optional[str]:
     return "blunder"
 
 
+# Out-of-distribution high-rating flag (task 0255). Maia-2's highest rating embedding is
+# a single coarse ``">2000"`` bucket (see product-wedge-streaming gap #1): it cannot tell
+# a 2200 from a 2800, so when BOTH players sit above this threshold the equity bar is a
+# coarse-bucket read, not a true 2200-vs-2800 distinction. The overlay marks the bar
+# lower-confidence in that regime instead of implying a resolution the model lacks. A
+# single named constant so the boundary is testable and tunable; ``> THRESHOLD`` (strict)
+# so exactly-2000 players are still in-distribution.
+RATING_OOD_THRESHOLD = 2000
+
+
+def is_rating_ood(white_elo: Optional[int], black_elo: Optional[int]) -> bool:
+    """True iff BOTH ratings are above :data:`RATING_OOD_THRESHOLD` (model out of bucket).
+
+    Pure function of the two ratings — no model call. An unknown rating (``None``, common
+    on OTB/anonymous feeds) is *not* out-of-distribution: we only flag when we can confirm
+    both sides clear the coarse bucket, so a missing rating degrades to in-distribution
+    rather than a bogus uncertainty mark.
+    """
+    if white_elo is None or black_elo is None:
+        return False
+    return white_elo > RATING_OOD_THRESHOLD and black_elo > RATING_OOD_THRESHOLD
+
+
 def _accuracy_pct(accurate: int, total: int) -> Optional[float]:
     """Running ok-or-better accuracy %, or ``None`` before the side has a graded move.
 
@@ -235,6 +258,11 @@ class MoveEvent:
             "equity": self.equity / 100.0,
             "cp": self.cp,
             "clock": {"white": self.white_clock, "black": self.black_clock},
+            # Out-of-distribution high-rating flag (task 0255): True when both ratings clear
+            # the coarse ``">2000"`` Maia-2 bucket, so the overlay can mark the bar
+            # lower-confidence. Always present (a plain bool) so the overlay can clear a
+            # stale marker on the next in-distribution move.
+            "rating_ood": is_rating_ood(self.white_elo, self.black_elo),
         }
         if self.last_move_grade is not None:
             event["grade"] = {
