@@ -184,6 +184,13 @@ Static, fixture-driven — no live model.
   while equity is steady (swing < 2 points), and **fades out over the next few
   moves** after a swing rather than blinking off. Distinct from the drama flare
   (which only fires in caster mode, on big engine-blind swings).
+- A **drama toast** (centered above the bar, always on) — a transient labelled flash
+  (`CLUTCH +12%`, `ESCAPE`, `MISSED WIN`, `SCRAMBLE`) fed by the feed's per-move
+  `drama` payload (the server's `chess_equity.drama.score_event` classification, task
+  0241). It appears on a drama-tagged move, colored by `kind` (green clutch/escape,
+  red missed-win, amber scramble), then **auto-hides as quiet moves decay it**. Unlike
+  the caster-mode drama flare, the toast reads the *server*'s drama `kind` directly, so
+  it names *what kind* of moment it was, not just the size of the swing.
 
 The bundled `mock-game.json` is a bullet time-scramble: around the time scramble
 the centipawn eval reads ≈0.00 (or slightly for Black) while the clock-aware

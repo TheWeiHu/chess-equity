@@ -193,6 +193,92 @@
     };
   }
 
+  // Drama toast (task 0241): a labelled flash for a SERVER-classified drama event.
+  // Distinct from the caster-mode drama-flare (client-side swing heuristic) and the
+  // momentum arrow (raw delta) — this reads the per-move `drama` payload the pipeline
+  // already emits (chess_equity.drama.score_event: kind ∈ clutch|missed_win|escape|
+  // scramble) and turns its `kind` into the caster's "look at THIS" label
+  // ('CLUTCH +12%', 'ESCAPE', 'MISSED WIN', 'SCRAMBLE'). Returns the render spec
+  // {kind, label, side, magnitude} or null when the move carries no drama kind.
+  var TOAST_LABELS = {
+    clutch: "CLUTCH",
+    missed_win: "MISSED WIN",
+    escape: "ESCAPE",
+    scramble: "SCRAMBLE",
+  };
+  function dramaToast(drama) {
+    if (!drama || typeof drama.kind !== "string") return null;
+    var word = TOAST_LABELS[drama.kind];
+    if (!word) return null; // unknown kind → don't flash garbage
+    // delta_equity is the mover's swing in % points (signed); show it on the kinds
+    // where the number is the story (the clutch find / the scramble swing).
+    var d = drama.delta_equity;
+    var hasDelta = typeof d === "number" && !isNaN(d);
+    var label = word;
+    if (hasDelta && (drama.kind === "clutch" || drama.kind === "scramble")) {
+      label = word + " " + (d >= 0 ? "+" : "") + Math.round(d) + "%";
+    }
+    // magnitude (0..1) sizes the flash; fall back to the normalized delta if absent.
+    var mag = typeof drama.magnitude === "number" && !isNaN(drama.magnitude)
+      ? Math.max(0, Math.min(1, drama.magnitude))
+      : hasDelta ? Math.min(1, Math.abs(d) / 40) : 0;
+    return {
+      kind: drama.kind,
+      label: label,
+      side: drama.mover_white ? "white" : "black", // who made the dramatic move
+      magnitude: mag,
+    };
+  }
+
+  // Decaying drama-toast tracker (task 0241): a timer-free, tick-driven state machine
+  // (mirrors makeMomentumTracker) so the toast lingers a few moves after a drama event
+  // and then auto-hides — instead of vanishing the instant a quiet move arrives.
+  // `note(drama)` feeds ONE position's `drama` payload (null/undefined on a quiet move):
+  // a fresh drama event sets the toast to FULL strength; each subsequent quiet move
+  // decays it by 1/holdTicks until it clears after `holdTicks` quiet moves. Returns the
+  // render state {kind, label, side, magnitude, strength} (strength 1..0 drives opacity)
+  // or null when there's nothing to show.
+  function makeToastTracker(opts) {
+    opts = opts || {};
+    var holdTicks = opts.holdTicks == null ? 4 : opts.holdTicks; // quiet moves until it clears
+    var step = holdTicks > 0 ? 1 / holdTicks : 1;
+    var current = null; // the toast spec that's standing (held while it fades)
+    var strength = 0;   // 1 on a fresh drama event, decays toward 0 each quiet tick
+    return {
+      note: function (drama) {
+        var t = dramaToast(drama);
+        if (t) {
+          current = t;
+          strength = 1;
+        } else {
+          strength = Math.max(0, strength - step);
+        }
+        if (strength <= 1e-9 || current === null) {
+          current = null;
+          return null;
+        }
+        return {
+          kind: current.kind,
+          label: current.label,
+          side: current.side,
+          magnitude: current.magnitude,
+          strength: strength,
+        };
+      },
+      // Current render state without advancing (for tests/inspection).
+      peek: function () {
+        if (strength <= 1e-9 || current === null) return null;
+        return {
+          kind: current.kind,
+          label: current.label,
+          side: current.side,
+          magnitude: current.magnitude,
+          strength: strength,
+        };
+      },
+    };
+  }
+
   // Streamer rating override (task 0021): when the setup page sets ?welo=/?belo=,
   // that rating wins over whatever the feed reports. Useful because Maia-2's top
   // band is a coarse ">2000" — a caster can pin the real ratings for context.
@@ -443,6 +529,10 @@
   let prevCp = null;
   // Decaying momentum arrow (task 0208): lingers a few moves after a swing, then fades.
   let momentumTracker = makeMomentumTracker();
+  // Drama toast (task 0241): a labelled flash from the server's per-move drama kind;
+  // lingers a few moves then auto-hides on quiet ones.
+  let toastTracker = makeToastTracker();
+  let toastTimer = null;
 
   function applyGame(evt, cfg) {
     cfg = cfg || {};
@@ -551,6 +641,11 @@
     // last swing. Fed every move (even quiet ones) so the standing arrow decays and clears.
     showMomentum(momentumTracker.note(prevEquity, eq));
 
+    // Drama toast (task 0241): flash the server's classified drama kind on a dramatic
+    // move, then auto-hide as quiet moves decay it. Fed every move (drama is undefined
+    // on quiet ones) so the standing toast clears.
+    showToast(toastTracker.note(evt.drama));
+
     prevEquity = eq;
     prevCp = evt.cp;
 
@@ -655,6 +750,37 @@
     el.style.opacity = (0.25 + 0.75 * m.strength).toFixed(2);
     el.style.fontSize = (15 + Math.round(9 * m.magnitude)) + "px";
     el.hidden = false;
+  }
+
+  // Drama toast (task 0241): render the decaying toast state from makeToastTracker. `t`
+  // is {kind, label, side, magnitude, strength} or null (negligible / decayed out). The
+  // label names the drama kind ('CLUTCH +12%', 'ESCAPE', 'MISSED WIN', 'SCRAMBLE'); the
+  // `kind`/`side` classes color it; strength drives opacity so it fades over quiet moves.
+  // A wall-clock fallback also hides it if the feed stalls mid-flash.
+  function showToast(t) {
+    const el = q("[data-toast]");
+    if (!el) return;
+    if (!t) {
+      el.hidden = true;
+      return;
+    }
+    el.textContent = t.label;
+    // Reset the kind/side classes, then set the current ones.
+    el.className = "drama-toast kind-" + t.kind + " " + t.side;
+    el.style.opacity = (0.4 + 0.6 * t.strength).toFixed(2);
+    el.hidden = false;
+    // Restart the entrance animation on each fresh fire (strength === 1).
+    if (t.strength >= 1) {
+      el.style.animation = "none";
+      void el.offsetWidth;
+      el.style.animation = "";
+    }
+    // Fade fallback: if the feed stalls, hide the toast a few seconds after it appears
+    // so a frozen feed doesn't leave it stuck on screen. Quiet moves clear it sooner.
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.hidden = true;
+    }, 5000);
   }
 
   // Live board selector for a multi-game round (task 0185). Hidden for a single board
@@ -828,6 +954,8 @@
     edgeLabel: edgeLabel,
     momentum: momentum,
     makeMomentumTracker: makeMomentumTracker,
+    dramaToast: dramaToast,
+    makeToastTracker: makeToastTracker,
     makeBoardRouter: makeBoardRouter,
     gameOverCard: gameOverCard,
   };
