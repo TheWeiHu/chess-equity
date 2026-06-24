@@ -404,12 +404,13 @@ def _run_score(args: argparse.Namespace) -> int:
     from chess_equity.scorecard import build_scorecard_from_pgn, render_scorecard
 
     model = build_model(args.model, n=args.n, seed=args.seed, depth=args.depth, k=args.k)
+    model = _apply_profiles(model, args)
     try:
         with open(args.pgn, encoding="utf-8") as fh:
             pgn_text = fh.read()
         card = build_scorecard_from_pgn(
             pgn_text,
-            _apply_profiles(model, args),
+            model,
             model_name=args.model,
             white_elo=args.white_elo,
             black_elo=args.black_elo,
@@ -419,6 +420,17 @@ def _run_score(args: argparse.Namespace) -> int:
         return 1
     for line in render_scorecard(card):
         print(line)
+
+    # Optional shareable SVG sibling (task 0253): per-side accuracy, the biggest
+    # practical swing + drama label, and the equity sparkline need the per-move grades,
+    # so grade the game with the card's resolved ratings and hand both to the renderer.
+    if getattr(args, "svg", None):
+        from chess_equity.scorecard import render_scorecard_svg
+
+        grades = _grade_game(model, args.pgn, card.white_elo, card.black_elo)
+        with open(args.svg, "w", encoding="utf-8") as fh:
+            fh.write(render_scorecard_svg(card, grades))
+        print(f"wrote scorecard SVG to {args.svg}")
     return 0
 
 
@@ -1764,6 +1776,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="scorecard one game: the score, the real result, and what equity predicts",
     )
     sc.add_argument("--pgn", required=True, help="PGN file (uses its [%%eval] + result)")
+    sc.add_argument(
+        "--svg", metavar="OUT", default=None,
+        help="also write a self-contained shareable SVG scorecard (Twitter/Discord/recap) "
+        "to OUT — the visual sibling of the text card; no external fonts/JS",
+    )
     sc.add_argument(
         "--white-elo", type=int, default=None,
         help="override White rating (default: the PGN's WhiteElo, else 1500)",

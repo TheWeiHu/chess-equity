@@ -17,6 +17,7 @@ from chess_equity.scorecard import (
     build_scorecard,
     build_scorecard_from_pgn,
     render_scorecard,
+    render_scorecard_svg,
 )
 from chess_equity.types import WDL, Equity, lichess_win_percent
 
@@ -213,3 +214,81 @@ def test_sample_pgn_real_fixture_runs_end_to_end():
         card = build_scorecard(chess.pgn.read_game(fh), ConstantModel(60.0))
     assert card.white == "alice" and card.result == "1-0"
     assert card.moves and card.moves[0].cp_white == pytest.approx(20.0)
+
+
+# --------------------------------------------------------------------------- #
+# Shareable SVG scorecard (task 0253)
+# --------------------------------------------------------------------------- #
+
+
+def _graded(pgn_game, model):
+    """Grade a parsed game with the offline grader (no engine, no network)."""
+    from chess_equity.grading import EquityGrader
+
+    return EquityGrader(model).grade_game(pgn_game, 1600, 1550)
+
+
+def test_scorecard_svg_is_wellformed_and_has_key_fields():
+    """The SVG parses as XML and carries every acceptance field (over the sample fixture)."""
+    import xml.dom.minidom as minidom
+
+    from chess_equity.models import LichessBaselineModel
+
+    with open("data/sample/sample_games.pgn", encoding="utf-8") as fh:
+        game = chess.pgn.read_game(fh)
+    model = LichessBaselineModel()  # offline material model — no engine
+    card = build_scorecard(game, model, model_name="baseline")
+    svg = render_scorecard_svg(card, _graded(_read_first("data/sample/sample_games.pgn"), model))
+
+    # Standalone, well-formed SVG document (minidom raises on malformed XML).
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+    minidom.parseString(svg)
+
+    # Players + Elo, result, the two-bar thesis contrast, swing, accuracy, sparkline.
+    assert "alice (1500)" in svg and "bob (1480)" in svg
+    assert "result: 1-0" in svg
+    assert "Objective (blind)" in svg and "Equity (rating-aware)" in svg
+    assert "Biggest swing" in svg
+    assert "Accuracy" in svg and "White" in svg and "Black" in svg
+    assert "Equity trajectory" in svg
+
+
+def test_scorecard_svg_escapes_player_names():
+    """A player name with XML metacharacters can't break the SVG document."""
+    import xml.dom.minidom as minidom
+
+    pgn = WHITE_WINS_PGN.replace('"alice"', '"a<b>&\\"c"')
+    game = _read(pgn)
+    model = ConstantModel(55.0)
+    card = build_scorecard(game, model)
+    svg = render_scorecard_svg(card, _graded(_read(pgn), model))
+
+    minidom.parseString(svg)  # would raise if the raw < & " leaked through
+    assert "a<b>" not in svg and "&amp;" in svg
+
+
+def test_scorecard_svg_shows_no_eval_when_pgn_carries_no_objective():
+    """With no embedded [%eval], the objective bar reads 'no eval', not a bogus fill."""
+    import xml.dom.minidom as minidom
+
+    pgn = """[Event "Test"]
+[White "carol"]
+[Black "dave"]
+[Result "1-0"]
+[WhiteElo "1700"]
+[BlackElo "1700"]
+
+1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
+"""
+    game = _read(pgn)
+    model = ConstantModel(72.0)
+    card = build_scorecard(game, model)
+    svg = render_scorecard_svg(card, _graded(_read(pgn), model))
+
+    minidom.parseString(svg)
+    assert "no eval" in svg
+
+
+def _read_first(path):
+    with open(path, encoding="utf-8") as fh:
+        return chess.pgn.read_game(fh)
