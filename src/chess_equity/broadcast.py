@@ -1420,7 +1420,60 @@ def sse_frame(event: Dict[str, object]) -> str:
     return "data: " + json.dumps(event) + "\n\n"
 
 
-def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[object]:
+# --------------------------------------------------------------------------- #
+# Server-side drama auto-follow for `broadcast --board auto` (task 0256)
+# --------------------------------------------------------------------------- #
+
+# Light hysteresis: a rival board must out-drama the current focus by this much (on the
+# 0..1 drama-magnitude scale) before it can steal the cut, so a hair-bigger blip on a
+# quiet board doesn't thrash the focus every ply. This single constant is the whole MVP
+# knob; manual+auto blending and a decaying recency window are deferred (task 0256).
+FOCUS_MARGIN = 0.15
+
+
+class FocusDirector:
+    """Pick which board ``broadcast --board auto`` should focus, from per-board drama.
+
+    A multi-board round streams every board down one feed; this watches each board's
+    most-recent drama magnitude (0 when a move isn't highlight-worthy) and follows the
+    most dramatic board, so the overlay auto-cuts to "the most exciting game right now"
+    (task 0256). The first board seen is adopted silently — the overlay already defaults
+    its router to board 0, so an opening focus event would be redundant. Thereafter a
+    rival steals focus only when its swing out-dramas the current focus's most-recent
+    swing by :data:`FOCUS_MARGIN` (light anti-thrash hysteresis).
+
+    Pure + state-only (no model, no IO) so it unit-tests directly. :meth:`note` returns
+    the board index when the focus CHANGES (so the caller emits one ``focus`` event),
+    else ``None``.
+
+    Known MVP edge: a board whose drama peak was its *final* move keeps that magnitude as
+    its standing score (it emits no quieter follow-up to decay it). Advancing focus off a
+    finished board is the overlay router's job, driven by the ``result`` event (task 0189).
+    """
+
+    def __init__(self, margin: float = FOCUS_MARGIN) -> None:
+        self.margin = margin
+        self.focus: Optional[int] = None
+        self.recent: Dict[int, float] = {}
+
+    def note(self, board: int, magnitude: float) -> Optional[int]:
+        """Record ``board``'s latest drama ``magnitude``; return the new focus board if
+        the cut changes (the current ``board`` stole focus), else ``None``."""
+        self.recent[board] = magnitude
+        if self.focus is None:
+            self.focus = board  # adopt the first board silently
+            return None
+        if board == self.focus:
+            return None
+        if magnitude - self.recent.get(self.focus, 0.0) >= self.margin:
+            self.focus = board
+            return board
+        return None
+
+
+def overlay_events(
+    ingestor: "BroadcastIngestor", *, auto_follow: bool = False, **stream_kwargs
+) -> Iterator[object]:
     """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
 
     Yields overlay-shaped dicts in the order ``overlay.js`` expects: a one-time
@@ -1465,6 +1518,10 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
         # board router can advance focus off the finished board (task 0189).
         queued.append(res.to_overlay())
 
+    # `--board auto` (task 0256): track each board's recent drama and emit a `focus`
+    # routing event the moment the most-dramatic board changes, so the overlay auto-cuts.
+    director = FocusDirector() if auto_follow else None
+
     ingestor.on_game = on_game
     ingestor.on_result = on_result
     for move_event in ingestor.stream(**stream_kwargs):
@@ -1477,6 +1534,14 @@ def overlay_events(ingestor: "BroadcastIngestor", **stream_kwargs) -> Iterator[o
         board = board_of.get(move_event.game_id)
         if board is not None:
             event["board"] = board
+        # Drama auto-follow: if this move makes its board the liveliest, emit the `focus`
+        # cut BEFORE the move so the dramatic move itself renders on the now-focused board.
+        if director is not None and board is not None:
+            drama = event.get("drama")
+            mag = drama.get("magnitude", 0.0) if isinstance(drama, dict) else 0.0
+            changed = director.note(board, mag or 0.0)
+            if changed is not None:
+                yield {"type": "focus", "board": changed, "game_id": move_event.game_id}
         yield event
     while queued:
         yield queued.pop(0)

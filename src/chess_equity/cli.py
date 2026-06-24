@@ -491,10 +491,15 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
 
     # A multi-board round (Titled Tuesday, blitz events) carries many simultaneous
     # games; --board narrows the stream to one (by player-name substring or board
-    # index), defaulting to follow-all when unset (task 0182).
+    # index), defaulting to follow-all when unset (task 0182). The special value
+    # --board auto follows ALL boards but auto-cuts the overlay focus to the liveliest
+    # one via server-side drama scoring (task 0256), so it keeps the full follow-all
+    # stream (selector None) and flips on the auto-follow director instead.
     from chess_equity.broadcast import parse_board_selector
 
-    selector = parse_board_selector(getattr(args, "board", None))
+    board_spec = getattr(args, "board", None)
+    auto_follow = isinstance(board_spec, str) and board_spec.strip().lower() == "auto"
+    selector = None if auto_follow else parse_board_selector(board_spec)
 
     # --ledger: replay a finished local PGN into a flat per-move CSV for post-show stats
     # (task 0204). A finite snapshot export, not a live stream, so it requires --pgn and
@@ -596,6 +601,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
             )
             return overlay_events(
                 ingestor,
+                auto_follow=auto_follow,
                 interval=args.interval,
                 max_polls=args.max_polls,
                 max_idle_polls=None if is_live else 1,
@@ -625,6 +631,35 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     # --captions: a human caster sentence per graded move (TTS/chat-ready) instead of
     # the machine JSONL stream (task 0190). The live counterpart to the offline reel.
     captions = getattr(args, "captions", False)
+
+    # --board auto (task 0256): drive the JSONL stream through the overlay bridge so its
+    # server-side `focus` cut events ride alongside the position events the overlay reads.
+    # Captions are plain text (no routing metadata), so auto-follow is a no-op there.
+    if auto_follow and not captions:
+        from chess_equity.broadcast import HEARTBEAT, overlay_events
+
+        is_live = bool(args.round or args.url)
+        for ev in overlay_events(
+            ingestor,
+            auto_follow=True,
+            interval=args.interval,
+            max_polls=args.max_polls,
+            max_idle_polls=None if is_live else 1,
+            on_reconnect=log_reconnect,
+        ):
+            if ev is HEARTBEAT:
+                continue
+            out.write(json.dumps(ev) + "\n")
+            out.flush()
+        stats = ingestor.stats
+        print(
+            f"# {stats.events} events over {stats.polls} polls "
+            f"({stats.errors} feed errors, {stats.reconnects} reconnect(s), "
+            f"max backoff {stats.max_backoff_s:.0f}s), "
+            f"max equity compute {stats.max_compute_ms:.1f} ms",
+            file=sys.stderr,
+        )
+        return 0
 
     def emit(event: MoveEvent) -> None:
         if captions:
@@ -1824,9 +1859,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     bc.add_argument(
         "--board",
         default=None,
-        metavar="PLAYER|INDEX",
+        metavar="PLAYER|INDEX|auto",
         help="follow one board of a multi-game round: a case-insensitive player-name "
-        "substring, or a 0-based board index. Default: follow every board (task 0182).",
+        "substring, or a 0-based board index, or 'auto' to auto-cut the overlay focus to "
+        "whichever board has the highest recent drama (task 0256). Default: follow every "
+        "board (task 0182).",
     )
     bc.add_argument(
         "--clock-aware",
