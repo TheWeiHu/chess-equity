@@ -25,15 +25,12 @@ from chess_equity.reel import (
     build_webvtt,
     by_kind,
     caption,
-    caption_payload,
     clip_durations,
     detect_divergence,
     divergence_payload,
     drop_below_magnitude,
     rank,
     reel_payload,
-    render_captions,
-    render_divergence_markdown,
     render_html,
     render_json,
     render_markdown,
@@ -165,12 +162,6 @@ def test_render_markdown_appends_divergence_section():
     assert "Human-vs-engine divergence" not in render_markdown(reel)
 
 
-def test_render_divergence_markdown_graceful_on_empty():
-    md = render_divergence_markdown([])
-    assert md.startswith("# Human-vs-engine divergence")
-    assert "No human-vs-engine divergence" in md
-
-
 def test_rank_breaks_ties_by_kind_priority_then_ply():
     # Two equal-magnitude events of different kinds: missed_win outranks clutch.
     same = [
@@ -297,23 +288,6 @@ def test_render_markdown_empty_reel_is_graceful():
     assert "## Top moments" not in md
 
 
-def test_caption_payload_shape():
-    reel = build_reel(_ONE_OF_EACH)
-    payload = json.loads(render_captions(reel, title="My reel"))
-    assert payload["title"] == "My reel"
-    assert payload["count"] == len(reel)
-    caps = payload["captions"]
-    assert len(caps) == len(reel)
-    # Captions keep the ranked order and carry exactly the OBS lower-third schema.
-    assert [c["kind"] for c in caps] == [d.kind for d in reel]
-    assert [c["ply"] for c in caps] == [d.ply for d in reel]
-    for c in caps:
-        assert set(c) == {"text", "kind", "ply", "duration_s"}
-        assert isinstance(c["text"], str) and c["text"]
-        assert 3.0 <= c["duration_s"] <= 6.0
-    assert caption_payload(reel)["count"] == len(reel)
-
-
 def test_caption_text_reuses_kind_label_and_signed_delta():
     # missed_win on White, Δ −20: text uses the shared _KIND_LABEL string + signed pts.
     d = score_event(ev(ply=4, equity=65.0, delta_equity=-20.0))
@@ -328,12 +302,6 @@ def test_caption_duration_scales_with_magnitude():
     big = caption(score_event(ev(equity=65.0, delta_equity=-20.0)))     # mag 0.5
     small = caption(score_event(ev(ply=8, equity=58.0, delta_equity=7.0, white_clock=8.0)))
     assert big["duration_s"] > small["duration_s"]
-
-
-def test_render_captions_empty_reel_is_graceful():
-    payload = json.loads(render_captions([]))
-    assert payload["count"] == 0
-    assert payload["captions"] == []
 
 
 def test_cli_reel_writes_both_artifacts(tmp_path):

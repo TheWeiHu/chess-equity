@@ -23,8 +23,6 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-import chess
-
 from chess_equity.adapters import ObjectiveEngine, ObjectiveEval
 
 DEFAULT_DEPTH = 18

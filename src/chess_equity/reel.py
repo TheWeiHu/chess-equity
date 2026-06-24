@@ -351,43 +351,6 @@ def divergence_payload(
     return payload
 
 
-def render_divergence_markdown(
-    moments: List[DivergenceMoment],
-    *,
-    title: str = "Human-vs-engine divergence",
-    sources: Optional[Dict[str, GameSource]] = None,
-) -> str:
-    """Render the ranked divergence category as caster-facing markdown.
-
-    A numbered list of the moments where the rating-aware bar most disagrees with the
-    engine bar, each line naming both bars + the signed gap. Stays graceful on an empty
-    list (no cp-bearing moves) rather than emitting an empty doc.
-    """
-    lines: List[str] = [f"# {title}", ""]
-    if not moments:
-        lines.append(
-            "_No human-vs-engine divergence to show — no moves carried an engine "
-            "eval to compare against (a cp-less or mate-only feed)._"
-        )
-        return "\n".join(lines) + "\n"
-
-    span = ""
-    if sources is not None:
-        span = f"across {len({m.game_id for m in moments})} board(s) "
-    lines.append(
-        f"> {len(moments)} moment(s) {span}where the rating-aware bar most "
-        "disagrees with the engine bar, ranked by |gap|"
-    )
-    lines.append("")
-    for i, m in enumerate(moments, start=1):
-        loc = f"{_source_text(m, sources)}, ply {m.ply}"
-        lines.append(
-            f"{i}. ⚖️ `{m.divergence:.0f} pts` — {divergence_caption(m, sources)} "
-            f"_({loc})_"
-        )
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def by_kind(reel: Iterable[DramaEvent]) -> Dict[str, int]:
     """Count moments per drama kind (every kind that fired, others omitted)."""
     tally: Dict[str, int] = {}
@@ -464,24 +427,6 @@ def caption(d: DramaEvent) -> Dict[str, object]:
         "ply": d.ply,
         "duration_s": _caption_duration(d.magnitude),
     }
-
-
-def caption_payload(
-    reel: List[DramaEvent], *, title: str = "Highlight reel"
-) -> Dict[str, object]:
-    """Structured caption payload: ranked lower-thirds an OBS source can drive."""
-    return {
-        "title": title,
-        "count": len(reel),
-        "captions": [caption(d) for d in reel],
-    }
-
-
-def render_captions(
-    reel: List[DramaEvent], *, title: str = "Highlight reel", indent: int = 2
-) -> str:
-    """Render the reel's lower-third captions as a JSON string for an OBS source."""
-    return json.dumps(caption_payload(reel, title=title), indent=indent)
 
 
 def render_json(

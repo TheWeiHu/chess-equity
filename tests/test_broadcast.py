@@ -9,7 +9,6 @@ import pytest
 
 from chess_equity.broadcast import (
     FOCUS_BIAS,
-    FOCUS_BIAS_BONUS,
     FOCUS_DECAY,
     FOCUS_MARGIN,
     BroadcastFeed,
@@ -21,11 +20,9 @@ from chess_equity.broadcast import (
     LocalPgnFeed,
     MoveEvent,
     PinChannel,
-    focus_recap_md,
     game_event,
     grade_delta,
     overlay_events,
-    parse_focus_bias,
     split_games,
 )
 from chess_equity.adapters import EquityModel
@@ -735,20 +732,6 @@ def test_focus_decay_default_is_a_gentle_per_ply_factor():
 def test_focus_bias_default_equals_the_margin():
     """The shipped bias is the margin, so a favoured board steals on a mere tie."""
     assert FOCUS_BIAS == FOCUS_MARGIN
-    assert FOCUS_BIAS_BONUS == FOCUS_MARGIN
-
-
-def test_parse_focus_bias_splits_auto_and_player():
-    """`auto` -> follow-all no bias; `auto:<player>` -> follow-all biased to that name;
-    anything else -> not auto (hard-filtered by the board selector instead)."""
-    assert parse_focus_bias("auto") == (True, None)
-    assert parse_focus_bias("AUTO") == (True, None)
-    assert parse_focus_bias("auto:Carlsen") == (True, "Carlsen")
-    assert parse_focus_bias("auto: Nakamura ") == (True, "Nakamura")
-    assert parse_focus_bias("auto:") == (True, None)  # empty bias degrades to plain auto
-    assert parse_focus_bias("Carlsen") == (False, None)
-    assert parse_focus_bias("3") == (False, None)
-    assert parse_focus_bias(None) == (False, None)
 
 
 def test_focus_director_bias_wins_a_tie():
@@ -910,13 +893,13 @@ def test_focus_director_bias_yields_to_a_much_bigger_swing():
     """The bias is a thumb on the scale, not a hard filter: a rival board with a swing
     big enough to clear margin + bonus still steals focus off the favored board.
     ``decay=1.0`` keeps the held score steady so the threshold is exactly margin+bonus."""
-    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=1.0)
+    d = FocusDirector(bias={0: FOCUS_BIAS}, decay=1.0)
     d.note(0, 0.5)  # adopt + bias the focused board 0
     # A sub-(margin+bonus) rival can't steal from the favored board...
-    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS - 0.01) is None
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS - 0.01) is None
     assert d.focus == 0
     # ...but a swing clearing margin + bonus does.
-    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS_BONUS + 0.01) == 1
+    assert d.note(1, 0.5 + FOCUS_MARGIN + FOCUS_BIAS + 0.01) == 1
     assert d.focus == 1
 
 
@@ -924,7 +907,7 @@ def test_focus_director_bias_still_fades_when_the_favorite_goes_quiet():
     """Bias is added on top of the DECAYED recency score, so a favored board that stops
     playing still loses the cut to a steadily-active rival (recency + bias compose)."""
     # Strong decay so the stale favorite erodes within a few ticks.
-    d = FocusDirector(bias={0: FOCUS_BIAS_BONUS}, decay=0.5)
+    d = FocusDirector(bias={0: FOCUS_BIAS}, decay=0.5)
     d.note(0, 0.9)  # board 0 (the favorite) peaks, then goes silent
     stole = None
     for _ in range(6):
@@ -1786,69 +1769,3 @@ def test_clock_aware_grade_degrades_to_raw_when_blind():
         " { [%clk 0:00:04] }", ""
     ).replace(" { [%clk 0:00:03] }", "")
     assert _last_delta(no_clk, clock_aware=True) == last.delta_equity
-
-
-# Post-round director-cut recap markdown (task 0265)
-# ---------------------------------------------------------------------------
-def _pos(ply):
-    """A minimal overlay `position` event carrying just the ply the recap needs."""
-    return {"type": "position", "ply": ply, "move": {"san": "e4"}}
-
-
-def test_focus_recap_md_tabulates_cuts_with_next_move_ply():
-    """A recap row per `focus` event: # / ply (the move it precedes) / board / reason."""
-    events = [
-        _pos(1),  # board 0 adopted silently — no focus event before it
-        _pos(2),
-        {"type": "focus", "board": 2, "game_id": "g3", "reason": "cut to Bd3: +0.9 swing vs +0.4"},
-        _pos(3),  # the dramatic move the cut precedes -> ply 3
-        _pos(4),
-        {"type": "focus", "board": 0, "game_id": "g1", "reason": "cut to Bd1: +1.2 swing vs +0.3"},
-        _pos(5),
-    ]
-    md = focus_recap_md(events)
-    lines = md.splitlines()
-    assert lines[0] == "| # | Ply | Board | Reason |"
-    assert lines[1] == "| --- | --- | --- | --- |"
-    assert lines[2] == "| 1 | 3 | Bd3 | cut to Bd3: +0.9 swing vs +0.4 |"
-    assert lines[3] == "| 2 | 5 | Bd1 | cut to Bd1: +1.2 swing vs +0.3 |"
-    assert md.endswith("\n")
-    assert len(lines) == 4  # header + separator + two cuts
-
-
-def test_focus_recap_md_empty_stream_is_header_only():
-    """No events (or no cuts) -> a paste-able header-only table, never a crash."""
-    assert focus_recap_md([]) == (
-        "| # | Ply | Board | Reason |\n| --- | --- | --- | --- |\n"
-    )
-    # A stream of positions with no focus events is still header-only.
-    assert focus_recap_md([_pos(1), _pos(2)]).splitlines() == [
-        "| # | Ply | Board | Reason |",
-        "| --- | --- | --- | --- |",
-    ]
-
-
-def test_focus_recap_md_pin_without_following_move_falls_back_to_last_ply():
-    """A caster pin landing on an idle tick (no later position) reuses the last ply seen,
-    and its `caster pin` reason rides through verbatim."""
-    events = [
-        _pos(7),
-        {"type": "focus", "board": 1, "game_id": "g2", "reason": "caster pin: hold Bd2"},
-    ]
-    rows = focus_recap_md(events).splitlines()[2:]
-    assert rows == ["| 1 | 7 | Bd2 | caster pin: hold Bd2 |"]
-
-
-def test_focus_recap_md_escapes_pipes_and_tolerates_missing_fields():
-    """A `|` in a reason is escaped so it can't break the table; heartbeats/None reason
-    are tolerated (sentinel non-dicts skipped, missing reason -> empty cell)."""
-    events = [
-        "HEARTBEAT",  # sentinel non-dict event from an idle poll
-        {"type": "focus", "board": 0, "reason": "cut to Bd1: a|b"},
-        _pos(4),
-        {"type": "focus", "board": 1},  # no reason field
-        _pos(5),
-    ]
-    rows = focus_recap_md(events).splitlines()[2:]
-    assert rows[0] == "| 1 | 4 | Bd1 | cut to Bd1: a\\|b |"
-    assert rows[1] == "| 2 | 5 | Bd2 |  |"

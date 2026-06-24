@@ -1693,37 +1693,6 @@ def sse_frame(event: Dict[str, object]) -> str:
 # quiet board doesn't thrash the focus every ply.
 FOCUS_MARGIN = 0.15
 
-# Additive score bonus given to a board a caster has biased the director toward via
-# `--board auto:<player>` (task 0258). Set equal to FOCUS_MARGIN so the bias is exactly
-# strong enough to win ties and any sub-margin contest, yet a rival still steals focus on
-# a *much* bigger swing: a biased held board needs a rival to beat it by margin + bonus
-# (= 2x the margin), while a biased rival steals on any non-negative edge (margin - bonus
-# = 0). One knob, symmetric both directions. The bonus is added to the (already decayed,
-# task 0257) recency score, so a biased board still fades if it goes quiet — bias is a
-# standing thumb on the scale, not an immunity to the recency window.
-FOCUS_BIAS_BONUS = FOCUS_MARGIN
-
-
-def parse_focus_bias(spec: Optional[str]) -> tuple[bool, Optional[str]]:
-    """Split a ``--board`` spec into ``(auto_follow, focus_bias_player)``.
-
-    ``auto`` -> follow all boards, no bias (the plain task 0256 behaviour). ``auto:<player>``
-    -> still follow all, but BIAS the drama director toward boards featuring ``<player>``
-    (case-insensitive substring) so a caster keeps a favorite in view while a bigger swing
-    elsewhere can still steal the cut (task 0258). Any non-auto spec -> ``(False, None)``;
-    the caller hard-filters it via :func:`parse_board_selector` as before.
-    """
-    if not isinstance(spec, str):
-        return (False, None)
-    s = spec.strip()
-    low = s.lower()
-    if low == "auto":
-        return (True, None)
-    if low.startswith("auto:"):
-        bias = s[len("auto:") :].strip()
-        return (True, bias or None)
-    return (False, None)
-
 # Geometric recency decay applied to every board's standing score on each ``note()``
 # tick (task 0257). A board's drama fades by this factor per ply it stays quiet, so
 # "recent" actually means recent: a board whose peak was its *final* move loses that
@@ -1903,80 +1872,6 @@ class FocusDirector:
             self.focus = board
             return board
         return None
-
-
-# Post-round director-cut recap (task 0265): a caster pastes this markdown table into a
-# Discord/Twitter recap to show WHERE/WHY the auto-director moved focus across a round.
-# Mirrors grading.render_leaderboard_md's shape (header + `---` separator + one row each,
-# trailing newline, `|` escaped) so the two caster-facing markdown exports read alike.
-FOCUS_RECAP_MD_HEADERS = ["#", "Ply", "Board", "Reason"]
-
-
-def focus_recap_md(events: "Iterable[Dict[str, object]]") -> str:
-    """Reduce an overlay event stream into a markdown recap of the director's cuts.
-
-    Walks the overlay events :func:`overlay_events` emits and collects one row per
-    ``focus`` event (the auto-director's cuts, tasks 0256–0262): cut number, the ply the
-    cut landed on, the caster-facing board label, and the director's ``reason`` cue —
-    which already encodes the swing (task 0260, e.g. ``"cut to Bd3: +0.9 swing vs +0.4"``
-    or ``"caster pin: hold Bd3"``), so nothing is recomputed.
-
-    A ``focus`` event carries no ``ply`` of its own, but it is emitted immediately BEFORE
-    the ``position`` event of the move that triggered the cut, so this attributes each cut
-    to the **next** ``position`` event's ply (falling back to the last ply seen, then to
-    ``"—"`` for a pin that landed on an idle tick before any move). Pure formatting — no
-    model, no IO — so it unit-tests over a fixture list of overlay-shaped dicts.
-
-    An empty stream (or one with no cuts) yields the header-only table, so the output is
-    always a paste-able markdown table.
-    """
-
-    def esc(text: str) -> str:
-        return text.replace("|", "\\|")
-
-    materialized = list(events)
-    # Precompute, for every index, the ply of the next `position` event at-or-after it, so
-    # a focus cut maps to the move it precedes in a single forward pass.
-    next_ply: List[Optional[int]] = [None] * len(materialized)
-    upcoming: Optional[int] = None
-    for i in range(len(materialized) - 1, -1, -1):
-        ev = materialized[i]
-        if isinstance(ev, dict) and ev.get("type") == "position":
-            ply = ev.get("ply")
-            upcoming = ply if isinstance(ply, int) else upcoming
-        next_ply[i] = upcoming
-
-    lines = [
-        "| " + " | ".join(FOCUS_RECAP_MD_HEADERS) + " |",
-        "| " + " | ".join("---" for _ in FOCUS_RECAP_MD_HEADERS) + " |",
-    ]
-    cut = 0
-    last_ply: Optional[int] = None
-    for i, ev in enumerate(materialized):
-        if not isinstance(ev, dict):
-            continue  # HEARTBEAT sentinels and the like carry no focus
-        if ev.get("type") == "position":
-            ply = ev.get("ply")
-            if isinstance(ply, int):
-                last_ply = ply
-            continue
-        if ev.get("type") != "focus":
-            continue
-        cut += 1
-        ply = next_ply[i]
-        if ply is None:
-            ply = last_ply
-        board = ev.get("board")
-        label = FocusDirector.board_label(board) if isinstance(board, int) else "?"
-        reason = ev.get("reason")
-        cells = [
-            str(cut),
-            "—" if ply is None else str(ply),
-            label,
-            esc(reason) if isinstance(reason, str) else "",
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines) + "\n"
 
 
 class PinChannel:

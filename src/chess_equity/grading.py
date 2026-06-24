@@ -427,13 +427,6 @@ def _accuracy(grades: List[MoveGrade]) -> float:
     return 100.0 * accurate / len(grades)
 
 
-# Leaderboard accuracy models (task 0233). The default 'labels' accuracy is the share of
-# ok-or-better moves (:func:`_accuracy`); 'cploss' is an OPTIONAL continuous 0..100 score
-# derived from mean classic centipawn loss via Lichess's accuracy curve, surfaced as an
-# extra column. Ranking is unaffected by the choice — only the displayed/exported columns.
-ACCURACY_MODELS = ("labels", "cploss")
-
-
 def _win_percent_from_cp(cp: float) -> float:
     """Lichess's win% from a centipawn eval: ``50 + 50·(2/(1+e^(-0.00368208·cp)) − 1)``.
 
