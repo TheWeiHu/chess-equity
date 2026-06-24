@@ -8,6 +8,7 @@ import chess
 import pytest
 
 from chess_equity.broadcast import (
+    FOCUS_DECAY,
     FOCUS_MARGIN,
     BroadcastFeed,
     BroadcastIngestor,
@@ -666,6 +667,42 @@ def test_focus_director_no_cut_on_the_focused_board():
     d.note(0, 0.0)
     assert d.note(0, 0.9) is None  # huge swing, but we're already on board 0
     assert d.focus == 0
+
+
+def test_focus_director_decays_a_stale_peak_so_an_active_rival_steals_focus():
+    """A board whose drama PEAK was its final move must not hold focus forever: as it
+    goes quiet its standing score decays each tick, so a board playing steady moderate
+    drama eventually out-dramas the stale peak and steals the cut (task 0257)."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=0.5)
+    d.note(0, 0.0)  # adopt board 0
+    assert d.note(1, 0.9) == 1  # board 1 erupts on its final move -> cut to it
+    assert d.focus == 1
+    # Board 1 is now silent (no follow-up). Board 0 plays steady moderate drama; each
+    # tick decays board 1's standing 0.9 (0.45, 0.225, 0.1125, ...) until board 0's
+    # 0.3 clears it by the margin and steals focus back.
+    assert d.note(0, 0.3) is None  # 0.3 - 0.45  -> still below margin
+    assert d.note(0, 0.3) is None  # 0.3 - 0.225 = 0.075 < 0.15
+    assert d.note(0, 0.3) == 0  # 0.3 - 0.1125 = 0.1875 >= 0.15 -> steal
+    assert d.focus == 0
+
+
+def test_focus_director_without_decay_a_stale_peak_holds_focus_forever():
+    """Contrast: with ``decay=1.0`` (the old behaviour) the same stale peak is never
+    eroded, so the steady-moderate rival can never out-drama it — proving the decay is
+    what frees the cut."""
+    d = FocusDirector(margin=FOCUS_MARGIN, decay=1.0)
+    d.note(0, 0.0)
+    assert d.note(1, 0.9) == 1
+    # No matter how many moderate moves board 0 plays, board 1's 0.9 never fades.
+    for _ in range(20):
+        assert d.note(0, 0.3) is None
+    assert d.focus == 1
+
+
+def test_focus_decay_default_is_a_gentle_per_ply_factor():
+    """The shipped default decays but stays well under 1 (a real recency window)."""
+    assert 0.5 < FOCUS_DECAY < 1.0
+    assert FocusDirector().decay == FOCUS_DECAY
 
 
 # A two-board round where board 0 is a quiet opening (no drama) and board 1 is a
