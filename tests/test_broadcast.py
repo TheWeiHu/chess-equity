@@ -1114,6 +1114,138 @@ def test_sse_server_404s_pin_post_when_no_channel():
 
 
 # --------------------------------------------------------------------------- #
+# GET /focus status readback — caster OUTPUT side of the pin conduit (task 0265)
+# --------------------------------------------------------------------------- #
+
+
+def test_focus_status_holds_the_live_cut_or_none_until_set():
+    """The thread-safe holder is empty until the first board is live, then snapshots
+    the live cut as ``{board, label, reason}``."""
+    from chess_equity.broadcast import FocusStatus
+
+    fs = FocusStatus()
+    assert fs.get() is None
+    fs.set(2, "Bd3", "cut to Bd3: +0.9 swing vs +0.4")
+    assert fs.get() == {
+        "board": 2,
+        "label": "Bd3",
+        "reason": "cut to Bd3: +0.9 swing vs +0.4",
+    }
+    # A later cut overwrites; reason may be None (silent first-board adoption).
+    fs.set(0, "Bd1", None)
+    assert fs.get() == {"board": 0, "label": "Bd1", "reason": None}
+
+
+def test_sse_server_serves_get_focus_status_json():
+    """`GET /focus` returns the live director state as JSON when a status channel is
+    wired (the caster control-surface readback, task 0265)."""
+    import json as _json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import FocusStatus, make_sse_server, overlay_events
+
+    fs = FocusStatus()
+    fs.set(1, "Bd2", "cut to Bd2: +0.7 swing vs +0.2")
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        focus_status=fs,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "application/json"
+        body = _json.loads(resp.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert body == {"board": 1, "label": "Bd2", "reason": "cut to Bd2: +0.7 swing vs +0.2"}
+
+
+def test_sse_server_get_focus_reports_no_live_board_before_first_cut():
+    """Before any board is live, `GET /focus` is still valid JSON with null fields
+    (so a caster UI renders "no board yet" rather than erroring)."""
+    import json as _json
+    import threading
+    import urllib.request
+
+    from chess_equity.broadcast import FocusStatus, make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+        focus_status=FocusStatus(),
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        body = _json.loads(resp.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert body == {"board": None, "label": None, "reason": None}
+
+
+def test_sse_server_404s_get_focus_when_no_status_channel():
+    """Without a focus-status channel the server has no readback side: `GET /focus`
+    is a 404 (mirrors the pinless `POST /pin` 404)."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from chess_equity.broadcast import make_sse_server, overlay_events
+
+    server = make_sse_server(
+        lambda: overlay_events(BroadcastIngestor(LocalPgnFeed(GAME_PGN), _model()), interval=0),
+        port=0,
+    )
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/focus", timeout=10)
+        assert exc.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_overlay_events_publishes_the_live_cut_to_focus_status():
+    """End-to-end: a multi-board stream's `focus` cuts are mirrored onto the shared
+    FocusStatus, so `GET /focus` reflects the director without reaching into it. The
+    drama board steals the cut, so the status ends on it with the cut reason."""
+    from chess_equity.broadcast import FocusStatus
+
+    fs = FocusStatus()
+    feed = _OneShotFeed(_two_board_round_with_drama())
+    ingestor = BroadcastIngestor(feed, _model())
+    events = [
+        e
+        for e in overlay_events(
+            ingestor,
+            auto_follow=True,
+            focus_status=fs,
+            interval=0.0,
+            sleep=lambda _: None,
+        )
+        if isinstance(e, dict)
+    ]
+    focuses = [e for e in events if e.get("type") == "focus"]
+    assert focuses, "the drama board must steal the cut"
+    snap = fs.get()
+    assert snap is not None
+    # Status mirrors the last emitted focus cut: same board, caster label, and reason.
+    last = focuses[-1]
+    assert snap["board"] == last["board"]
+    assert snap["label"] == f"Bd{last['board'] + 1}"
+    assert snap["reason"] == last.get("reason")
+
+
+# --------------------------------------------------------------------------- #
 # Drama classifier attached to the overlay event (task 0053)
 # --------------------------------------------------------------------------- #
 

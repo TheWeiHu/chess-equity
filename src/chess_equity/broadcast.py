@@ -1841,12 +1841,48 @@ class PinChannel:
         return out
 
 
+class FocusStatus:
+    """Live director -> caster status readback for ``broadcast --board auto`` (task 0265).
+
+    The pin OUTPUT side of the :class:`PinChannel` conduit. The director lives inside the
+    per-connection :func:`overlay_events` generator, so a caster control surface has no
+    way to read back *which* board is currently live and *why* — only to ``POST /pin`` a
+    directive (task 0261). This is a small thread-safe holder: the generator thread
+    :meth:`set`s the latest cut as it emits each ``focus`` event, and the SSE server's
+    ``GET /focus`` handler thread :meth:`get`s a snapshot to return as JSON.
+
+    The snapshot is ``{"board": N, "label": "BdN", "reason": str|None}``; ``get`` returns
+    ``None`` until the first board is live (the caster UI then shows "no board yet").
+    """
+
+    def __init__(self) -> None:
+        self._board: Optional[int] = None
+        self._label: Optional[str] = None
+        self._reason: Optional[str] = None
+        self._lock = threading.Lock()
+
+    def set(self, board: int, label: str, reason: Optional[str]) -> None:
+        """Record the now-live ``board`` (with its caster ``label`` and cut ``reason``)."""
+        with self._lock:
+            self._board = int(board)
+            self._label = label
+            self._reason = reason
+
+    def get(self) -> "Optional[Dict[str, object]]":
+        """A snapshot of the live cut, or ``None`` if no board is live yet."""
+        with self._lock:
+            if self._board is None:
+                return None
+            return {"board": self._board, "label": self._label, "reason": self._reason}
+
+
 def overlay_events(
     ingestor: "BroadcastIngestor",
     *,
     auto_follow: bool = False,
     bias_player: Optional[str] = None,
     pin_channel: "Optional[PinChannel]" = None,
+    focus_status: "Optional[FocusStatus]" = None,
     **stream_kwargs,
 ) -> Iterator[object]:
     """Bridge a :class:`BroadcastIngestor` into the overlay's event schema.
@@ -1928,6 +1964,8 @@ def overlay_events(
                 gid = game_of_board.get(cut)
                 if gid is not None:
                     ev["game_id"] = gid
+                if focus_status is not None:
+                    focus_status.set(cut, director.board_label(cut), director.last_reason)
                 yield ev
 
     ingestor.on_game = on_game
@@ -1952,12 +1990,25 @@ def overlay_events(
             if changed is not None:
                 # Carry the director cue (task 0260) so the overlay/caster knows WHY the
                 # cut fired; it's caption-ready for the --captions-srt/vtt voice track.
+                if focus_status is not None:
+                    focus_status.set(
+                        changed, director.board_label(changed), director.last_reason
+                    )
                 yield {
                     "type": "focus",
                     "board": changed,
                     "game_id": move_event.game_id,
                     "reason": director.last_reason,
                 }
+            elif (
+                focus_status is not None
+                and focus_status.get() is None
+                and director.focus is not None
+            ):
+                # First board is adopted silently (no focus event, task 0256); still
+                # publish it so GET /focus reflects the live board before the first cut.
+                live = director.focus
+                focus_status.set(live, director.board_label(live), None)
         yield event
     while queued:
         yield queued.pop(0)
@@ -1967,6 +2018,7 @@ def _sse_handler(
     event_source: Callable[[], Iterator[object]],
     directory: Optional[str],
     pin_channel: "Optional[PinChannel]" = None,
+    focus_status: "Optional[FocusStatus]" = None,
 ):
     """Build a request handler that serves ``/sse`` as a live event stream.
 
@@ -1980,6 +2032,11 @@ def _sse_handler(
     ``{"board": N, "plies": M}`` (the caster pin INPUT channel, task 0261): the directive
     is queued on the channel and the live :func:`overlay_events` generator drains it onto
     its director. A missing/``null`` ``board`` is an unpin (resume drama-following).
+
+    When ``focus_status`` is set the handler also serves ``GET /focus`` (task 0265),
+    returning the live cut as JSON ``{"board": N, "label": "BdN", "reason": str|None}``
+    (the pin OUTPUT side, so a caster control surface can read back which board is live and
+    why). Before any board is live it returns ``{"board": null, ...}``.
     """
 
     class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -1990,12 +2047,27 @@ def _sse_handler(
                 super().__init__(*args, **kwargs)
 
         def do_GET(self):  # noqa: N802 (stdlib API)
-            if self.path.split("?")[0] == "/sse":
+            path = self.path.split("?")[0]
+            if path == "/sse":
                 return self._stream_sse()
+            if path == "/focus" and focus_status is not None:
+                return self._serve_focus()
             if directory is None:
                 self.send_error(404, "only /sse is served")
                 return None
             return super().do_GET()
+
+        def _serve_focus(self) -> None:
+            # Live director status readback (task 0265): which board is on air and why.
+            assert focus_status is not None  # do_GET only routes here when it's set
+            status = focus_status.get() or {"board": None, "label": None, "reason": None}
+            body = json.dumps(status).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_POST(self):  # noqa: N802 (stdlib API)
             if self.path.split("?")[0] != "/pin" or pin_channel is None:
@@ -2052,12 +2124,14 @@ def make_sse_server(
     host: str = "127.0.0.1",
     directory: Optional[str] = None,
     pin_channel: "Optional[PinChannel]" = None,
+    focus_status: "Optional[FocusStatus]" = None,
 ) -> "http.server.ThreadingHTTPServer":
     """Build (but don't start) a threaded SSE server. ``port=0`` lets the OS pick one
     (the bound port is then ``server.server_address[1]`` — handy for tests). Pass
-    ``pin_channel`` to also accept ``POST /pin`` caster directives (task 0261)."""
+    ``pin_channel`` to also accept ``POST /pin`` caster directives (task 0261), and
+    ``focus_status`` to also serve ``GET /focus`` status readback (task 0265)."""
     return http.server.ThreadingHTTPServer(
-        (host, port), _sse_handler(event_source, directory, pin_channel)
+        (host, port), _sse_handler(event_source, directory, pin_channel, focus_status)
     )
 
 
@@ -2068,11 +2142,17 @@ def serve_sse(
     host: str = "127.0.0.1",
     directory: Optional[str] = None,
     pin_channel: "Optional[PinChannel]" = None,
+    focus_status: "Optional[FocusStatus]" = None,
     log: Callable[[str], None] = print,
 ) -> None:
     """Serve overlay events as SSE on ``host:port`` until interrupted (Ctrl-C)."""
     httpd = make_sse_server(
-        event_source, port=port, host=host, directory=directory, pin_channel=pin_channel
+        event_source,
+        port=port,
+        host=host,
+        directory=directory,
+        pin_channel=pin_channel,
+        focus_status=focus_status,
     )
     bound = httpd.server_address[1]
     log(f"chess-equity SSE bridge: http://localhost:{bound}/sse")
@@ -2080,6 +2160,8 @@ def serve_sse(
         log(f"  one-command overlay : http://localhost:{bound}/?src=/sse")
     if pin_channel is not None:
         log(f"  caster pin endpoint : POST http://localhost:{bound}/pin {{board, plies}}")
+    if focus_status is not None:
+        log(f"  focus status readout: GET  http://localhost:{bound}/focus")
     log("Ctrl-C to stop.")
     try:
         httpd.serve_forever()
