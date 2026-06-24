@@ -90,6 +90,17 @@ def add_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
         "and raw text, for non-web editors (Premiere/Resolve/CapCut) that can't ingest "
         "WebVTT (task 0229). Requires --pgn (no live feed).",
     )
+    bc.add_argument(
+        "--divergence-caption-threshold",
+        type=float,
+        default=None,
+        metavar="PTS",
+        help="minimum human-vs-engine bar gap (White-POV percentage points, "
+        "|equity - cp_implied|) for a graded move's caption to add a spoken DIVERGENCE "
+        "callout (task 0273); applies to --captions and the --captions-vtt/-srt tracks. "
+        "Default ~15. Needs a model that exposes an objective cp (cp-less feeds emit no "
+        "callout).",
+    )
     add_profile_args(bc)
     add_model_arg(bc)
     return bc

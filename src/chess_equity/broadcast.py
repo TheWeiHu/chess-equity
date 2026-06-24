@@ -56,6 +56,7 @@ from chess_equity.clock import (
 )
 from chess_equity.data.schema import tc_bucket
 from chess_equity.grading import ACCURATE_LABELS
+from chess_equity.types import lichess_win_percent
 
 # --------------------------------------------------------------------------- #
 # Event + move grading
@@ -144,7 +145,61 @@ def cumulative_accuracy(events: "Iterable[MoveEvent]") -> Dict[str, Optional[flo
     }
 
 
-def live_caption(event: "MoveEvent") -> Optional[str]:
+# --------------------------------------------------------------------------- #
+# Human-vs-engine DIVERGENCE caption callout (task 0273)
+# --------------------------------------------------------------------------- #
+#
+# The overlay already paints a per-move human-edge divergence BADGE (visual only, task
+# 0048/0103); this is its spoken counterpart, so the caster caption stream actually CALLS
+# OUT the disagreement in words ("humans give White only 55% despite the engine's edge").
+# Divergence is defined exactly as the offline reel category (task 0272,
+# :func:`chess_equity.reel.detect_divergence`): the gap between the rating-conditioned
+# practical bar ``equity`` and the rating-blind cp-implied bar ``lichess_win_percent(cp)``,
+# both White-POV in [0, 100]. ``signed_gap = equity − cp_win`` leans toward White when
+# positive (humans more optimistic on White than the eval) and toward Black when negative.
+# Reusing the same math keeps the live callout and the post-game recap from ever disagreeing.
+
+# Minimum |equity − cp_win| (White-POV percentage points) for a move to earn a spoken
+# divergence callout. ~15 pts is a clear, caster-worthy disagreement without flooding the
+# track on every small gap; tunable via ``broadcast --divergence-caption-threshold``.
+DIVERGENCE_CAPTION_THRESHOLD = 15.0
+
+
+def divergence_callout(
+    event: "MoveEvent", *, threshold: float = DIVERGENCE_CAPTION_THRESHOLD
+) -> Optional[str]:
+    """A caster sentence when the human bar disagrees with the engine, else ``None``.
+
+    Fires only when the move carries an objective ``cp`` (no engine bar to diverge from
+    otherwise — a mate or a cp-less/clock-blind feed stays silent) and the absolute gap
+    ``|equity − lichess_win_percent(cp)|`` meets ``threshold``. The line states both bars,
+    the signed magnitude, and which side the human read leans toward — e.g.
+    ``"📊 Divergence — human bar 55% vs engine 76% (−21 toward Black): humans don't
+    convert the engine's edge here"``.
+    """
+    if event.cp is None:
+        return None
+    cp_win = lichess_win_percent(event.cp)
+    gap = event.equity - cp_win
+    if abs(gap) < threshold:
+        return None
+    toward = "White" if gap >= 0 else "Black"
+    lean = (
+        "the human bar likes White more than the eval does"
+        if gap >= 0
+        else "humans don't convert the engine's edge here"
+    )
+    return (
+        f"📊 Divergence — human bar {event.equity:.0f}% vs engine {cp_win:.0f}% "
+        f"({gap:+.0f} toward {toward}): {lean}"
+    )
+
+
+def live_caption(
+    event: "MoveEvent",
+    *,
+    divergence_threshold: float = DIVERGENCE_CAPTION_THRESHOLD,
+) -> Optional[str]:
     """One caster-facing sentence for a just-played move, or ``None`` if ungraded.
 
     The *live* counterpart to the offline reel's lower-thirds (``chess_equity.reel``,
@@ -159,6 +214,10 @@ def live_caption(event: "MoveEvent") -> Optional[str]:
       fires (a clutch / missed win / escape / scramble), the classifier's caster
       ``headline`` is appended after a separator, so a real swing reads as the story it
       is instead of a bare grade.
+    * when the rating-conditioned bar disagrees with the engine by at least
+      ``divergence_threshold`` points (:func:`divergence_callout`), the human-vs-engine
+      divergence callout is appended too — the project's signature wedge, spoken out loud
+      (task 0273). Independent of drama: a quiet move can carry a big divergence.
 
     Returns ``None`` for the opening position (no prior move to grade), so a caller can
     cleanly skip ungraded ticks.
@@ -179,7 +238,10 @@ def live_caption(event: "MoveEvent") -> Optional[str]:
 
     drama = score_event(event)
     if drama is not None:
-        return f"{base}  ·  {drama.headline}"
+        base = f"{base}  ·  {drama.headline}"
+    callout = divergence_callout(event, threshold=divergence_threshold)
+    if callout is not None:
+        base = f"{base}  ·  {callout}"
     return base
 
 
@@ -444,6 +506,7 @@ def _caption_cues(
     *,
     cue_seconds: float = CAPTION_CUE_SECONDS,
     auto_follow: bool = False,
+    divergence_threshold: float = DIVERGENCE_CAPTION_THRESHOLD,
 ) -> List[Tuple[float, float, str]]:
     """Shared source of truth for the caption timeline: ``(start, end, text)`` cues.
 
@@ -478,7 +541,10 @@ def _caption_cues(
         }
         cues.extend(
             _game_caption_cues(
-                group, cue_seconds=cue_seconds, focus_by_ply=focus_by_ply
+                group,
+                cue_seconds=cue_seconds,
+                focus_by_ply=focus_by_ply,
+                divergence_threshold=divergence_threshold,
             )
         )
     return cues
@@ -501,6 +567,7 @@ def _game_caption_cues(
     *,
     cue_seconds: float = CAPTION_CUE_SECONDS,
     focus_by_ply: "Optional[Dict[int, str]]" = None,
+    divergence_threshold: float = DIVERGENCE_CAPTION_THRESHOLD,
 ) -> List[Tuple[float, float, str]]:
     """Caption cues for the events of a **single** game (one ``game_id``).
 
@@ -544,7 +611,7 @@ def _game_caption_cues(
             if cur is not None:
                 prev_black = cur
         elapsed += dt
-        text = live_caption(event)
+        text = live_caption(event, divergence_threshold=divergence_threshold)
         if text is None:
             continue
         drama = drama_by_ply.get(event.ply)
@@ -578,6 +645,7 @@ def build_captions_vtt(
     *,
     cue_seconds: float = CAPTION_CUE_SECONDS,
     auto_follow: bool = False,
+    divergence_threshold: float = DIVERGENCE_CAPTION_THRESHOLD,
 ) -> str:
     """Render a graded game's caster captions as a timestamped WebVTT track.
 
@@ -590,7 +658,13 @@ def build_captions_vtt(
 
     lines = ["WEBVTT", ""]
     for i, (start, end, text) in enumerate(
-        _caption_cues(events, cue_seconds=cue_seconds, auto_follow=auto_follow), start=1
+        _caption_cues(
+            events,
+            cue_seconds=cue_seconds,
+            auto_follow=auto_follow,
+            divergence_threshold=divergence_threshold,
+        ),
+        start=1,
     ):
         lines.append(str(i))
         lines.append(f"{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}")
@@ -604,6 +678,7 @@ def build_captions_srt(
     *,
     cue_seconds: float = CAPTION_CUE_SECONDS,
     auto_follow: bool = False,
+    divergence_threshold: float = DIVERGENCE_CAPTION_THRESHOLD,
 ) -> str:
     """Render a graded game's caster captions as an SRT (SubRip) subtitle track.
 
@@ -618,7 +693,13 @@ def build_captions_srt(
 
     blocks = []
     for i, (start, end, text) in enumerate(
-        _caption_cues(events, cue_seconds=cue_seconds, auto_follow=auto_follow), start=1
+        _caption_cues(
+            events,
+            cue_seconds=cue_seconds,
+            auto_follow=auto_follow,
+            divergence_threshold=divergence_threshold,
+        ),
+        start=1,
     ):
         blocks.append(
             f"{i}\n"

@@ -503,6 +503,14 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
     auto_follow, bias_player = parse_auto_spec(board_spec)
     selector = None if auto_follow else parse_board_selector(board_spec)
 
+    # Human-vs-engine divergence caption callout threshold (task 0273); None on the flag
+    # means "use the module default" so callers that never pass it are unaffected.
+    from chess_equity.broadcast import DIVERGENCE_CAPTION_THRESHOLD
+
+    div_threshold = getattr(args, "divergence_caption_threshold", None)
+    if div_threshold is None:
+        div_threshold = DIVERGENCE_CAPTION_THRESHOLD
+
     # --ledger: replay a finished local PGN into a flat per-move CSV for post-show stats
     # (task 0204). A finite snapshot export, not a live stream, so it requires --pgn and
     # short-circuits before the live serve/print paths.
@@ -548,7 +556,9 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         )
         with open(args.pgn, encoding="utf-8") as fh:
             events = ingestor.ingest_snapshot(fh.read())
-        vtt = build_captions_vtt(events, auto_follow=auto_follow)
+        vtt = build_captions_vtt(
+            events, auto_follow=auto_follow, divergence_threshold=div_threshold
+        )
         with open(args.captions_vtt, "w", encoding="utf-8") as fh:
             fh.write(vtt)
         cues = vtt.count(" --> ")
@@ -575,7 +585,9 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         )
         with open(args.pgn, encoding="utf-8") as fh:
             events = ingestor.ingest_snapshot(fh.read())
-        srt = build_captions_srt(events, auto_follow=auto_follow)
+        srt = build_captions_srt(
+            events, auto_follow=auto_follow, divergence_threshold=div_threshold
+        )
         with open(args.captions_srt, "w", encoding="utf-8") as fh:
             fh.write(srt)
         cues = srt.count(" --> ")
@@ -689,7 +701,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         if captions:
             from chess_equity.broadcast import live_caption
 
-            line = live_caption(event)
+            line = live_caption(event, divergence_threshold=div_threshold)
             if line is not None:
                 out.write(line + "\n")
                 out.flush()
