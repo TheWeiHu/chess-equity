@@ -33,6 +33,7 @@ flagship trap demo needs Maia (0005) on real data — but the synthetic test
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
@@ -426,6 +427,37 @@ def _accuracy(grades: List[MoveGrade]) -> float:
     return 100.0 * accurate / len(grades)
 
 
+# Leaderboard accuracy models (task 0233). The default 'labels' accuracy is the share of
+# ok-or-better moves (:func:`_accuracy`); 'cploss' is an OPTIONAL continuous 0..100 score
+# derived from mean classic centipawn loss via Lichess's accuracy curve, surfaced as an
+# extra column. Ranking is unaffected by the choice — only the displayed/exported columns.
+ACCURACY_MODELS = ("labels", "cploss")
+
+
+def _win_percent_from_cp(cp: float) -> float:
+    """Lichess's win% from a centipawn eval: ``50 + 50·(2/(1+e^(-0.00368208·cp)) − 1)``.
+
+    Returns a 0..100 win expectation (50 = even). Same logistic constant Lichess uses to
+    map centipawns to a win probability before scoring accuracy.
+    """
+    return 50.0 + 50.0 * (2.0 / (1.0 + math.exp(-0.00368208 * cp)) - 1.0)
+
+
+def accuracy_from_cp_loss(mean_cp_loss: float) -> float:
+    """Continuous 0..100 accuracy from a mean centipawn loss, Lichess-style (task 0233).
+
+    Lichess scores accuracy from the *win% drop* a move causes, not centipawns directly.
+    We approximate that for a pooled player by treating ``mean_cp_loss`` as a drop from an
+    even (50% win) position: the win% at ``-mean_cp_loss`` centipawns is below 50, and that
+    gap is the win-percent loss fed to Lichess's accuracy curve
+    ``103.1668·e^(−0.04354·winloss) − 3.1669``, clamped to ``[0, 100]``. A mean loss of 0
+    scores ~100; larger losses fall off smoothly. Pure arithmetic — no model calls.
+    """
+    winloss = 50.0 - _win_percent_from_cp(-abs(mean_cp_loss))
+    accuracy = 103.1668 * math.exp(-0.04354 * winloss) - 3.1669
+    return max(0.0, min(100.0, accuracy))
+
+
 def phase_breakdown(grades: List[MoveGrade]) -> Dict[str, Dict[str, object]]:
     """Split a player's moves by game phase and score each phase (task 0220).
 
@@ -471,6 +503,10 @@ class PlayerScore:
     # 100% can't top the board. Default True — only `round_leaderboard` with a positive
     # `min_moves` ever sets it False.
     qualified: bool = True
+    # Optional continuous 0..100 accuracy from mean cp-loss, Lichess-style (task 0233).
+    # ``None`` when no pooled move had a centipawn eval. Display/export only — never affects
+    # ranking. Defaulted so it stays back-compat for any positional PlayerScore consumer.
+    accuracy_cploss: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -478,6 +514,7 @@ class PlayerScore:
             "n_moves": self.n_moves,
             "label_counts": dict(self.label_counts),
             "accuracy": self.accuracy,
+            "accuracy_cploss": self.accuracy_cploss,
             "blunders": self.blunders,
             "mistakes": self.mistakes,
             "mean_peer": self.mean_peer,
@@ -497,6 +534,13 @@ def _player_score(name: str, grades: List[MoveGrade]) -> PlayerScore:
     accuracy = 100.0 * accurate / n if n else 0.0
     mean_peer = sum(g.grade_peer for g in grades) / n if n else 0.0
     worst = min(grades, key=lambda g: g.grade_peer) if grades else None
+    # Continuous cp-loss accuracy (task 0233): mean classic centipawn loss over the moves
+    # that have one (cp_loss is None when a position lacked an eval), mapped through the
+    # Lichess curve. None when no pooled move carried a cp_loss.
+    cp_losses = [g.cp_loss for g in grades if g.cp_loss is not None]
+    accuracy_cploss = (
+        accuracy_from_cp_loss(sum(cp_losses) / len(cp_losses)) if cp_losses else None
+    )
     return PlayerScore(
         name=name,
         n_moves=n,
@@ -508,6 +552,7 @@ def _player_score(name: str, grades: List[MoveGrade]) -> PlayerScore:
         rating=_modal_rating(grades),
         worst=worst,
         phases=phase_breakdown(grades),
+        accuracy_cploss=accuracy_cploss,
     )
 
 
@@ -593,15 +638,24 @@ def _worst_cell(worst: Optional[MoveGrade]) -> str:
     return f"{worst.san} {worst.grade_peer:+.1f}"
 
 
-def _leaderboard_row(rank: str, s: PlayerScore) -> str:
+def _acc_cp_cell(score: PlayerScore) -> str:
+    """Compact cp-loss accuracy cell: ``NN.N`` (0..100), or ``-`` when unavailable."""
+    return "-" if score.accuracy_cploss is None else f"{score.accuracy_cploss:.1f}"
+
+
+def _leaderboard_row(rank: str, s: PlayerScore, cploss: bool = False) -> str:
     return (
-        f"{rank:>2}  {s.name:<14}{s.accuracy:>6.1f}{s.n_moves:>7}"
-        f"{s.blunders:>6}{s.mistakes:>6}{s.mean_peer:>+8.1f}  {_worst_cell(s.worst):<16}"
+        f"{rank:>2}  {s.name:<14}{s.accuracy:>6.1f}"
+        + (f"{_acc_cp_cell(s):>8}" if cploss else "")
+        + f"{s.n_moves:>7}{s.blunders:>6}{s.mistakes:>6}"
+        f"{s.mean_peer:>+8.1f}  {_worst_cell(s.worst):<16}"
     )
 
 
 def render_leaderboard(
-    scores: List[PlayerScore], min_moves: Optional[int] = None
+    scores: List[PlayerScore],
+    min_moves: Optional[int] = None,
+    accuracy_model: str = "labels",
 ) -> List[str]:
     """A ranked accuracy table (one row per player), as text lines.
 
@@ -613,24 +667,28 @@ def render_leaderboard(
 
     The trailing ``worst`` column shows each player's biggest single drop as ``SAN Δpeer``
     (or ``-`` for an empty player); it's display-only and does not change the CSV/JSON
-    export schema.
+    export schema. With ``accuracy_model="cploss"`` (task 0233) an extra ``acc_cp%`` column
+    (continuous Lichess-style accuracy from mean cp-loss) is appended after ``acc%``;
+    ranking is unchanged.
     """
+    cploss = accuracy_model == "cploss"
     rows: List[str] = []
     header = (
-        f"{'#':>2}  {'player':<14}{'acc%':>6}{'moves':>7}"
-        f"{'blun':>6}{'mist':>6}{'meanΔ':>8}  {'worst':<16}"
+        f"{'#':>2}  {'player':<14}{'acc%':>6}"
+        + (f"{'acc_cp%':>8}" if cploss else "")
+        + f"{'moves':>7}{'blun':>6}{'mist':>6}{'meanΔ':>8}  {'worst':<16}"
     )
     rows.append(header)
     rows.append("-" * len(header))
     qualified = [s for s in scores if s.qualified]
     unqualified = [s for s in scores if not s.qualified]
     for i, s in enumerate(qualified, start=1):
-        rows.append(_leaderboard_row(str(i), s))
+        rows.append(_leaderboard_row(str(i), s, cploss))
     if unqualified:
         floor = f" (< {min_moves} moves)" if min_moves else ""
         rows.append(f"unqualified{floor}:")
         for s in unqualified:
-            rows.append(_leaderboard_row("-", s))
+            rows.append(_leaderboard_row("-", s, cploss))
     return rows
 
 
@@ -650,17 +708,22 @@ PHASE_CSV_COLUMNS = [f"{phase}_{stat}" for phase in PHASES for stat in ("acc", "
 LEADERBOARD_CSV_COLUMNS = LEADERBOARD_COLUMNS + PHASE_CSV_COLUMNS
 
 
-def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]]:
+def leaderboard_export_rows(
+    scores: List[PlayerScore], accuracy_model: str = "labels"
+) -> List[Dict[str, object]]:
     """Flat, stable per-player rows for JSON/CSV export, ranked in list order.
 
     ``scores`` is the already-ranked output of :func:`round_leaderboard`; ``rank`` is its
     1-based position. Accuracy is rounded to 1 decimal and ``avg_delta`` (== ``mean_peer``)
     to 2, so the export is stable and lower-third-friendly. ``phases`` is the nested
     per-phase breakdown (task 0220): ``{phase: {n_moves, accuracy, avg_delta}}`` for every
-    :data:`PHASES` entry. Pure projection — no model calls.
+    :data:`PHASES` entry. With ``accuracy_model="cploss"`` (task 0233) an extra
+    ``accuracy_cploss`` key (continuous Lichess-style accuracy, or ``None``) is added; the
+    default schema is unchanged. Pure projection — no model calls.
     """
-    return [
-        {
+    rows: List[Dict[str, object]] = []
+    for i, s in enumerate(scores, start=1):
+        row: Dict[str, object] = {
             "rank": i,
             "player": s.name,
             "rating": s.rating,
@@ -670,30 +733,43 @@ def leaderboard_export_rows(scores: List[PlayerScore]) -> List[Dict[str, object]
             "qualified": s.qualified,
             "phases": {phase: dict(stat) for phase, stat in s.phases.items()},
         }
-        for i, s in enumerate(scores, start=1)
-    ]
+        if accuracy_model == "cploss":
+            row["accuracy_cploss"] = (
+                None if s.accuracy_cploss is None else round(s.accuracy_cploss, 1)
+            )
+        rows.append(row)
+    return rows
 
 
-def render_leaderboard_csv(scores: List[PlayerScore]) -> str:
+def render_leaderboard_csv(
+    scores: List[PlayerScore], accuracy_model: str = "labels"
+) -> str:
     """The leaderboard export as CSV text (header + one row per player, trailing newline).
 
     The nested ``phases`` breakdown is flattened into the :data:`PHASE_CSV_COLUMNS`
     (``opening_acc``/``opening_moves``/…) appended after the base columns, so CSV stays a
-    flat, machine-readable table while still carrying the per-phase accuracy split.
+    flat, machine-readable table while still carrying the per-phase accuracy split. With
+    ``accuracy_model="cploss"`` (task 0233) an ``accuracy_cploss`` column is appended last
+    (empty when unavailable); the default schema (:data:`LEADERBOARD_CSV_COLUMNS`) is
+    unchanged.
     """
     import csv
     import io
 
+    cploss = accuracy_model == "cploss"
+    fieldnames = LEADERBOARD_CSV_COLUMNS + (["accuracy_cploss"] if cploss else [])
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=LEADERBOARD_CSV_COLUMNS)
+    writer = csv.DictWriter(buf, fieldnames=fieldnames)
     writer.writeheader()
-    rows = leaderboard_export_rows(scores)
+    rows = leaderboard_export_rows(scores, accuracy_model=accuracy_model)
     for row, score in zip(rows, scores):
         flat = {col: row[col] for col in LEADERBOARD_COLUMNS}
         for phase in PHASES:
             stat = score.phases[phase]
             flat[f"{phase}_acc"] = stat["accuracy"]
             flat[f"{phase}_moves"] = stat["n_moves"]
+        if cploss:
+            flat["accuracy_cploss"] = row.get("accuracy_cploss")
         writer.writerow(flat)
     return buf.getvalue()
 

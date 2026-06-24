@@ -41,6 +41,13 @@ def add_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
              "board); the --json/--csv export carries a `qualified` bool (default 5; 0 = off)",
     )
     gr.add_argument(
+        "--accuracy-model", choices=("labels", "cploss"), default="labels",
+        help="with --round, add an extra accuracy column: 'labels' (default — only the "
+             "ok-or-better share column) or 'cploss' (also a continuous 0-100 "
+             "Lichess-style accuracy from mean centipawn loss). Display/export only — the "
+             "ranking is unchanged",
+    )
+    gr.add_argument(
         "--summary-json", metavar="OUT",
         help="also write the per-side scoreline (grade-label counts, mean Δpeer, "
              "worst move per color) as machine-readable JSON to OUT — or, with --round, "

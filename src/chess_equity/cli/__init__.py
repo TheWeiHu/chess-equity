@@ -340,14 +340,24 @@ def _run_grade(args: argparse.Namespace) -> int:
                 sort=getattr(args, "sort", "accuracy"),
                 min_moves=getattr(args, "min_moves", 0),
             )
+            # Optional continuous cp-loss accuracy column (task 0233); 'labels' (default)
+            # keeps every surface byte-identical. Ranking is unaffected either way.
+            accuracy_model = getattr(args, "accuracy_model", "labels")
             # --json/--csv emit ONLY the machine-readable leaderboard to stdout (task 0214)
             # so it pipes cleanly into broadcast lower-third graphics; --json wins if both.
             if getattr(args, "json", False):
-                print(json.dumps(leaderboard_export_rows(scores), indent=2))
+                print(json.dumps(
+                    leaderboard_export_rows(scores, accuracy_model=accuracy_model),
+                    indent=2,
+                ))
             elif getattr(args, "csv", False):
-                print(render_leaderboard_csv(scores), end="")
+                print(render_leaderboard_csv(scores, accuracy_model=accuracy_model), end="")
             else:
-                for row in render_leaderboard(scores, min_moves=args.min_moves):
+                for row in render_leaderboard(
+                    scores,
+                    min_moves=getattr(args, "min_moves", None),
+                    accuracy_model=accuracy_model,
+                ):
                     print(row)
             if args.summary_json:
                 with open(args.summary_json, "w", encoding="utf-8") as fh:
