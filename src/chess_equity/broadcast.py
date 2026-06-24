@@ -405,8 +405,45 @@ def write_ledger(events: "Iterable[MoveEvent]", fh: "TextIO") -> int:
 CAPTION_CUE_SECONDS = 3.0
 
 
+def _focus_cut_reasons(
+    events: "Iterable[MoveEvent]",
+) -> Dict[Tuple[str, int], str]:
+    """Replay a snapshot through a :class:`FocusDirector` and return the cut cues, keyed
+    by ``(game_id, ply)`` of the move that triggered each cut (task 0263).
+
+    This is the offline twin of the live SSE path (:func:`overlay_events`), which drives
+    the director with each move's drama magnitude and threads ``director.last_reason``
+    onto the ``focus`` event. Here we reconstruct those same cuts from a finished snapshot
+    so the ``--captions-srt/--captions-vtt`` export can voice/subtitle each cut at its ply.
+    A cut always fires on a move on the board being cut *to*, so its key lands that cue on
+    the cut-to board's own per-game caption timeline.
+
+    Board indices are the games' first-seen order, matching :meth:`ingest_snapshot`'s
+    enumeration (under ``--board auto`` the selector is ``None``, so every game is present
+    in board order). NOTE: a snapshot delivers each game's moves contiguously, not
+    interleaved as a live round would, so the magnitudes a cut is scored against differ
+    from the live stream's; the cut *placement* (which board's ply) is faithful, the
+    "swing vs" comparison value is a per-snapshot reconstruction.
+    """
+    from chess_equity.drama import score_event
+
+    director = FocusDirector()
+    board_of: Dict[str, int] = {}
+    reasons: Dict[Tuple[str, int], str] = {}
+    for event in events:
+        board = board_of.setdefault(event.game_id, len(board_of))
+        drama = score_event(event)
+        magnitude = drama.magnitude if drama is not None else 0.0
+        if director.note(board, magnitude) is not None and director.last_reason:
+            reasons[(event.game_id, event.ply)] = director.last_reason
+    return reasons
+
+
 def _caption_cues(
-    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+    events: "Iterable[MoveEvent]",
+    *,
+    cue_seconds: float = CAPTION_CUE_SECONDS,
+    auto_follow: bool = False,
 ) -> List[Tuple[float, float, str]]:
     """Shared source of truth for the caption timeline: ``(start, end, text)`` cues.
 
@@ -427,10 +464,23 @@ def _caption_cues(
     to before. Cue numbering stays globally sequential (the renderers number the merged
     list). Cues from different games may overlap in time by design — they subtitle each
     board's own per-game recording, not one merged reel.
+
+    With ``auto_follow`` (the ``--board auto`` director, task 0263), each focus cut gets
+    its own cue — the director's ``last_reason`` (e.g. ``"cut to Bd2: +0.9 swing vs +0.4"``)
+    — placed just before the move that triggered it, on the cut-to board's timeline. Off
+    (the default), a single-board export is byte-identical to before.
     """
+    focus_reasons = _focus_cut_reasons(events) if auto_follow else {}
     cues: List[Tuple[float, float, str]] = []
-    for _gid, group in groupby(events, key=lambda e: e.game_id):
-        cues.extend(_game_caption_cues(group, cue_seconds=cue_seconds))
+    for gid, group in groupby(events, key=lambda e: e.game_id):
+        focus_by_ply = {
+            ply: reason for (g, ply), reason in focus_reasons.items() if g == gid
+        }
+        cues.extend(
+            _game_caption_cues(
+                group, cue_seconds=cue_seconds, focus_by_ply=focus_by_ply
+            )
+        )
     return cues
 
 
@@ -447,7 +497,10 @@ def _drama_callout(kind: str) -> str:
 
 
 def _game_caption_cues(
-    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+    events: "Iterable[MoveEvent]",
+    *,
+    cue_seconds: float = CAPTION_CUE_SECONDS,
+    focus_by_ply: "Optional[Dict[int, str]]" = None,
 ) -> List[Tuple[float, float, str]]:
     """Caption cues for the events of a **single** game (one ``game_id``).
 
@@ -499,6 +552,15 @@ def _game_caption_cues(
             text = f"{_drama_callout(drama.kind)} — {text}"
         # Force strictly increasing starts so identical/empty clock deltas never yield
         # a zero-length or out-of-order cue.
+        # A focus cut TO this board (task 0263) fires on this move; emit the director cue
+        # as its own cue just before the move's caption so the voiced/subtitled track
+        # announces the cut at the cut ply (then the move's own caption follows).
+        focus_reason = focus_by_ply.get(event.ply) if focus_by_ply else None
+        if focus_reason is not None:
+            start = max(elapsed, last_start + min_step)
+            last_start = start
+            starts.append(start)
+            texts.append(focus_reason)
         start = max(elapsed, last_start + min_step)
         last_start = start
         starts.append(start)
@@ -512,18 +574,24 @@ def _game_caption_cues(
 
 
 def build_captions_vtt(
-    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+    events: "Iterable[MoveEvent]",
+    *,
+    cue_seconds: float = CAPTION_CUE_SECONDS,
+    auto_follow: bool = False,
 ) -> str:
     """Render a graded game's caster captions as a timestamped WebVTT track.
 
     One cue per graded move (see :func:`_caption_cues` for the timeline). WebVTT cues
     carry a ``WEBVTT`` header, ``HH:MM:SS.mmm`` (dot-decimal) timestamps, and escape the
-    three reserved characters ``& < >``.
+    three reserved characters ``& < >``. With ``auto_follow`` each ``--board auto`` focus
+    cut adds its own director cue at the cut ply (task 0263).
     """
     from chess_equity.reel import _vtt_escape, _vtt_timestamp
 
     lines = ["WEBVTT", ""]
-    for i, (start, end, text) in enumerate(_caption_cues(events, cue_seconds=cue_seconds), start=1):
+    for i, (start, end, text) in enumerate(
+        _caption_cues(events, cue_seconds=cue_seconds, auto_follow=auto_follow), start=1
+    ):
         lines.append(str(i))
         lines.append(f"{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}")
         lines.append(_vtt_escape(text))
@@ -532,7 +600,10 @@ def build_captions_vtt(
 
 
 def build_captions_srt(
-    events: "Iterable[MoveEvent]", *, cue_seconds: float = CAPTION_CUE_SECONDS
+    events: "Iterable[MoveEvent]",
+    *,
+    cue_seconds: float = CAPTION_CUE_SECONDS,
+    auto_follow: bool = False,
 ) -> str:
     """Render a graded game's caster captions as an SRT (SubRip) subtitle track.
 
@@ -541,11 +612,14 @@ def build_captions_srt(
     non-web editor (Premiere/Resolve/CapCut) that can't ingest WebVTT. Only the container
     differs: no ``WEBVTT`` header, ``HH:MM:SS,mmm`` comma-decimal timestamps, raw cue text
     (SRT, unlike WebVTT, does not reserve ``& < >``), and blank-line-separated blocks.
+    With ``auto_follow`` each ``--board auto`` focus cut adds its own director cue (0263).
     """
     from chess_equity.reel import _srt_timestamp
 
     blocks = []
-    for i, (start, end, text) in enumerate(_caption_cues(events, cue_seconds=cue_seconds), start=1):
+    for i, (start, end, text) in enumerate(
+        _caption_cues(events, cue_seconds=cue_seconds, auto_follow=auto_follow), start=1
+    ):
         blocks.append(
             f"{i}\n"
             f"{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n"

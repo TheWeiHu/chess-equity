@@ -546,7 +546,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         )
         with open(args.pgn, encoding="utf-8") as fh:
             events = ingestor.ingest_snapshot(fh.read())
-        vtt = build_captions_vtt(events)
+        vtt = build_captions_vtt(events, auto_follow=auto_follow)
         with open(args.captions_vtt, "w", encoding="utf-8") as fh:
             fh.write(vtt)
         cues = vtt.count(" --> ")
@@ -573,7 +573,7 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
         )
         with open(args.pgn, encoding="utf-8") as fh:
             events = ingestor.ingest_snapshot(fh.read())
-        srt = build_captions_srt(events)
+        srt = build_captions_srt(events, auto_follow=auto_follow)
         with open(args.captions_srt, "w", encoding="utf-8") as fh:
             fh.write(srt)
         cues = srt.count(" --> ")
@@ -641,7 +641,9 @@ def _run_broadcast(args: argparse.Namespace, model: EquityModel, out: TextIO) ->
 
     # --board auto (task 0256): drive the JSONL stream through the overlay bridge so its
     # server-side `focus` cut events ride alongside the position events the overlay reads.
-    # Captions are plain text (no routing metadata), so auto-follow is a no-op there.
+    # The live `--captions` stream is plain text (no routing metadata), so auto-follow is a
+    # no-op there; the offline `--captions-srt/--captions-vtt` export DOES thread each cut's
+    # director cue into the subtitle track (task 0263, handled in the export blocks above).
     if auto_follow and not captions:
         from chess_equity.broadcast import HEARTBEAT, overlay_events
 
