@@ -48,6 +48,7 @@ background is transparent, so only the bar composites over your stream.
 | `layout` | `horizontal` | `horizontal` (names flank a wide bar) or `vertical` (classic eval-bar) |
 | `pov`    | `white` | whose point of view the bar reads from — see [Point of view](#point-of-view-pov) below |
 | `theme`  | `dark` | `dark` or `light` label text |
+| `palette` | _(default)_ | `cvd` swaps the red/green signalling (flag-risk, grade, drama) to a **colorblind-safe** blue/orange set for deuteranopia/protanopia viewers (task 0254) |
 | `cp`     | `1` | show the dashed **centipawn ghost tick** for contrast (`0` to hide) |
 | `cpbar`  | `0` | render the centipawn eval as a **full second bar** (greyed, under the equity bar) instead of a tick |
 | `caster` | `0` | **caster mode** — flare on big practical swings, highlighted when the engine bar misses them |

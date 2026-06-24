@@ -68,3 +68,9 @@ jobs:
       # flag_risk block flags that side, and clock-blind sides never alert (task 0243).
       - name: Run overlay flag-risk JS tests
         run: node overlay/test_flagrisk.test.js
+      # The colorblind-safe palette toggle (overlay/overlay.js paletteClass) is gated by a
+      # dependency-free node test: ?palette=cvd maps to the .palette-cvd class (defined in
+      # overlay.css to swap the red/green signalling to a CVD-safe blue/orange), and the
+      # default palette adds no class (task 0254).
+      - name: Run overlay palette JS tests
+        run: node overlay/test_palette.test.js
