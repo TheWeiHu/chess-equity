@@ -172,6 +172,26 @@ def build_reel(
     return rank(detect(move_events), top=top)
 
 
+def drop_below_magnitude(
+    events: Iterable[DramaEvent], floor: float
+) -> Tuple[List[DramaEvent], int]:
+    """Drop moments whose 0..1 drama magnitude is below ``floor``.
+
+    A quiet game still surfaces low-magnitude noise; this trims it before
+    ranking/rendering. Returns the kept events (input order preserved) and the count
+    dropped, so the caller can log how many were cut rather than truncating silently.
+    A ``floor`` of 0 keeps everything.
+    """
+    kept: List[DramaEvent] = []
+    dropped = 0
+    for d in events:
+        if d.magnitude >= floor:
+            kept.append(d)
+        else:
+            dropped += 1
+    return kept, dropped
+
+
 def by_kind(reel: Iterable[DramaEvent]) -> Dict[str, int]:
     """Count moments per drama kind (every kind that fired, others omitted)."""
     tally: Dict[str, int] = {}

@@ -25,6 +25,7 @@ from chess_equity.reel import (
     caption,
     caption_payload,
     clip_durations,
+    drop_below_magnitude,
     rank,
     reel_payload,
     render_captions,
@@ -100,6 +101,62 @@ def test_rank_breaks_ties_by_kind_priority_then_ply():
 
 def test_top_caps_the_reel():
     assert len(build_reel(_ONE_OF_EACH, top=2)) == 2
+
+
+def test_drop_below_magnitude_keeps_only_at_or_above_floor():
+    reel = build_reel(_ONE_OF_EACH)
+    floor = 0.3
+    kept, dropped = drop_below_magnitude(reel, floor)
+    # Strictly shorter-or-equal, only moments at/above the floor survive.
+    assert len(kept) <= len(reel)
+    assert all(d.magnitude >= floor for d in kept)
+    assert dropped == len(reel) - len(kept)
+    # Order is preserved (still magnitude-ranked since the input was).
+    assert [d.magnitude for d in kept] == sorted(
+        (d.magnitude for d in kept), reverse=True
+    )
+
+
+def test_drop_below_magnitude_zero_floor_keeps_everything():
+    reel = build_reel(_ONE_OF_EACH)
+    kept, dropped = drop_below_magnitude(reel, 0.0)
+    assert kept == reel and dropped == 0
+
+
+def test_cli_reel_min_magnitude_shortens_reel(tmp_path):
+    from chess_equity.cli import main
+
+    base = tmp_path / "all"
+    floored = tmp_path / "floored"
+    assert main(["reel", "--pgn", "data/sample/sample_games.pgn", "--out-dir", str(base)]) == 0
+    assert (
+        main(
+            [
+                "reel",
+                "--pgn",
+                "data/sample/sample_games.pgn",
+                "--min-magnitude",
+                "0.1",
+                "--out-dir",
+                str(floored),
+            ]
+        )
+        == 0
+    )
+    all_moments = json.loads((base / "reel.json").read_text())["moments"]
+    kept = json.loads((floored / "reel.json").read_text())["moments"]
+    # Strictly shorter-or-equal, and every surviving moment clears the floor.
+    assert len(kept) <= len(all_moments)
+    assert all(m["magnitude"] >= 0.1 for m in kept)
+
+
+def test_cli_reel_rejects_out_of_range_floor(tmp_path):
+    from chess_equity.cli import main
+
+    rc = main(
+        ["reel", "--pgn", "data/sample/sample_games.pgn", "--min-magnitude", "1.5"]
+    )
+    assert rc == 1
 
 
 def test_render_json_payload_shape():
